@@ -1,4 +1,5 @@
 from typing import Literal
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -21,6 +22,8 @@ from app.schemas import RouteListOut, RouteOut, RouteStopOut, StopOut
 # zigzagging just to legally hit each one in order). Reused rather than
 # duplicated so the two endpoints can't drift out of sync.
 from app.api.routing import _thin_waypoints, _bearings_for, WAYPOINT_SNAP_RADIUS_M
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/routes", tags=["routes"])
 settings = get_settings()
@@ -99,14 +102,32 @@ def _display_positions_for_direction(
     if len(coords) < 2:
         return None
 
+    # Same resilience pattern as app/api/routing.py::_attach_road_geometry:
+    # the bearing+radius constraint is deliberately tight
+    # (WAYPOINT_SNAP_RADIUS_M), so it's expected to occasionally have no
+    # matching edge within range even when an unconstrained request for
+    # the same coordinates would succeed. Falling back to unconstrained
+    # geometry here still gives correct *unadjusted-for-direction*
+    # positions (better than nothing), rather than giving up on the whole
+    # direction just because the tight constraint didn't find a match.
+    bearings = _bearings_for(coords)
+    radiuses = [WAYPOINT_SNAP_RADIUS_M] * len(coords)
     try:
-        geometry = get_route_geometry(
-            coords,
-            bearings=_bearings_for(coords),
-            radiuses=[WAYPOINT_SNAP_RADIUS_M] * len(coords),
+        geometry = get_route_geometry(coords, bearings=bearings, radiuses=radiuses)
+    except OSRMError as exc:
+        logger.info(
+            "stop_positioning: constrained OSRM call failed for route_stops "
+            "(direction=%s), retrying unconstrained: %s", direction, exc,
         )
-    except OSRMError:
-        return None
+        try:
+            geometry = get_route_geometry(coords)
+        except OSRMError as exc2:
+            logger.warning(
+                "stop_positioning: OSRM call failed even unconstrained "
+                "(direction=%s) -- no display positions computed, falling "
+                "back to canonical stop coordinates: %s", direction, exc2,
+            )
+            return None
 
     route_coords = geojson_linestring_to_coords(geometry["geometry"])
     # Every physical stop is projected, not just the (possibly thinned)

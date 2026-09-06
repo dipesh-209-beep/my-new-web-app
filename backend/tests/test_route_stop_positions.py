@@ -95,6 +95,43 @@ def test_display_positions_none_when_osrm_fails(monkeypatch):
     assert routes_api._display_positions_for_direction(route_stops, "forward") is None
 
 
+def test_display_positions_falls_back_to_unconstrained_when_constrained_fails(monkeypatch):
+    """Same resilience pattern as _attach_road_geometry: the bearing+radius
+    constraint is deliberately tight and is expected to occasionally have
+    no matching edge within range. A constrained failure should retry
+    unconstrained rather than immediately giving up on the whole
+    direction -- this is the exact failure mode observed against the real
+    Kathmandu dataset (WAYPOINT_SNAP_RADIUS_M=50m finding no match)."""
+    s1 = make_stop("S1", 27.7000, 85.3000)
+    s2 = make_stop("S2", 27.7010, 85.30010)
+    route_stops = [make_route_stop(1, s1), make_route_stop(2, s2)]
+
+    calls = []
+
+    def constrained_fails_unconstrained_succeeds(coords, profile="driving", bearings=None, radiuses=None):
+        calls.append({"bearings": bearings, "radiuses": radiuses})
+        if bearings is not None or radiuses is not None:
+            raise OSRMError("NoSegment")
+        return {
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [[85.3000, 27.7000], [85.3000, 27.7010]],
+            },
+            "distance_m": 100.0,
+            "duration_s": 30.0,
+        }
+
+    monkeypatch.setattr(routes_api, "get_route_geometry", constrained_fails_unconstrained_succeeds)
+
+    positions = routes_api._display_positions_for_direction(route_stops, "forward")
+
+    assert positions is not None
+    assert len(positions) == 2
+    assert len(calls) == 2  # constrained attempt, then unconstrained retry
+    assert calls[0]["bearings"] is not None
+    assert calls[1]["bearings"] is None and calls[1]["radiuses"] is None
+
+
 def test_display_positions_forward_aligns_with_ascending_sequence_no(monkeypatch):
     s1 = make_stop("S1", 27.7000, 85.3000)
     s2 = make_stop("S2", 27.7010, 85.30010)  # slightly east of the road
