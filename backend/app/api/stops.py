@@ -53,12 +53,12 @@ def list_stops(
 @cached_response("stops", ttl_seconds=settings.STOPS_CACHE_TTL_S, key_params=("stop_id",))
 def read_stop(stop_id: str, db: Session = Depends(get_db)):
     """Registered after /stops and /stops/nearby -- FastAPI matches those
-    static path segments first, so 'nearby' can never be mis-parsed as a
+    static path segments first, so 'nearby' can never be mis-parced as a
     stop_id by this dynamic route."""
     stop = queries.get_stop(db, stop_id)
     if stop is None:
         raise HTTPException(status_code=404, detail=f"Stop '{stop_id}' not found")
-    return stop
+    return StopOut.model_validate(stop)
 
 
 @router.get("/stops/{stop_id}/routes", response_model=list[RouteOut])

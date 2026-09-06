@@ -40,20 +40,21 @@ def list_routes(
 
 
 @router.get("/{route_id}", response_model=RouteOut)
-@cached_response("routes", ttl_seconds=settings.ROUTES_CACHE_TTL_S, key_params=("route_id",))
+@cached_response("route_detail", ttl_seconds=settings.ROUTES_CACHE_TTL_S, key_params=("route_id",))
 def read_route(route_id: str, db: Session = Depends(get_db)):
     route = queries.get_route(db, route_id)
     if route is None:
         raise HTTPException(status_code=404, detail=f"Route '{route_id}' not found")
-    return route
+    return RouteOut.model_validate(route)
 
 
 @router.get("/{route_id}/stops", response_model=list[RouteStopOut])
-@cached_response("routes", ttl_seconds=settings.ROUTES_CACHE_TTL_S, key_params=("route_id",))
+@cached_response("route_stops", ttl_seconds=settings.ROUTES_CACHE_TTL_S, key_params=("route_id",))
 def read_route_stops(route_id: str, db: Session = Depends(get_db)):
     if queries.get_route(db, route_id) is None:
         raise HTTPException(status_code=404, detail=f"Route '{route_id}' not found")
-    return queries.get_route_stops(db, route_id)
+    route_stops = queries.get_route_stops(db, route_id)
+    return [RouteStopOut.model_validate(rs) for rs in route_stops]
 
 
 # Geometry is cached separately (own namespace, longer-lived) from the

@@ -15,6 +15,21 @@ services:
     # Schema is created via Alembic migrations (backend/migrations), not an init script.
     # Run `alembic upgrade head` from backend/ after the db container is up.
 
+  # Backs both the response cache (app/core/response_cache.py) and,
+  # optionally, the admin-login rate limiter (app/core/rate_limit.py) --
+  # see those two files' module docstrings for what each actually gets
+  # from this and why they're wired up differently (one has an automatic
+  # in-memory fallback if Redis is down, the other doesn't). No volume:
+  # this is a pure cache, losing it on restart is fine and arguably
+  # preferable (guarantees a clean cache rather than serving whatever was
+  # last written before a crash).
+  redis:
+    image: redis:7-alpine
+    container_name: ktm_bus_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
   backend:
     build: ./backend
     container_name: ktm_bus_backend
@@ -23,14 +38,48 @@ services:
       - db
       - osrm
       - osrm-foot
+      - redis
     environment:
       DATABASE_URL: postgresql://ktm_bus:ktm_bus_dev@db:5432/ktm_bus_route_finder
       OSRM_BASE_URL: http://osrm:5000
       OSRM_FOOT_BASE_URL: http://osrm-foot:5000
+      REDIS_URL: redis://redis:6379/0
+      # Not set by default -- see app/core/rate_limit.py's docstring for
+      # the trade-off (no automatic fallback if Redis is down, unlike
+      # REDIS_URL above). Uncomment once you've read that and decided
+      # it's worth it for your deployment:
+      # RATE_LIMIT_REDIS_URL: redis://redis:6379/1
     ports:
+      # Kept published directly (matches README.md's documented
+      # `localhost:8000` local-dev workflow) even though `proxy` below
+      # also fronts this same service on port 80. That means slowapi's
+      # per-IP admin-login rate limit (app/api/admin_auth.py) can't
+      # safely be made proxy-aware (trusting X-Forwarded-For) without
+      # also closing this direct path -- see deploy/proxy_params.conf's
+      # comment for exactly why. For local dev, leave both open as-is.
+      # For an actual deployment, remove this ports block entirely so
+      # `proxy` is the only way in, and only then consider teaching
+      # uvicorn to trust forwarded headers (--proxy-headers
+      # --forwarded-allow-ips=<proxy's address>).
       - "8000:8000"
     volumes:
       - ./backend:/app
+
+  # Single ingress point on port 80, in front of `backend` -- see
+  # deploy/nginx.conf's header comment for what this does and doesn't
+  # buy you yet (notably: no TLS wired up, that's a separate task once
+  # there's a real domain + certificate to point at).
+  proxy:
+    image: nginx:1.27-alpine
+    container_name: ktm_bus_proxy
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/proxy_params.conf:/etc/nginx/proxy_params.conf:ro
 
   osrm:
     image: osrm/osrm-backend
