@@ -47,6 +47,12 @@ class RouteOut(BaseModel):
     # has been run for a given route.
     osrm_distance_km: Optional[float] = None
     status: str
+    # Whether the return leg exists as a distinct travel direction (see
+    # Route.is_bidirectional) -- the frontend uses this to decide whether
+    # to offer a forward/reverse toggle on the route detail map (only
+    # meaningful together with GET /routes/{route_id}/stops|geometry's
+    # `direction` query param).
+    is_bidirectional: bool
     # Route.operator (the column) is the free-text name as originally
     # recorded in the source data; the *linked* operator row lives on the
     # relationship Route.operator_ref, so pull from there instead.
@@ -58,6 +64,16 @@ class RouteStopOut(BaseModel):
 
     sequence_no: int
     stop: StopOut
+    # Route + direction-specific display position, distinct from
+    # stop.lat/lng (the canonical, never-adjusted coordinate -- see
+    # models/stop.py). Set by app/api/routes.py::read_route_stops via
+    # app/routing/stop_positioning.py when the route's road geometry is
+    # available; None whenever it isn't (OSRM unreachable, fewer than 2
+    # stops, etc), in which case callers should fall back to stop.lat/lng.
+    # Search/detail endpoints (app/api/stops.py) never set these -- only
+    # the route-stops listing used for map display does.
+    display_lat: Optional[float] = None
+    display_lng: Optional[float] = None
 
 
 class StopListOut(BaseModel):

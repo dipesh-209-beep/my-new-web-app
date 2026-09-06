@@ -11,6 +11,7 @@ function makeRoute(overrides: Partial<RouteSummary> = {}): RouteSummary {
     start_stop_id: "S0001",
     end_stop_id: "S0002",
     total_stops: 2,
+    is_bidirectional: false,
     approx_distance_km: null,
     osrm_distance_km: null,
     status: "active",

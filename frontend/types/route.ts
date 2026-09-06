@@ -127,6 +127,10 @@ export interface RouteSummary {
   start_stop_id: string;
   end_stop_id: string;
   total_stops: number;
+  /** Whether a return leg exists as a distinct travel direction -- see
+   * GET /routes/{route_id}/stops|geometry's `direction` query param.
+   * Frontend uses this to decide whether to show a forward/reverse toggle. */
+  is_bidirectional: boolean;
   approx_distance_km: number | null;
   /** Real OSRM road distance -- prefer this over approx_distance_km
    * (source-data-supplied, not reliably accurate) whenever it's set. */
@@ -146,7 +150,19 @@ export interface RouteListResponse {
 export interface RouteStopEntry {
   sequence_no: number;
   stop: Stop;
+  // Route + direction-specific display position (see GET
+  // /routes/{route_id}/stops's `direction` query param). null/absent
+  // means no adjustment was computed (OSRM unreachable, etc) -- fall
+  // back to stop.lat/lng, the canonical coordinate. Never persisted,
+  // never used for search/details, only for map display.
+  display_lat?: number | null;
+  display_lng?: number | null;
 }
+
+// Which travel direction to request from GET /routes/{route_id}/stops
+// and .../geometry -- see those endpoints' `direction` query param.
+// "reverse" is only valid when the route is bidirectional.
+export type RouteDirection = "forward" | "reverse";
 
 // GET /stops -- mirrors StopListOut in backend/app/schemas.py.
 export interface StopListOut {

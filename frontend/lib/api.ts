@@ -22,6 +22,7 @@
 
 import {
   CongestionResponse,
+  RouteDirection,
   RouteFinderResult,
   RouteGeometry,
   RouteListResponse,
@@ -188,9 +189,13 @@ export function getRoute(routeId: string, options?: RequestOptions): Promise<Rou
 
 export function getRouteStops(
   routeId: string,
+  direction: RouteDirection = "forward",
   options?: RequestOptions
 ): Promise<RouteStopEntry[]> {
-  return request<RouteStopEntry[]>(`/routes/${encodeURIComponent(routeId)}/stops`, options);
+  return request<RouteStopEntry[]>(
+    `/routes/${encodeURIComponent(routeId)}/stops${qs({ direction })}`,
+    options
+  );
 }
 
 /**
@@ -201,12 +206,13 @@ export function getRouteStops(
  */
 export function getRouteGeometry(
   routeId: string,
+  direction: RouteDirection = "forward",
   options?: RequestOptions
 ): Promise<RouteGeometry> {
-  return request<RouteGeometry>(`/routes/${encodeURIComponent(routeId)}/geometry`, {
-    timeoutMs: ROUTING_TIMEOUT_MS,
-    ...options,
-  });
+  return request<RouteGeometry>(
+    `/routes/${encodeURIComponent(routeId)}/geometry${qs({ direction })}`,
+    { timeoutMs: ROUTING_TIMEOUT_MS, ...options }
+  );
 }
 
 // ---------------------------------------------------------------------------

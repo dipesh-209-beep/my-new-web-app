@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, findRoute, getAllStops, getStops } from "@/lib/api";
+import { ApiError, findRoute, getAllStops, getRouteGeometry, getRouteStops, getStops } from "@/lib/api";
 import { Stop } from "@/types/route";
 
 function jsonResponse(body: unknown, init: { status?: number; ok?: boolean } = {}) {
@@ -171,5 +171,33 @@ describe("findRoute 404 handling", () => {
     await expect(findRoute({ origin: "S0001", destination: "S0002" })).rejects.toBeInstanceOf(
       ApiError
     );
+  });
+});
+
+describe("getRouteStops / getRouteGeometry direction param", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to direction=forward when not specified", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(jsonResponse([]));
+    await getRouteStops("R1");
+    const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(calledUrl).toContain("/routes/R1/stops");
+    expect(calledUrl).toContain("direction=forward");
+  });
+
+  it("passes direction=reverse through to the request URL", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      jsonResponse({ geometry: { type: "LineString", coordinates: [] }, distance_m: 0, duration_s: 0 })
+    );
+    await getRouteGeometry("R1", "reverse");
+    const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(calledUrl).toContain("/routes/R1/geometry");
+    expect(calledUrl).toContain("direction=reverse");
   });
 });

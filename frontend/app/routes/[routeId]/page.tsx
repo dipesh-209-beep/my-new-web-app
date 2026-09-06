@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ApiError, getRoute, getRouteGeometry, getRouteStops } from "@/lib/api";
 import { formatRouteDistance } from "@/lib/routeDistance";
-import { RouteGeometry, RouteOut, RouteStopEntry } from "@/types/route";
+import { RouteDirection, RouteGeometry, RouteOut, RouteStopEntry } from "@/types/route";
 
 const BusMap = dynamic(() => import("@/components/BusMap"), {
   ssr: false,
@@ -27,6 +27,9 @@ export default function RouteDetailPage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Only meaningful once `route` has loaded and route.is_bidirectional is
+  // true -- see the toggle rendered below the map.
+  const [direction, setDirection] = useState<RouteDirection>("forward");
 
   useEffect(() => {
     let cancelled = false;
@@ -38,7 +41,7 @@ export default function RouteDetailPage() {
       try {
         const [routeData, stopsData] = await Promise.all([
           getRoute(routeId),
-          getRouteStops(routeId),
+          getRouteStops(routeId, direction),
         ]);
         if (!cancelled) {
           setRoute(routeData);
@@ -64,7 +67,7 @@ export default function RouteDetailPage() {
     // than surfaced as a page-level error.
     async function loadGeometry() {
       try {
-        const data = await getRouteGeometry(routeId);
+        const data = await getRouteGeometry(routeId, direction);
         if (!cancelled) setGeometry(data);
       } catch {
         // fall back to straight-line connectors
@@ -76,7 +79,7 @@ export default function RouteDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [routeId]);
+  }, [routeId, direction]);
 
   if (loading) {
     return (
@@ -146,6 +149,35 @@ export default function RouteDetailPage() {
       <div className="h-56 overflow-hidden rounded-xl border border-route-line shadow-card sm:h-72">
         <BusMap browseRouteStops={stops} browseRouteGeometry={geometry} />
       </div>
+
+      {route.is_bidirectional && (
+        <div className="flex items-center gap-2 self-start rounded-lg bg-surface-sunken p-1 text-sm">
+          <button
+            type="button"
+            onClick={() => setDirection("forward")}
+            aria-pressed={direction === "forward"}
+            className={`rounded-md px-3 py-1 font-medium transition-colors ${
+              direction === "forward"
+                ? "bg-white text-ink shadow-sm"
+                : "text-ink-secondary hover:text-ink"
+            }`}
+          >
+            Forward
+          </button>
+          <button
+            type="button"
+            onClick={() => setDirection("reverse")}
+            aria-pressed={direction === "reverse"}
+            className={`rounded-md px-3 py-1 font-medium transition-colors ${
+              direction === "reverse"
+                ? "bg-white text-ink shadow-sm"
+                : "text-ink-secondary hover:text-ink"
+            }`}
+          >
+            Return
+          </button>
+        </div>
+      )}
 
       <Link
         href={`/?route=${encodeURIComponent(route.route_id)}`}

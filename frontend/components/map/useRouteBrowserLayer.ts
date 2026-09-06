@@ -21,12 +21,17 @@ export function useRouteBrowserLayer({
   useEffect(() => {
     if (!map || browseRouteStops.length === 0) return;
 
-    // Coerce + validate coordinates
+    // Coerce + validate coordinates. Prefer each stop's route/direction-
+    // specific display position (display_lat/display_lng) when the
+    // backend computed one -- see GET /routes/{route_id}/stops's
+    // `direction` param and app/routing/stop_positioning.py -- falling
+    // back to the stop's own canonical lat/lng otherwise (no adjustment
+    // available, or none needed).
     const validEntries = browseRouteStops
       .map((entry) => ({
         entry,
-        lat: Number(entry.stop?.lat),
-        lng: Number(entry.stop?.lng),
+        lat: Number(entry.display_lat ?? entry.stop?.lat),
+        lng: Number(entry.display_lng ?? entry.stop?.lng),
       }))
       .filter(({ lat, lng }) => Number.isFinite(lat) && Number.isFinite(lng));
 

@@ -153,6 +153,31 @@ describe("BusMap", () => {
       expect(markers[0].latlng).toEqual([27.7041, 85.31]);
     });
 
+    it("prefers display_lat/display_lng over the canonical stop coordinate when present", () => {
+      const entries: RouteStopEntry[] = [
+        {
+          sequence_no: 1,
+          stop: makeStop({ stop_id: "S0001", lat: 27.7041, lng: 85.31 }),
+          // Route/direction-specific adjusted position -- see
+          // app/routing/stop_positioning.py -- should win over stop.lat/lng.
+          display_lat: 27.7050,
+          display_lng: 85.3110,
+        },
+        {
+          sequence_no: 2,
+          // No adjustment computed for this stop -- falls back to canonical.
+          stop: makeStop({ stop_id: "S0002", lat: 27.71, lng: 85.32 }),
+        },
+      ];
+
+      render(<BusMap browseRouteStops={entries} />);
+
+      const markers = leafletState.markers.filter((m) => m.kind === "marker");
+      expect(markers).toHaveLength(2);
+      expect(markers[0].latlng).toEqual([27.7050, 85.3110]);
+      expect(markers[1].latlng).toEqual([27.71, 85.32]);
+    });
+
     it("drops entries with invalid coordinates instead of crashing, and still draws the rest", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const entries: RouteStopEntry[] = [
