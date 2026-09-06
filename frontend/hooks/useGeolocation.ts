@@ -39,7 +39,7 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
       try {
         const nearby = await getNearbyStops({ lat, lng, limit: 1 });
         if (nearby.length === 0) {
-          setLocateError("No stops found near your location.");
+          setLocateError("No bus stops found near your location. Try searching manually.");
           return;
         }
         const stop = nearby[0];
@@ -60,8 +60,20 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
           // if this fails, so just leave walkingRoute null.
           setWalkingRoute(null);
         }
-      } catch {
-        setLocateError("Couldn't find a nearby stop. Try again.");
+      } catch (err) {
+        if (err instanceof Error && err.name === "ApiError") {
+          // Check for specific API error types
+          const apiErr = err as { kind?: string };
+          if (apiErr.kind === "network") {
+            setLocateError("Connection failed. Check your internet and try again.");
+          } else if (apiErr.kind === "timeout") {
+            setLocateError("Request timed out. Try again in a moment.");
+          } else {
+            setLocateError("Couldn't find a nearby stop. Try again.");
+          }
+        } else {
+          setLocateError("Couldn't find a nearby stop. Try again.");
+        }
       }
     },
     [stops, onStopFound]
@@ -69,7 +81,7 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
 
   function useMyLocation() {
     if (!navigator.geolocation) {
-      setLocateError("Geolocation isn't available in this browser.");
+      setLocateError("Geolocation isn't available in this browser. Please search for a stop manually.");
       return;
     }
     setLocating(true);
@@ -80,16 +92,24 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
         setLocating(false);
       },
       (err) => {
-        setLocateError(
-          err.code === err.PERMISSION_DENIED
-            ? "Location permission denied."
-            : err.code === err.TIMEOUT
-            ? "Location request timed out. Try again."
-            : "Location unavailable."
-        );
+        let message: string;
+        switch (err.code) {
+          case err.PERMISSION_DENIED:
+            message = "Location permission denied. Enable it in browser settings or search for a stop manually.";
+            break;
+          case err.TIMEOUT:
+            message = "Location request timed out. Try again or search for a stop manually.";
+            break;
+          case err.POSITION_UNAVAILABLE:
+            message = "Location unavailable. Make sure GPS/location services are enabled, or search for a stop manually.";
+            break;
+          default:
+            message = "Could not get your location. Please search for a stop manually.";
+        }
+        setLocateError(message);
         setLocating(false);
       },
-      { timeout: 8000 }
+      { timeout: 8000, enableHighAccuracy: true }
     );
   }
 

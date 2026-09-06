@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, memo } from "react";
 import { Stop } from "@/types/route";
 import { buildStopLabel } from "@/lib/stopLabel";
 import { PinDotIcon } from "@/components/icons/TransitIcons";
@@ -10,50 +10,62 @@ interface StopAutocompleteProps {
   label: string;
   stops: Stop[];
   stopsLoading?: boolean;
-  value: string;
-  onChange: (value: string) => void;
+  /** The raw input text (may not resolve to a stop). */
+  inputValue: string;
+  /** Called when user types - updates inputValue only. */
+  onInputChange: (value: string) => void;
+  /** Called when user selects a stop from the list - parent updates both inputValue and selectedStop. */
   onSelect: (stop: Stop) => void;
+  /** The currently selected stop (if any). Used to detect if input matches a real stop. */
+  selectedStop?: Stop | null;
   invalid?: boolean;
   placeholder?: string;
   /** Extra buttons rendered under the field, e.g. "Use my location". */
   footerActions?: React.ReactNode;
+  /** Debounce delay in ms for filtering. Default 150ms. */
+  debounceMs?: number;
 }
 
 const MAX_RESULTS = 8;
 
-/**
- * Custom autocomplete over the stop list -- replaces the native
- * <datalist>, which doesn't support inline highlighting, an empty state,
- * or reliable mobile behavior. Matches on stop name and district (the
- * only searchable text fields StopOut actually exposes).
- *
- * Renders as a bare input (label is visually hidden, not shown as its own
- * row) so SearchForm can stack From/To against one shared connector line
- * instead of each field carrying its own header.
- */
-export default function StopAutocomplete({
+function StopAutocompleteImpl({
   id,
   label,
   stops,
   stopsLoading,
-  value,
-  onChange,
+  inputValue,
+  onInputChange,
   onSelect,
+  selectedStop,
   invalid,
   placeholder,
   footerActions,
+  debounceMs = 150,
 }: StopAutocompleteProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const listboxId = `${id}-listbox`;
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const [debouncedValue, setDebouncedValue] = useState(inputValue);
+
+  // Debounce input for filtering
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedValue(inputValue);
+    }, debounceMs);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [inputValue, debounceMs]);
 
   const results = useMemo(() => {
-    const query = value.trim().toLowerCase();
+    const query = debouncedValue.trim().toLowerCase();
     if (!query) return [];
 
     const seen = new Set<string>();
-    const matches: { stop: Stop; label: string }[] = [];
+    const matches: { stop: Stop; label: string; district?: string; stopId?: string }[] = [];
     for (const stop of stops) {
       if (matches.length >= MAX_RESULTS) break;
       if (seen.has(stop.stop_id)) continue;
@@ -61,22 +73,25 @@ export default function StopAutocomplete({
       const districtMatch = stop.district?.toLowerCase().includes(query) ?? false;
       if (nameMatch || districtMatch) {
         seen.add(stop.stop_id);
-        matches.push({ stop, label: buildStopLabel(stop, stops) });
+        matches.push({
+          stop,
+          label: buildStopLabel(stop, stops),
+          district: stop.district ?? undefined,
+          stopId: stop.stop_id,
+        });
       }
     }
     return matches;
-  }, [value, stops]);
+  }, [debouncedValue, stops]);
 
-  // Reset highlight to the top match whenever the candidate list changes,
-  // computed directly during render (no effect needed) by keying off the
-  // query text that produced the current `results`.
-  const [lastQueryForHighlight, setLastQueryForHighlight] = useState(value);
-  if (lastQueryForHighlight !== value) {
-    setLastQueryForHighlight(value);
+  // Reset highlight to the top match whenever the candidate list changes
+  const [lastQueryForHighlight, setLastQueryForHighlight] = useState(debouncedValue);
+  if (lastQueryForHighlight !== debouncedValue) {
+    setLastQueryForHighlight(debouncedValue);
     if (highlightedIndex !== 0) setHighlightedIndex(0);
   }
 
-  // Close on outside click.
+  // Close on outside click
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -114,7 +129,10 @@ export default function StopAutocomplete({
     }
   }
 
-  const showEmptyState = isOpen && value.trim().length > 0 && results.length === 0;
+  const showEmptyState = isOpen && debouncedValue.trim().length > 0 && results.length === 0;
+
+  // Check if current input matches a selected stop (for visual feedback)
+  const isSelectedStop = selectedStop && inputValue.trim().toLowerCase() === selectedStop.stop_name.toLowerCase();
 
   return (
     <div ref={containerRef} className="relative flex flex-col gap-1">
@@ -132,25 +150,25 @@ export default function StopAutocomplete({
           aria-activedescendant={
             isOpen && results[highlightedIndex] ? `${id}-option-${highlightedIndex}` : undefined
           }
-          value={value}
+          value={inputValue}
           onChange={(e) => {
-            onChange(e.target.value);
+            onInputChange(e.target.value);
             setIsOpen(true);
           }}
-          onFocus={() => value.trim() && setIsOpen(true)}
+          onFocus={() => debouncedValue.trim() && setIsOpen(true)}
           onKeyDown={handleKeyDown}
           placeholder={stopsLoading ? "Loading stops…" : placeholder}
           autoComplete="off"
           aria-invalid={invalid}
           className={`w-full rounded-md border bg-surface-raised py-2.5 pl-3 pr-8 text-sm text-ink outline-none transition-colors focus:border-accent-blue focus:bg-white ${
-            invalid ? "border-accent-red" : "border-route-line"
+            invalid ? "border-accent-red" : isSelectedStop ? "border-accent-green" : "border-route-line"
           }`}
         />
-        {value && (
+        {inputValue && (
           <button
             type="button"
             onClick={() => {
-              onChange("");
+              onInputChange("");
               setIsOpen(false);
             }}
             aria-label={`Clear ${label.toLowerCase()}`}
@@ -173,8 +191,6 @@ export default function StopAutocomplete({
                 role="option"
                 aria-selected={i === highlightedIndex}
                 onMouseDown={(e) => {
-                  // mousedown (not click) so it fires before the input's
-                  // blur/outside-click handler closes the list.
                   e.preventDefault();
                   selectStop(match.stop);
                 }}
@@ -186,15 +202,19 @@ export default function StopAutocomplete({
                 <PinDotIcon size={7} className="mt-1.5 shrink-0 text-ink-tertiary" />
                 <div className="min-w-0">
                   <p className="truncate font-medium">{match.stop.stop_name}</p>
-                  {match.stop.district && (
-                    <p className="truncate text-xs text-ink-secondary">{match.stop.district}</p>
-                  )}
+                  <div className="flex flex-wrap gap-1.5 mt-0.5 text-xs text-ink-secondary">
+                    {match.district && <span>{match.district}</span>}
+                    {match.stopId && <span className="font-mono opacity-60">{match.stopId}</span>}
+                    {match.stop.zone && <span>{match.stop.zone}</span>}
+                    {match.stop.is_major_stop && <span className="text-accent-blue">Major</span>}
+                    {match.stop.is_interchange && <span className="text-accent-purple">Interchange</span>}
+                  </div>
                 </div>
               </li>
             ))}
             {showEmptyState && (
               <li className="px-3 py-3 text-sm text-ink-secondary">
-                No stops match &quot;{value.trim()}&quot;.
+                No stops match &quot;{debouncedValue.trim()}&quot;.
               </li>
             )}
           </ul>
@@ -205,3 +225,5 @@ export default function StopAutocomplete({
     </div>
   );
 }
+
+export default memo(StopAutocompleteImpl);

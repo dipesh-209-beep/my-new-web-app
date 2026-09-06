@@ -2,15 +2,19 @@ import { useRef, useState } from "react";
 import { RouteSearchResult } from "@/types/route";
 import { ApiError, findRoute } from "@/lib/api";
 
+type LoadingStage = "idle" | "searching" | "calculating_alternatives" | "done";
+
 interface UseRouteSearchResult {
   result: RouteSearchResult | null;
   loading: boolean;
+  loadingStage: LoadingStage;
   error: string | null;
   /** viaIds: intermediate stop_ids the trip must pass through, in
    * order. include_alternatives is still requested, but the backend
    * ignores it (and returns no alternatives) whenever viaIds is
    * non-empty -- see findRoute's `via` param doc. */
   search: (originId: string, destinationId: string, viaIds?: string[]) => Promise<void>;
+  retry: () => void;
   reset: () => void;
 }
 
@@ -23,7 +27,11 @@ interface UseRouteSearchResult {
 export function useRouteSearch(): UseRouteSearchResult {
   const [result, setResult] = useState<RouteSearchResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingStage, setLoadingStage] = useState<LoadingStage>("idle");
   const [error, setError] = useState<string | null>(null);
+
+  // Store last search params for retry
+  const lastSearchRef = useRef<{ originId: string; destinationId: string; viaIds: string[] } | null>(null);
 
   // Guards against a slow earlier search overwriting a faster later one
   // if the user fires two searches back-to-back.
@@ -31,7 +39,9 @@ export function useRouteSearch(): UseRouteSearchResult {
 
   async function search(originId: string, destinationId: string, viaIds: string[] = []) {
     const requestId = ++requestIdRef.current;
+    lastSearchRef.current = { originId, destinationId, viaIds };
     setLoading(true);
+    setLoadingStage("searching");
     setError(null);
     setResult(null);
 
@@ -47,6 +57,7 @@ export function useRouteSearch(): UseRouteSearchResult {
       if (!outcome.found) {
         setResult({ found: false });
       } else {
+        setLoadingStage("calculating_alternatives");
         setResult({ found: true, ...outcome.result });
       }
     } catch (err) {
@@ -64,16 +75,28 @@ export function useRouteSearch(): UseRouteSearchResult {
       }
       setError(message);
     } finally {
-      if (requestIdRef.current === requestId) setLoading(false);
+      if (requestIdRef.current === requestId) {
+        setLoading(false);
+        setLoadingStage("done");
+      }
+    }
+  }
+
+  function retry() {
+    const params = lastSearchRef.current;
+    if (params) {
+      search(params.originId, params.destinationId, params.viaIds);
     }
   }
 
   function reset() {
     requestIdRef.current++;
+    lastSearchRef.current = null;
     setResult(null);
     setError(null);
     setLoading(false);
+    setLoadingStage("idle");
   }
 
-  return { result, loading, error, search, reset };
+  return { result, loading, loadingStage, error, search, retry, reset };
 }

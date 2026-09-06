@@ -64,6 +64,8 @@ export default function SearchForm({
   onUseMyLocation,
 }: SearchFormProps) {
   const [fieldError, setFieldError] = useState<FieldError>(null);
+  const [originSelectedStop, setOriginSelectedStop] = useState<Stop | null>(null);
+  const [destinationSelectedStop, setDestinationSelectedStop] = useState<Stop | null>(null);
 
   // See lib/stopLabel.ts -- must stay identical to how the parent labels a
   // picked Stop (map click, geolocation, "use my location"), or typed
@@ -146,6 +148,10 @@ export default function SearchForm({
   function handleSwap() {
     onOriginTextChange(destinationText);
     onDestinationTextChange(originText);
+    // Swap selected stops too
+    const temp = originSelectedStop;
+    setOriginSelectedStop(destinationSelectedStop);
+    setDestinationSelectedStop(temp);
     setFieldError(null);
   }
 
@@ -182,15 +188,17 @@ export default function SearchForm({
             label="From"
             stops={stops}
             stopsLoading={stopsLoading}
-            value={originText}
-            onChange={(v) => {
+            inputValue={originText}
+            onInputChange={(v) => {
               onOriginTextChange(v);
               if (fieldError) setFieldError(null);
             }}
             onSelect={(stop) => {
               onOriginTextChange(buildStopLabel(stop, stops));
+              setOriginSelectedStop(stop);
               setFieldError(null);
             }}
+            selectedStop={originSelectedStop}
             invalid={originInvalid}
             placeholder="From: search starting stop…"
             footerActions={
@@ -224,15 +232,17 @@ export default function SearchForm({
             label="To"
             stops={stops}
             stopsLoading={stopsLoading}
-            value={destinationText}
-            onChange={(v) => {
+            inputValue={destinationText}
+            onInputChange={(v) => {
               onDestinationTextChange(v);
               if (fieldError) setFieldError(null);
             }}
             onSelect={(stop) => {
               onDestinationTextChange(buildStopLabel(stop, stops));
+              setDestinationSelectedStop(stop);
               setFieldError(null);
             }}
+            selectedStop={destinationSelectedStop}
             invalid={destinationInvalid}
             placeholder="To: search destination…"
             footerActions={
@@ -276,8 +286,8 @@ export default function SearchForm({
                   label={`Via stop ${i + 1}`}
                   stops={stops}
                   stopsLoading={stopsLoading}
-                  value={via.text}
-                  onChange={(v) => updateViaStop(via.id, v)}
+                  inputValue={via.text}
+                  onInputChange={(v) => updateViaStop(via.id, v)}
                   onSelect={(stop) => updateViaStop(via.id, buildStopLabel(stop, stops))}
                   invalid={fieldError === "via"}
                   placeholder={`Via stop ${i + 1}…`}

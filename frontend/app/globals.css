@@ -29,9 +29,39 @@ body {
   background-color: #d8d9d3;
 }
 
-/* components/BusMap.tsx uses L.divIcon (plain HTML/CSS) for markers instead
-   of Leaflet's default image-based icons, which sidesteps the classic
-   "marker icon paths break with bundlers" issue entirely. */
+/* Mobile-specific adjustments for the bottom sheet */
+@media (max-width: 640px) {
+  /* Ensure the bottom sheet doesn't get cut off when keyboard opens */
+  .sheet-handle {
+    width: 48px;
+    height: 5px;
+  }
+
+  /* Prevent overscroll on the sheet content */
+  aside[style*="--sheet-height"] {
+    overscroll-behavior-y: contain;
+  }
+}
+
+/* Prevent horizontal overflow on narrow screens */
+@media (max-width: 320px) {
+  .sheet-handle {
+    width: 40px;
+  }
+  
+  /* Reduce padding on very narrow screens */
+  aside[style*="--sheet-height"] {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+}
+
+/* Prevent the map from scrolling when touching the bottom sheet */
+.leaflet-container {
+  touch-action: pan-x pan-y;
+}
+
+/* Reduce unnecessary rendering - identify and optimize */
 
 /* Leaflet's stock popup chrome is already light -- just tighten it up to
    match the app's crisp-border, low-shadow documentation aesthetic. */

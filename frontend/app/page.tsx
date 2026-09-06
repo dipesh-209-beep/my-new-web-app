@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import SearchForm, { ViaStopField } from "@/components/search/SearchForm";
@@ -15,7 +15,8 @@ import { useRouteSearch } from "@/hooks/useRouteSearch";
 import { useCongestion } from "@/hooks/useCongestion";
 import { useRouteBrowser } from "@/hooks/useRouteBrowser";
 import { ChevronIcon, LayersIcon } from "@/components/icons/TransitIcons";
-import { clampDragHeightPx, nearestSnap, parseStoredSnap, SheetSnap, snapHeightPx } from "@/lib/sheetSnap";
+import { useSheet } from "@/hooks/useSheet";
+import { MapErrorBoundary } from "@/components/MapErrorBoundary";
 
 // Leaflet touches `window`, so the map must load client-side only.
 const BusMap = dynamic(() => import("@/components/BusMap"), {
@@ -26,14 +27,6 @@ const BusMap = dynamic(() => import("@/components/BusMap"), {
     </div>
   ),
 });
-
-// Persisted so a minimized/half/full panel stays that way across reloads
-// -- same rationale as NavBar's minimize toggle
-// (components/layout/NavBar.tsx), which uses the same storage-key naming
-// scheme. Stores a SheetSnap string now; parseStoredSnap (lib/sheetSnap.ts)
-// still reads the older binary "1"/"0" format for anyone with a
-// previously-stored value.
-const SIDEBAR_STORAGE_KEY = "ktm-transit:search-panel-minimized";
 
 export default function Home() {
   return (
@@ -56,6 +49,7 @@ function HomeInner() {
   const [destinationText, setDestinationText] = useState("");
   const [viaStops, setViaStops] = useState<ViaStopField[]>([]);
   const [pickTarget, setPickTarget] = useState<StopPickTarget>(null);
+  const [showAllStops, setShowAllStops] = useState(true);
 
   const { userLocation, nearestStop, walkingRoute, locating, locateError, useMyLocation } =
     useGeolocation({
@@ -65,7 +59,7 @@ function HomeInner() {
       onStopFound: (label) => setOriginText((prev) => prev || label),
     });
 
-  const { result, loading, error, search } = useRouteSearch();
+  const { result, loading, loadingStage, error, search, retry } = useRouteSearch();
 
   // Which result is currently shown: -1 = primary/recommended, otherwise an
   // index into result.alternatives. Lives here (not inside
@@ -98,97 +92,34 @@ function HomeInner() {
   // map" action (see the effect below) and to feed browseRouteStops to
   // BusMap -- the browsing UI itself (search/paginate/toggle-visible)
   // lives on the dedicated /routes page now, not duplicated here.
-  const routeBrowser = useRouteBrowser();
+const routeBrowser = useRouteBrowser();
 
-  // Bottom-sheet state for the mobile search panel: three snap points
-  // (minimized/half/full -- lib/sheetSnap.ts) reachable either by
-  // dragging the handle or, for keyboard/non-pointer users, the chevron
-  // button (which only ever toggles minimized<->full -- "half" is a
-  // drag-only enhancement on top of that, not a replacement for it).
-  // Persisted the same deferred-read-from-localStorage way as NavBar's
-  // minimize toggle, to avoid a hydration mismatch.
-  const [sheetSnap, setSheetSnapState] = useState<SheetSnap>("full");
-  const [sidebarHydrated, setSidebarHydrated] = useState(false);
-  // Live height while actively dragging, in px; null when not dragging
-  // (in which case the snap's own height applies via CSS, with a
-  // transition). Kept as plain state rather than a ref since it needs to
-  // repaint on every pointermove.
-  const [dragHeightPx, setDragHeightPx] = useState<number | null>(null);
-  const dragStartRef = useRef<{ startY: number; startHeightPx: number } | null>(null);
-
-  // window.innerHeight doesn't exist during SSR and differs from the
-  // client's actual viewport on first paint, so it can't be read directly
-  // in render (that's exactly what caused a hydration mismatch here --
-  // server always computed against a literal fallback while the client's
-  // very first render, before this effect runs, computed against the
-  // real value). Same deferred-read pattern as sidebarHydrated above:
-  // render with a fixed default on both server and the client's first
-  // pass, then swap to the real value once mounted. Also kept live on
-  // resize/orientation-change so the sheet's snap heights track the
-  // current viewport rather than whatever it was on load.
-  const [viewportHeight, setViewportHeight] = useState(800);
-  useEffect(() => {
-    const updateViewportHeight = () => setViewportHeight(window.innerHeight);
-    updateViewportHeight();
-    window.addEventListener("resize", updateViewportHeight);
-    return () => window.removeEventListener("resize", updateViewportHeight);
-  }, []);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setSheetSnapState(parseStoredSnap(window.localStorage.getItem(SIDEBAR_STORAGE_KEY)));
-      setSidebarHydrated(true);
-    }, 0);
-    return () => clearTimeout(timer);
-  }, []);
-
-  function setSheetSnap(next: SheetSnap) {
-    setSheetSnapState(next);
-    try {
-      window.localStorage.setItem(SIDEBAR_STORAGE_KEY, next);
-    } catch {
-      // Storage unavailable (private browsing, quota) -- the toggle still
-      // works for this session, it just won't persist across reloads.
+  // BusMap ref for invalidating size on sheet changes
+  const busMapRef = useRef<{ invalidateSize: () => void } | null>(null);
+  
+  // Invalidate map size - can be called from anywhere
+  const invalidateMap = useCallback(() => {
+    if (busMapRef.current) {
+      busMapRef.current.invalidateSize();
     }
-  }
+  }, [busMapRef]);
 
-  function toggleSidebarMinimized() {
-    setSheetSnap(sheetSnap === "minimized" ? "full" : "minimized");
-  }
+  // Bottom sheet state and handlers
+  const {
+    sidebarHydrated,
+    dragHeightPx,
+    showMinimized,
+    liveHeightPx,
+    toggleSidebarMinimized,
+    handleHandlePointerDown,
+    handleHandlePointerMove,
+    handleHandlePointerUp,
+  } = useSheet(invalidateMap);
 
-  function handleHandlePointerDown(e: React.PointerEvent<HTMLSpanElement>) {
-    e.currentTarget.setPointerCapture(e.pointerId);
-    dragStartRef.current = { startY: e.clientY, startHeightPx: snapHeightPx(sheetSnap, viewportHeight) };
-  }
-
-  function handleHandlePointerMove(e: React.PointerEvent<HTMLSpanElement>) {
-    if (!dragStartRef.current) return;
-    const draggedUpBy = dragStartRef.current.startY - e.clientY;
-    setDragHeightPx(
-      clampDragHeightPx(dragStartRef.current.startHeightPx + draggedUpBy, viewportHeight)
-    );
-  }
-
-  function handleHandlePointerUp() {
-    if (dragHeightPx != null) {
-      setSheetSnap(nearestSnap(dragHeightPx, viewportHeight));
-    }
-    setDragHeightPx(null);
-    dragStartRef.current = null;
-  }
-
-  // Only collapse visually once hydrated -- otherwise a previously-
-  // minimized panel would flash open on every load before the effect
-  // above catches up. Content visibility follows the committed snap, not
-  // the live drag height, so the form doesn't flicker in/out mid-drag.
-  const showMinimized = sheetSnap === "minimized" && sidebarHydrated;
-  const liveHeightPx = dragHeightPx ?? snapHeightPx(sidebarHydrated ? sheetSnap : "full", viewportHeight);
-
-  // All-stops map layer: on by default (so map-click stop-picking works
-  // out of the box), independent of the automatic dimming BusMap applies
-  // once a route is found -- this is the explicit override for someone
-  // who wants the layer fully off regardless.
-  const [showAllStops, setShowAllStops] = useState(true);
+  // Call invalidateSize when the sheet height changes
+  useEffect(() => {
+    invalidateMap();
+  }, [liveHeightPx, showMinimized, sidebarHydrated, invalidateMap]);
 
   // One-time deep-link handling: /stops/[id] links here with
   // ?origin=<stop_id> or ?destination=<stop_id> (its "Set as From/To"
@@ -357,29 +288,34 @@ function HomeInner() {
             <RouteResultPanel
               result={result}
               loading={loading}
+              loadingStage={loadingStage}
               error={error}
               selectedIndex={selectedAltIndex}
               onSelectedIndexChange={setSelectedAltIndex}
+              onRetry={retry}
             />
           </>
         )}
       </aside>
 
       <div className="h-full w-full flex-1 md:min-h-0">
-        <BusMap
-          key="bus-map"
-          result={mapResult}
-          allStops={stops}
-          showAllStops={showAllStops}
-          pickTarget={pickTarget}
-          onStopPick={handleStopPick}
-          userLocation={userLocation}
-          walkingRoute={walkingRoute}
-          nearestStop={nearestStop}
-          congestionSegments={congestion.enabled ? congestion.segments : []}
-          browseRouteStops={routeBrowser.visibleRouteStops}
-          browseRouteGeometry={routeBrowser.visibleRouteGeometry}
-        />
+        <MapErrorBoundary onError={() => busMapRef.current?.invalidateSize()}>
+          <BusMap
+            ref={busMapRef}
+            key="bus-map"
+            result={mapResult}
+            allStops={stops}
+            showAllStops={showAllStops}
+            pickTarget={pickTarget}
+            onStopPick={handleStopPick}
+            userLocation={userLocation}
+            walkingRoute={walkingRoute}
+            nearestStop={nearestStop}
+            congestionSegments={congestion.enabled ? congestion.segments : []}
+            browseRouteStops={routeBrowser.visibleRouteStops}
+            browseRouteGeometry={routeBrowser.visibleRouteGeometry}
+          />
+        </MapErrorBoundary>
       </div>
     </main>
   );
