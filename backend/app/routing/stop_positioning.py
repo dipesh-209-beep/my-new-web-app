@@ -71,6 +71,15 @@ MAX_STOP_OFFSET_M = 60.0
 # project well from silently scanning the rest of the route.
 LOOKAHEAD_WINDOW_M = 300.0
 
+# Multiplier applied to the straight-line distance between consecutive
+# stops when that distance alone would exceed LOOKAHEAD_WINDOW_M. Road
+# distance is always >= straight-line distance, so a stop-to-stop gap
+# of e.g. 700m (a real, sparse suburban leg -- see
+# route_stops_geo_verification.md) needs more than the base window just
+# to be reachable at all, let alone found efficiently. Applied only as a
+# floor on top of LOOKAHEAD_WINDOW_M, never a reduction below it.
+LOOKAHEAD_SAFETY_FACTOR = 2.5
+
 
 @dataclass(frozen=True)
 class AdjustedStopPosition:
@@ -136,34 +145,45 @@ def compute_adjusted_stop_positions(
     route_coords -- e.g. a route's stored forward sequence paired with
     its forward-direction geometry, or that same stop list reversed,
     paired with a *separately requested* reverse-direction geometry.
-
     Returns one AdjustedStopPosition per stop, same order as `stops`.
+
+    Each stop is matched by a global nearest-point search over the
+    entire geometry, not a windowed local one -- a fixed distance
+    window (whether constant or scaled off straight-line stop spacing)
+    can't reliably bound how far apart two consecutive stops end up
+    along the actual road: one-way systems, medians, and loops can
+    inflate the real path length well past what stop-to-stop straight-
+    line distance would predict (e.g. a real ~215m gap between two
+    stops on this router's test route needing ~644m of actual road to
+    connect them). A global search finds the true nearest point
+    regardless of that ratio.
+
+    The cursor still only ever advances (this module never snaps a
+    stop backward onto an earlier part of a route that loops back and
+    passes close by again later, or onto a crossing street) -- but
+    "ahead" is now determined by comparing the *found* global match's
+    index against the cursor, rather than by only searching within
+    some limited window ahead of it. A stop whose true nearest point
+    is behind the cursor gets no match and falls back to canonical,
+    same as before.
     """
     if len(route_coords) < 2:
         return [
             AdjustedStopPosition(stop_id, lat, lng, 0.0, "canonical_fallback")
             for stop_id, lat, lng in stops
         ]
-
     results: list[AdjustedStopPosition] = []
     cursor = 0
     n_segments = len(route_coords) - 1
-
     for stop_id, lat, lng in stops:
         best_dist = float("inf")
         best_point: tuple[float, float] | None = None
         best_index = cursor
-        traveled_m = 0.0
-
-        i = cursor
-        while i < n_segments and traveled_m <= LOOKAHEAD_WINDOW_M:
+        for i in range(cursor, n_segments):
             seg_start, seg_end = route_coords[i], route_coords[i + 1]
             proj_lat, proj_lng, dist_m = _project_point_to_segment(lat, lng, seg_start, seg_end)
             if dist_m < best_dist:
                 best_dist, best_point, best_index = dist_m, (proj_lat, proj_lng), i
-            traveled_m += haversine_distance_m(*seg_start, *seg_end)
-            i += 1
-
         if best_point is not None and best_dist <= MAX_STOP_OFFSET_M:
             results.append(
                 AdjustedStopPosition(stop_id, best_point[0], best_point[1], best_dist, "projected")
@@ -172,5 +192,4 @@ def compute_adjusted_stop_positions(
         else:
             results.append(AdjustedStopPosition(stop_id, lat, lng, 0.0, "canonical_fallback"))
             # cursor deliberately left in place -- no confirmed progress for this stop
-
     return results
