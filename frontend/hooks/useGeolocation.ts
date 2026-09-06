@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { LatLng, Stop, WalkingRoute } from "@/types/route";
 import { buildStopLabel } from "@/lib/stopLabel";
 import { getNearbyStops, getWalkingRoute } from "@/lib/api";
@@ -33,11 +33,17 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
 
+  // Guard against a slow earlier geolocation request overwriting a
+  // faster later one if the user taps "Use my location" twice quickly.
+  const requestIdRef = useRef(0);
+
   const locateNearestStop = useCallback(
     async (lat: number, lng: number) => {
+      const requestId = ++requestIdRef.current;
       setUserLocation({ lat, lng });
       try {
         const nearby = await getNearbyStops({ lat, lng, limit: 1 });
+        if (requestIdRef.current !== requestId) return;
         if (nearby.length === 0) {
           setLocateError("No bus stops found near your location. Try searching manually.");
           return;
@@ -53,14 +59,15 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
             to_lat: stop.lat,
             to_lng: stop.lng,
           });
-          setWalkingRoute(walk);
+          if (requestIdRef.current === requestId) setWalkingRoute(walk);
         } catch {
           // Walking directions are a nice-to-have (needs a foot-profile
           // OSRM instance running); the map falls back to a straight line
           // if this fails, so just leave walkingRoute null.
-          setWalkingRoute(null);
+          if (requestIdRef.current === requestId) setWalkingRoute(null);
         }
       } catch (err) {
+        if (requestIdRef.current !== requestId) return;
         if (err instanceof Error && err.name === "ApiError") {
           // Check for specific API error types
           const apiErr = err as { kind?: string };
@@ -89,9 +96,10 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         await locateNearestStop(position.coords.latitude, position.coords.longitude);
-        setLocating(false);
+        if (requestIdRef.current !== 0) setLocating(false);
       },
       (err) => {
+        if (requestIdRef.current === 0) return;
         let message: string;
         switch (err.code) {
           case err.PERMISSION_DENIED:

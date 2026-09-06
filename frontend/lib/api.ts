@@ -70,6 +70,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   // Let an externally-supplied signal (e.g. a search superseded by a newer
   // one) abort this request too, alongside our own timeout.
+  // Check if the signal is already aborted before we start -- otherwise
+  // we'd miss it if it was aborted between the check and the listener.
+  if (options.signal?.aborted) {
+    clearTimeout(timeout);
+    throw new ApiError("Request was cancelled.", "timeout");
+  }
   const onExternalAbort = () => controller.abort();
   options.signal?.addEventListener("abort", onExternalAbort);
 
@@ -232,6 +238,12 @@ export async function findRoute(
     options?.timeoutMs ?? ROUTING_TIMEOUT_MS
   );
   const onExternalAbort = () => controller.abort();
+  
+  // Check if the signal is already aborted before we start
+  if (options?.signal?.aborted) {
+    clearTimeout(timeout);
+    throw new ApiError("Request was cancelled.", "timeout");
+  }
   options?.signal?.addEventListener("abort", onExternalAbort);
 
   const { via, ...scalarParams } = params;

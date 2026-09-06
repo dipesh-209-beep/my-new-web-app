@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RouteGeometry, RouteStopEntry, RouteSummary } from "@/types/route";
 import { getRouteGeometry, getRouteStops, getRoutes } from "@/lib/api";
 
@@ -54,28 +54,43 @@ export function useRouteBrowser(): UseRouteBrowserResult {
     {}
   );
 
+  // Guards against slow requests overwriting faster ones when the user
+  // toggles visibility rapidly or deep-links to a different route.
+  const geometryRequestIdRef = useRef(0);
+  const stopsRequestIdRef = useRef(0);
+
   // Fetched alongside stops but kept as its own request -- a route with no
   // usable OSRM geometry (OSRM down, route has <2 stops) should still show
   // its stops; the map layer just falls back to straight lines for that
   // one route rather than the whole panel erroring out.
   async function loadGeometry(routeId: string) {
+    const requestId = ++geometryRequestIdRef.current;
+
     const cached = routeGeometryCache[routeId];
     if (cached !== undefined) {
-      setVisibleRouteGeometry(cached);
+      if (geometryRequestIdRef.current === requestId) {
+        setVisibleRouteGeometry(cached);
+      }
       return;
     }
 
-    setVisibleRouteGeometryLoading(true);
-    setVisibleRouteGeometry(null);
+    if (geometryRequestIdRef.current === requestId) {
+      setVisibleRouteGeometryLoading(true);
+      setVisibleRouteGeometry(null);
+    }
     try {
       const data = await getRouteGeometry(routeId);
+      if (geometryRequestIdRef.current !== requestId) return;
       setVisibleRouteGeometry(data);
       setRouteGeometryCache((prev) => ({ ...prev, [routeId]: data }));
     } catch {
+      if (geometryRequestIdRef.current !== requestId) return;
       setVisibleRouteGeometry(null);
       setRouteGeometryCache((prev) => ({ ...prev, [routeId]: null }));
     } finally {
-      setVisibleRouteGeometryLoading(false);
+      if (geometryRequestIdRef.current === requestId) {
+        setVisibleRouteGeometryLoading(false);
+      }
     }
   }
 
@@ -135,50 +150,68 @@ export function useRouteBrowser(): UseRouteBrowserResult {
       return;
     }
 
+    const requestId = ++stopsRequestIdRef.current;
     setVisibleRouteId(route.route_id);
     loadGeometry(route.route_id);
 
     const cached = routeStopsCache[route.route_id];
     if (cached) {
-      setVisibleRouteStops(cached);
+      if (stopsRequestIdRef.current === requestId) {
+        setVisibleRouteStops(cached);
+      }
       return;
     }
 
-    setVisibleRouteStopsLoading(true);
-    setVisibleRouteStops([]);
+    if (stopsRequestIdRef.current === requestId) {
+      setVisibleRouteStopsLoading(true);
+      setVisibleRouteStops([]);
+    }
     try {
       const data = await getRouteStops(route.route_id);
+      if (stopsRequestIdRef.current !== requestId) return;
       setVisibleRouteStops(data);
       setRouteStopsCache((prev) => ({ ...prev, [route.route_id]: data }));
     } catch {
+      if (stopsRequestIdRef.current !== requestId) return;
       // supplementary feature -- leave the list empty rather than erroring
     } finally {
-      setVisibleRouteStopsLoading(false);
+      if (stopsRequestIdRef.current === requestId) {
+        setVisibleRouteStopsLoading(false);
+      }
     }
   }
 
   async function showRouteById(routeId: string) {
     if (visibleRouteId === routeId) return;
 
+    const stopsRequestId = ++stopsRequestIdRef.current;
     setVisibleRouteId(routeId);
     loadGeometry(routeId);
 
     const cached = routeStopsCache[routeId];
     if (cached) {
-      setVisibleRouteStops(cached);
+      if (stopsRequestIdRef.current === stopsRequestId) {
+        setVisibleRouteStops(cached);
+      }
       return;
     }
 
-    setVisibleRouteStopsLoading(true);
-    setVisibleRouteStops([]);
+    if (stopsRequestIdRef.current === stopsRequestId) {
+      setVisibleRouteStopsLoading(true);
+      setVisibleRouteStops([]);
+    }
     try {
       const data = await getRouteStops(routeId);
+      if (stopsRequestIdRef.current !== stopsRequestId) return;
       setVisibleRouteStops(data);
       setRouteStopsCache((prev) => ({ ...prev, [routeId]: data }));
     } catch {
+      if (stopsRequestIdRef.current !== stopsRequestId) return;
       setVisibleRouteId(null);
     } finally {
-      setVisibleRouteStopsLoading(false);
+      if (stopsRequestIdRef.current === stopsRequestId) {
+        setVisibleRouteStopsLoading(false);
+      }
     }
   }
 

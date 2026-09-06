@@ -72,7 +72,11 @@ export default function CongestionPanel({
           </p>
 
           <div className="flex flex-wrap items-center gap-2 text-xs">
+            <label htmlFor="congestion-day" className="sr-only">
+              Day of week
+            </label>
             <select
+              id="congestion-day"
               value={dayOfWeek ?? "now"}
               onChange={(e) => onDayChange(e.target.value === "now" ? null : Number(e.target.value))}
               className="rounded-md border border-route-line bg-white px-2 py-1 text-ink"
@@ -84,7 +88,11 @@ export default function CongestionPanel({
                 </option>
               ))}
             </select>
+            <label htmlFor="congestion-hour" className="sr-only">
+              Time of day
+            </label>
             <select
+              id="congestion-hour"
               value={hourBucket ?? "now"}
               onChange={(e) => onHourChange(e.target.value === "now" ? null : Number(e.target.value))}
               className="rounded-md border border-route-line bg-white px-2 py-1 text-ink"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Stop, StopPickTarget } from "@/types/route";
 import { buildStopLabel, buildStopLabelIndex } from "@/lib/stopLabel";
 import StopAutocomplete from "./StopAutocomplete";
@@ -40,12 +40,6 @@ interface SearchFormProps {
 
 type FieldError = "origin" | "destination" | "both" | "via" | null;
 
-let viaIdCounter = 0;
-function nextViaId(): string {
-  viaIdCounter += 1;
-  return `via-${viaIdCounter}`;
-}
-
 export default function SearchForm({
   stops,
   stopsLoading,
@@ -66,6 +60,16 @@ export default function SearchForm({
   const [fieldError, setFieldError] = useState<FieldError>(null);
   const [originSelectedStop, setOriginSelectedStop] = useState<Stop | null>(null);
   const [destinationSelectedStop, setDestinationSelectedStop] = useState<Stop | null>(null);
+
+  // Via stop IDs must be stable per instance but not shared across
+  // unmounts/remounts (SSR hydration, React 18 strict mode double-mount).
+  // A per-instance ref avoids collisions without relying on a module-level
+  // counter that would keep incrementing across the app's lifetime.
+  const viaIdCounterRef = useRef(0);
+  function nextViaId(): string {
+    viaIdCounterRef.current += 1;
+    return `via-${viaIdCounterRef.current}`;
+  }
 
   // See lib/stopLabel.ts -- must stay identical to how the parent labels a
   // picked Stop (map click, geolocation, "use my location"), or typed
