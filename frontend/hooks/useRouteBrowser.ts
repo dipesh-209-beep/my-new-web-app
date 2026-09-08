@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { RouteGeometry, RouteStopEntry, RouteSummary } from "@/types/route";
+import { RouteDirection, RouteGeometry, RouteStopEntry, RouteSummary } from "@/types/route";
 import { getRouteGeometry, getRouteStops, getRoutes } from "@/lib/api";
 
 const PAGE_SIZE = 50;
@@ -21,6 +21,10 @@ interface UseRouteBrowserResult {
    * it always has. */
   visibleRouteGeometry: RouteGeometry | null;
   visibleRouteGeometryLoading: boolean;
+  /** Current travel direction for the visible route. Only meaningful when
+   * `visibleRouteId` is non-null and the route is bidirectional. */
+  direction: RouteDirection;
+  setDirection: (d: RouteDirection) => void;
   toggleVisible: (route: RouteSummary) => void;
   /** Show a specific route's stops by ID without requiring it to be in
    * the currently loaded/paged list -- used for deep links like
@@ -44,8 +48,10 @@ export function useRouteBrowser(): UseRouteBrowserResult {
   const [searchQuery, setSearchQuery] = useState("");
 
   const [visibleRouteId, setVisibleRouteId] = useState<string | null>(null);
+  const [direction, setDirection] = useState<RouteDirection>("forward");
   const [visibleRouteStops, setVisibleRouteStops] = useState<RouteStopEntry[]>([]);
   const [visibleRouteStopsLoading, setVisibleRouteStopsLoading] = useState(false);
+  // Cache keyed by `${routeId}:${direction}` so forward/reverse don't collide
   const [routeStopsCache, setRouteStopsCache] = useState<Record<string, RouteStopEntry[]>>({});
 
   const [visibleRouteGeometry, setVisibleRouteGeometry] = useState<RouteGeometry | null>(null);
@@ -59,14 +65,19 @@ export function useRouteBrowser(): UseRouteBrowserResult {
   const geometryRequestIdRef = useRef(0);
   const stopsRequestIdRef = useRef(0);
 
+  function makeCacheKey(routeId: string, dir: RouteDirection): string {
+    return `${routeId}:${dir}`;
+  }
+
   // Fetched alongside stops but kept as its own request -- a route with no
   // usable OSRM geometry (OSRM down, route has <2 stops) should still show
   // its stops; the map layer just falls back to straight lines for that
   // one route rather than the whole panel erroring out.
-  async function loadGeometry(routeId: string) {
+  async function loadGeometry(routeId: string, dir: RouteDirection) {
     const requestId = ++geometryRequestIdRef.current;
+    const cacheKey = makeCacheKey(routeId, dir);
 
-    const cached = routeGeometryCache[routeId];
+    const cached = routeGeometryCache[cacheKey];
     if (cached !== undefined) {
       if (geometryRequestIdRef.current === requestId) {
         setVisibleRouteGeometry(cached);
@@ -79,14 +90,14 @@ export function useRouteBrowser(): UseRouteBrowserResult {
       setVisibleRouteGeometry(null);
     }
     try {
-      const data = await getRouteGeometry(routeId);
+      const data = await getRouteGeometry(routeId, dir);
       if (geometryRequestIdRef.current !== requestId) return;
       setVisibleRouteGeometry(data);
-      setRouteGeometryCache((prev) => ({ ...prev, [routeId]: data }));
+      setRouteGeometryCache((prev) => ({ ...prev, [cacheKey]: data }));
     } catch {
       if (geometryRequestIdRef.current !== requestId) return;
       setVisibleRouteGeometry(null);
-      setRouteGeometryCache((prev) => ({ ...prev, [routeId]: null }));
+      setRouteGeometryCache((prev) => ({ ...prev, [cacheKey]: null }));
     } finally {
       if (geometryRequestIdRef.current === requestId) {
         setVisibleRouteGeometryLoading(false);
@@ -152,9 +163,12 @@ export function useRouteBrowser(): UseRouteBrowserResult {
 
     const requestId = ++stopsRequestIdRef.current;
     setVisibleRouteId(route.route_id);
-    loadGeometry(route.route_id);
+    // Reset direction to forward when switching routes
+    setDirection("forward");
+    loadGeometry(route.route_id, "forward");
 
-    const cached = routeStopsCache[route.route_id];
+    const cacheKey = makeCacheKey(route.route_id, "forward");
+    const cached = routeStopsCache[cacheKey];
     if (cached) {
       if (stopsRequestIdRef.current === requestId) {
         setVisibleRouteStops(cached);
@@ -167,10 +181,10 @@ export function useRouteBrowser(): UseRouteBrowserResult {
       setVisibleRouteStops([]);
     }
     try {
-      const data = await getRouteStops(route.route_id);
+      const data = await getRouteStops(route.route_id, "forward");
       if (stopsRequestIdRef.current !== requestId) return;
       setVisibleRouteStops(data);
-      setRouteStopsCache((prev) => ({ ...prev, [route.route_id]: data }));
+      setRouteStopsCache((prev) => ({ ...prev, [cacheKey]: data }));
     } catch {
       if (stopsRequestIdRef.current !== requestId) return;
       // supplementary feature -- leave the list empty rather than erroring
@@ -186,9 +200,11 @@ export function useRouteBrowser(): UseRouteBrowserResult {
 
     const stopsRequestId = ++stopsRequestIdRef.current;
     setVisibleRouteId(routeId);
-    loadGeometry(routeId);
+    // Use current direction for deep links (defaults to forward)
+    loadGeometry(routeId, direction);
 
-    const cached = routeStopsCache[routeId];
+    const cacheKey = makeCacheKey(routeId, direction);
+    const cached = routeStopsCache[cacheKey];
     if (cached) {
       if (stopsRequestIdRef.current === stopsRequestId) {
         setVisibleRouteStops(cached);
@@ -201,10 +217,10 @@ export function useRouteBrowser(): UseRouteBrowserResult {
       setVisibleRouteStops([]);
     }
     try {
-      const data = await getRouteStops(routeId);
+      const data = await getRouteStops(routeId, direction);
       if (stopsRequestIdRef.current !== stopsRequestId) return;
       setVisibleRouteStops(data);
-      setRouteStopsCache((prev) => ({ ...prev, [routeId]: data }));
+      setRouteStopsCache((prev) => ({ ...prev, [cacheKey]: data }));
     } catch {
       if (stopsRequestIdRef.current !== stopsRequestId) return;
       setVisibleRouteId(null);
@@ -227,6 +243,8 @@ export function useRouteBrowser(): UseRouteBrowserResult {
     visibleRouteStopsLoading,
     visibleRouteGeometry,
     visibleRouteGeometryLoading,
+    direction,
+    setDirection,
     toggleVisible,
     showRouteById,
     loadMore,

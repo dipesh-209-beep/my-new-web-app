@@ -130,3 +130,56 @@ def test_empty_or_single_point_geometry_falls_back_to_canonical():
     stops = [("S1", 27.7, 85.3)]
     assert compute_adjusted_stop_positions([], stops)[0].source == "canonical_fallback"
     assert compute_adjusted_stop_positions([(27.7, 85.3)], stops)[0].source == "canonical_fallback"
+
+
+def test_long_detour_between_stops_handled_by_global_search():
+    """
+    A one-way system forces a long detour: two consecutive stops have a
+    short straight-line distance (~215m) but the actual road path is
+    ~644m because of a one-way loop. A windowed search with a fixed
+    lookahead would miss the correct segment, but the global search from
+    the cursor finds it regardless of the detour length.
+    """
+    # Build a route that goes out, loops around, and comes back parallel.
+    # The straight-line distance between stop A and stop B is ~215m, but
+    # the road distance is ~644m because of the one-way loop.
+    route_coords = [
+        (0.00000, 0.00000),   # start
+        (0.00000, 0.00100),   # leg 1: east ~111m (vertical at lng=0.0)
+        (0.00050, 0.00100),   # leg 2: south ~55m (horizontal at lat=0.001)
+        (0.00050, 0.00000),   # leg 3: west ~111m (vertical at lng=0.001, return)
+        (0.00100, 0.00000),   # leg 4: south ~55m
+        (0.00100, 0.00100),   # leg 5: east ~111m
+        (0.00150, 0.00100),   # leg 6: south ~55m
+        (0.00150, 0.00000),   # leg 7: west ~111m
+    ]
+    # Total road distance from start to end of leg 7: ~644m
+
+    # Stop A at start of route
+    # Stop B at end of leg 1 (eastward leg) - straight-line ~111m from A
+    # Stop C on the return leg (leg 3), clearly on lng=0.001 (leg 3's lng)
+    # Straight-line from B to C: ~111m, but road from B to C via loop ~533m
+    stops = [
+        ("A", 0.00000, 0.00000),      # at start
+        ("B", 0.00000, 0.00100),      # end of leg 1
+        ("C", 0.00050, 0.00060),      # on return leg (leg 3, lng=0.001), lat ~0.00060
+                                       # straight-line from B ~111m, but road from B to C ~533m
+    ]
+
+    a_pos, b_pos, c_pos = compute_adjusted_stop_positions(route_coords, stops)
+
+    assert a_pos.source == "projected"
+    assert b_pos.source == "projected"
+    assert c_pos.source == "projected"
+
+    # C should project onto the return leg (leg 3, lat ~ 0.00050), not the
+    # outbound leg (leg 1, lat ~ 0.00000). The cursor has advanced past
+    # leg 1 by the time we process C (after processing B), so global
+    # search from cursor correctly finds leg 3 even though C's
+    # straight-line distance to leg 1 is similar.
+    assert c_pos.lat == pytest.approx(0.00050, abs=1e-4), (
+        f"C should project onto return leg (lat~0.00050), got {c_pos.lat}"
+    )
+
+    # B should project onto leg 1
+    assert b_pos.lat == pytest.approx(0.00000, abs=1e-4)

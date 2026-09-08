@@ -89,12 +89,9 @@ function HomeInner() {
       ? { ...result, ...result.alternatives[selectedAltIndex] }
       : result;
 
-  const congestion = useCongestion();
-  // Used only for the ?route= deep link from /routes/[routeId]'s "View on
-  // map" action (see the effect below) and to feed browseRouteStops to
-  // BusMap -- the browsing UI itself (search/paginate/toggle-visible)
-  // lives on the dedicated /routes page now, not duplicated here.
-const routeBrowser = useRouteBrowser();
+const congestion = useCongestion();
+  const routeBrowser = useRouteBrowser();
+  const { visibleRouteId, direction, setDirection } = routeBrowser;
 
   // BusMap ref for invalidating size on sheet changes
   const busMapRef = useRef<{ invalidateSize: () => void } | null>(null);
@@ -260,6 +257,47 @@ const routeBrowser = useRouteBrowser();
               segmentCount={congestion.segments.length}
               hasSeededOnly={congestion.hasSeededOnly}
             />
+
+            {visibleRouteId && (
+              <div className="rounded-xl border border-route-line bg-surface-raised p-4 shadow-card">
+                <p className="text-xs font-semibold uppercase tracking-wide text-accent-purple mb-2">
+                  Browsing route
+                </p>
+                <p className="text-sm font-medium text-ink mb-3">
+                  {routeBrowser.visibleRouteStops.length > 0
+                    ? routeBrowser.visibleRouteStops[0].stop.stop_name
+                    : "Loading…"}
+                </p>
+                {routeBrowser.routes.find((r) => r.route_id === visibleRouteId)?.is_bidirectional && (
+                  <div className="flex items-center gap-2 self-start rounded-lg bg-surface-sunken p-1 text-sm">
+                    <button
+                      type="button"
+                      onClick={() => setDirection("forward")}
+                      aria-pressed={direction === "forward"}
+                      className={`rounded-md px-3 py-1 font-medium transition-colors ${
+                        direction === "forward"
+                          ? "bg-white text-ink shadow-sm"
+                          : "text-ink-secondary hover:text-ink"
+                      }`}
+                    >
+                      Forward
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDirection("reverse")}
+                      aria-pressed={direction === "reverse"}
+                      className={`rounded-md px-3 py-1 font-medium transition-colors ${
+                        direction === "reverse"
+                          ? "bg-white text-ink shadow-sm"
+                          : "text-ink-secondary hover:text-ink"
+                      }`}
+                    >
+                      Return
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {stopsError && (
               <InlineAlert

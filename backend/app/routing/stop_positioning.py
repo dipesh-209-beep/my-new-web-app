@@ -65,21 +65,6 @@ from app.routing.graph_builder import haversine_distance_m
 # OSRM waypoint snapping; this is for post-hoc projection validation.
 MAX_STOP_OFFSET_M = 100.0
 
-# How far ahead of the current cursor (meters, summed along the
-# geometry) to search for a stop's segment before giving up on this
-# stop and falling back to canonical. Keeps one stop that doesn't
-# project well from silently scanning the rest of the route.
-LOOKAHEAD_WINDOW_M = 300.0
-
-# Multiplier applied to the straight-line distance between consecutive
-# stops when that distance alone would exceed LOOKAHEAD_WINDOW_M. Road
-# distance is always >= straight-line distance, so a stop-to-stop gap
-# of e.g. 700m (a real, sparse suburban leg -- see
-# route_stops_geo_verification.md) needs more than the base window just
-# to be reachable at all, let alone found efficiently. Applied only as a
-# floor on top of LOOKAHEAD_WINDOW_M, never a reduction below it.
-LOOKAHEAD_SAFETY_FACTOR = 2.5
-
 
 @dataclass(frozen=True)
 class AdjustedStopPosition:
