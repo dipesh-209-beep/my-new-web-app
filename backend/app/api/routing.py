@@ -3,6 +3,7 @@ import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Depends
 from sqlalchemy.orm import Session
+from typing import Optional
 
 from app.routing.osrm_client import get_route_geometry, OSRMError
 from app.routing.graph_builder import haversine_distance_m
@@ -315,6 +316,17 @@ def find_route(
             "is given -- see `via`'s description."
         ),
     ),
+    max_transfers: Optional[int] = Query(
+        None,
+        ge=0,
+        le=10,
+        description=(
+            "Maximum number of transfers (bus changes) allowed. "
+            "0 = direct route only, 1 = one transfer, etc. "
+            "Only applies when no direct route exists and Dijkstra "
+            "fallback is used. Default is unlimited."
+        ),
+    ),
     via: list[str] = Query(
         [],
         description=(
@@ -334,7 +346,7 @@ def find_route(
     try:
         if via:
             result = find_route_via_stops(
-                db, [origin, *via, destination], avoid_congestion=avoid_congestion
+                db, [origin, *via, destination], avoid_congestion=avoid_congestion, max_transfers=max_transfers
             )
         else:
             result = find_shortest_path(
@@ -343,6 +355,7 @@ def find_route(
                 destination,
                 avoid_congestion=avoid_congestion,
                 include_alternatives=include_alternatives,
+                max_transfers=max_transfers,
             )
     except NoRouteFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

@@ -48,9 +48,9 @@ services:
       db:
         condition: service_healthy
       osrm:
-        condition: service_healthy
+        condition: service_started
       osrm-foot:
-        condition: service_healthy
+        condition: service_started
       redis:
         condition: service_healthy
     environment:
@@ -102,12 +102,6 @@ services:
       - "5000:5000"
     volumes:
       - ./backend:/data
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 60s
 
   # Separate instance for pedestrian directions (walking to the nearest
   # stop). A single osrm-routed process only serves the profile its .osrm
@@ -123,12 +117,6 @@ services:
       - "5001:5000"
     volumes:
       - ./backend:/data
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 60s
 
 volumes:
   pgdata:

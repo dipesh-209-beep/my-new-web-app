@@ -13,6 +13,7 @@ multiple times in the same route.
 
 from dataclasses import dataclass, field
 from typing import List, Optional
+import heapq
 
 import networkx as nx
 from sqlalchemy.orm import Session
@@ -444,6 +445,7 @@ def _find_with_dijkstra(
     origin_stop_id: str,
     destination_stop_id: str,
     weight="weight",
+    max_transfers: Optional[int] = None,
 ) -> RouteFinderResult:
     """Fallback search used only when no direct route exists.
 
@@ -453,7 +455,20 @@ def _find_with_dijkstra(
     pass a callable (e.g. _congestion_weight_fn(...) or
     _duration_weight_fn()) or the "distance_m" string to rank by
     something else instead, as find_shortest_path's alternatives do.
+
+    `max_transfers`: if set, limits the maximum number of transfers
+    (boardings - 1) allowed in the path. Uses a custom Dijkstra that
+    tracks transfer count as state.
     """
+
+    if max_transfers is not None:
+        return _find_with_dijkstra_limited(
+            graph,
+            origin_stop_id,
+            destination_stop_id,
+            weight=weight,
+            max_transfers=max_transfers,
+        )
 
     try:
         path = nx.shortest_path(
@@ -469,6 +484,80 @@ def _find_with_dijkstra(
         ) from exc
 
     return _path_to_result(graph, path)
+
+
+def _find_with_dijkstra_limited(
+    graph: nx.DiGraph,
+    origin_stop_id: str,
+    destination_stop_id: str,
+    weight,
+    max_transfers: int,
+) -> RouteFinderResult:
+    """
+    Custom Dijkstra that tracks transfer count (board edges) as state.
+
+    Each state is (node, board_count). We only expand states where
+    board_count - 1 <= max_transfers.
+    """
+
+    def get_edge_weight(u, v, edge_data):
+        if callable(weight):
+            return weight(u, v, edge_data)
+        elif weight == "distance_m":
+            return edge_data.get("distance_m", 0)
+        else:
+            return edge_data.get("weight", edge_data.get("distance_m", 0))
+
+    # State: (total_weight, counter, node, board_count, path)
+    # counter is a tiebreaker to avoid comparing path lists
+    # board_count = number of "board" edges taken so far
+    # transfers = max(board_count - 1, 0)
+    counter = 0
+    pq = [(0.0, counter, origin_stop_id, 0, [origin_stop_id])]
+    # visited[(node, board_count)] = best_weight
+    visited = {}
+
+    while pq:
+        dist, _, node, board_count, path = heapq.heappop(pq)
+
+        if node == destination_stop_id:
+            return _path_to_result(graph, path)
+
+        state_key = (node, board_count)
+        if state_key in visited and visited[state_key] <= dist:
+            continue
+        visited[state_key] = dist
+
+        # Check transfer limit
+        if board_count - 1 > max_transfers:
+            continue
+
+        for neighbor in graph.successors(node):
+            edge_data = graph[node][neighbor]
+            edge_weight = get_edge_weight(node, neighbor, edge_data)
+
+            new_board_count = board_count
+            if edge_data.get("kind") == "board":
+                new_board_count = board_count + 1
+
+            # Skip if this would exceed max transfers
+            if new_board_count - 1 > max_transfers:
+                continue
+
+            new_dist = dist + edge_weight
+            new_state = (neighbor, new_board_count)
+
+            if new_state in visited and visited[new_state] <= new_dist:
+                continue
+
+            counter += 1
+            new_path = path + [neighbor]
+            heapq.heappush(pq, (new_dist, counter, neighbor, new_board_count, new_path))
+
+    raise NoRouteFoundError(
+        f"No route found between '{origin_stop_id}' "
+        f"and '{destination_stop_id}' with max {max_transfers} transfers"
+    )
 
 
 def _alternatives_from_direct_candidates(
@@ -522,6 +611,7 @@ def _alternatives_from_dijkstra(
     destination_stop_id: str,
     primary: RouteFinderResult,
     congestion_lookup: dict[tuple, float] = None,
+    max_transfers: Optional[int] = None,
 ) -> list[RouteAlternative]:
     """Up to 2 alternatives to the primary (weight-ranked, i.e. distance
     plus a transfer penalty -- see graph_builder.build_graph) transfer
@@ -539,13 +629,16 @@ def _alternatives_from_dijkstra(
         ("fastest_estimated", _duration_weight_fn(graph, congestion_lookup)),
     ):
         try:
-            path = nx.shortest_path(
-                graph, origin_stop_id, destination_stop_id, weight=weight
+            candidate = _find_with_dijkstra(
+                graph,
+                origin_stop_id,
+                destination_stop_id,
+                weight=weight,
+                max_transfers=max_transfers,
             )
-        except nx.NetworkXNoPath:
+        except NoRouteFoundError:
             continue
 
-        candidate = _path_to_result(graph, path)
         sequence = tuple(candidate.stop_sequence)
         if sequence in seen_sequences:
             continue
@@ -568,6 +661,7 @@ def find_route_via_stops(
     session: Session,
     stop_ids: List[str],
     avoid_congestion: bool = False,
+    max_transfers: Optional[int] = None,
 ) -> RouteFinderResult:
     """Chain find_shortest_path across consecutive waypoints, so a rider
     can require the trip to pass through one or more intermediate stops
@@ -609,7 +703,7 @@ def find_route_via_stops(
 
         try:
             leg_result = find_shortest_path(
-                session, leg_origin, leg_destination, avoid_congestion=avoid_congestion
+                session, leg_origin, leg_destination, avoid_congestion=avoid_congestion, max_transfers=max_transfers
             )
         except NoRouteFoundError as exc:
             waypoint_desc = (
@@ -650,6 +744,7 @@ def find_shortest_path(
     destination_stop_id: str,
     avoid_congestion: bool = False,
     include_alternatives: bool = False,
+    max_transfers: Optional[int] = None,
 ) -> RouteFinderResult:
     """
     avoid_congestion: when True and no direct route exists, the Dijkstra
@@ -667,6 +762,10 @@ def find_shortest_path(
     they're computed. Defaults to False so existing callers get exactly
     today's response shape (an empty list) unless they opt in; computing
     alternatives is extra Dijkstra work this skips when unused.
+
+    max_transfers: maximum number of transfers allowed (0 = direct only,
+    1 = one transfer, etc.). Only applies when no direct route exists
+    and Dijkstra fallback is used. Defaults to None (no limit).
     """
 
     graph = gb.get_cached_graph(session)
@@ -737,6 +836,7 @@ def find_shortest_path(
         origin_stop_id,
         destination_stop_id,
         weight=weight_arg,
+        max_transfers=max_transfers,
     )
 
     if include_alternatives:
@@ -748,6 +848,7 @@ def find_shortest_path(
             alternatives=_alternatives_from_dijkstra(
                 graph, origin_stop_id, destination_stop_id, primary,
                 congestion_lookup=congestion_lookup,
+                max_transfers=max_transfers,
             ),
         )
 
