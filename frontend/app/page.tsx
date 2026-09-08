@@ -17,6 +17,8 @@ import { useRouteBrowser } from "@/hooks/useRouteBrowser";
 import { ChevronIcon, LayersIcon } from "@/components/icons/TransitIcons";
 import { useSheet } from "@/hooks/useSheet";
 import { MapErrorBoundary } from "@/components/MapErrorBoundary";
+import LayerToggle from "@/components/ui/LayerToggle";
+import InlineAlert from "@/components/ui/InlineAlert";
 
 // Leaflet touches `window`, so the map must load client-side only.
 const BusMap = dynamic(() => import("@/components/BusMap"), {
@@ -233,30 +235,18 @@ const routeBrowser = useRouteBrowser();
               onUseMyLocation={useMyLocation}
             />
 
-            <div className="flex items-center justify-between rounded-xl border border-route-line bg-surface-raised p-4 shadow-card">
-              <div className="flex items-center gap-2">
-                <span className="flex h-7 w-7 items-center justify-center rounded-md bg-ink/5 text-ink-secondary">
-                  <LayersIcon size={14} />
-                </span>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">
-                    Map layers
-                  </p>
-                  <p className="text-sm text-ink">All stops</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowAllStops((prev) => !prev)}
-                aria-pressed={showAllStops}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                  showAllStops
-                    ? "bg-ink text-white"
-                    : "border border-route-line text-ink-secondary hover:border-ink hover:text-ink"
-                }`}
-              >
-                {showAllStops ? "On" : "Off"}
-              </button>
+            <div className="rounded-xl border border-route-line bg-surface-raised p-4 shadow-card">
+              <LayerToggle
+                icon={<LayersIcon size={14} />}
+                iconColorClass="text-ink-secondary"
+                iconBgClass="bg-ink/5"
+                activeBgClass="bg-ink"
+                hoverClass="hover:border-ink hover:text-ink"
+                title="Map layers"
+                subtitle="All stops"
+                enabled={showAllStops}
+                onToggle={() => setShowAllStops((prev) => !prev)}
+              />
             </div>
 
             <CongestionPanel
@@ -272,17 +262,13 @@ const routeBrowser = useRouteBrowser();
             />
 
             {stopsError && (
-              <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+              <InlineAlert
+                variant="warning"
+                action={{ label: "Retry", onClick: () => window.location.reload() }}
+              >
                 Couldn&apos;t load the stop list from the server. You can still search if you know
                 exact stop names, but suggestions won&apos;t be available.
-                <button
-                  type="button"
-                  onClick={() => window.location.reload()}
-                  className="ml-2 font-medium text-amber-800 underline"
-                >
-                  Retry
-                </button>
-              </p>
+              </InlineAlert>
             )}
 
             <RouteResultPanel

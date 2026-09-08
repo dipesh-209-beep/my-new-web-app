@@ -111,7 +111,7 @@ export default function RouteDetailPage() {
   if (error || !route) {
     return (
       <div className="mx-auto flex h-full max-w-2xl flex-col items-start gap-2 p-4">
-        <p role="alert" className="text-sm text-red-700">
+        <p role="alert" className="text-sm text-accent-red">
           {error ?? "Something went wrong."}
         </p>
         <Link href="/routes" className="text-sm text-accent-green hover:underline">
@@ -140,7 +140,7 @@ export default function RouteDetailPage() {
           <p className="text-sm text-ink-secondary">Operated by {route.operator.name}</p>
         )}
         {route.status !== "active" && (
-          <span className="mt-2 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+          <span className="mt-2 inline-block rounded-full bg-accent-yellow/10 px-2 py-0.5 text-xs text-accent-yellow">
             {route.status}
           </span>
         )}

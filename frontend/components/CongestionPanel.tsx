@@ -1,6 +1,8 @@
 "use client";
 
 import { LayersIcon } from "@/components/icons/TransitIcons";
+import { CONGESTION_COLORS } from "@/lib/constants";
+import LayerToggle from "@/components/ui/LayerToggle";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HOUR_BUCKETS = [0, 3, 6, 9, 12, 15, 18, 21];
@@ -40,29 +42,17 @@ export default function CongestionPanel({
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-route-line bg-surface-raised p-4 shadow-card">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-accent-orange/10 text-accent-orange">
-            <LayersIcon size={14} />
-          </span>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">Map layers</p>
-            <p className="text-sm text-ink">Traffic conditions</p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-pressed={enabled}
-          className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-            enabled
-              ? "bg-accent-orange text-white"
-              : "border border-route-line text-ink-secondary hover:border-accent-orange hover:text-accent-orange"
-          }`}
-        >
-          {enabled ? "On" : "Off"}
-        </button>
-      </div>
+      <LayerToggle
+        icon={<LayersIcon size={14} />}
+        iconColorClass="text-accent-orange"
+        iconBgClass="bg-accent-orange/10"
+        activeBgClass="bg-accent-orange"
+        hoverClass="hover:border-accent-orange hover:text-accent-orange"
+        title="Map layers"
+        subtitle="Traffic conditions"
+        enabled={enabled}
+        onToggle={onToggle}
+      />
 
       {enabled && (
         <>
@@ -120,15 +110,15 @@ export default function CongestionPanel({
 
           <div className="flex items-center gap-4 text-xs text-ink-secondary">
             <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#16A34A" }} />
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: CONGESTION_COLORS.free_flow }} />
               Low
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#F59E0B" }} />
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: CONGESTION_COLORS.moderate }} />
               Moderate
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#EF4444" }} />
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: CONGESTION_COLORS.heavy }} />
               Heavy
             </span>
           </div>

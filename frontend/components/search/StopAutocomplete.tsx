@@ -206,8 +206,14 @@ function StopAutocompleteImpl({
                     {match.district && <span>{match.district}</span>}
                     {match.stopId && <span className="font-mono opacity-60">{match.stopId}</span>}
                     {match.stop.zone && <span>{match.stop.zone}</span>}
-                    {match.stop.is_major_stop && <span className="text-accent-blue">Major</span>}
-                    {match.stop.is_interchange && <span className="text-accent-purple">Interchange</span>}
+                    {match.stop.is_major_stop && (
+                      <span className="rounded-full bg-accent-blue/10 px-1.5 py-0.5 text-accent-blue">Major</span>
+                    )}
+                    {match.stop.is_interchange && (
+                      <span className="rounded-full bg-accent-purple/10 px-1.5 py-0.5 text-accent-purple">
+                        Interchange
+                      </span>
+                    )}
                   </div>
                 </div>
               </li>

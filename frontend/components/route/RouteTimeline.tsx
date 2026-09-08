@@ -47,8 +47,8 @@ export default function RouteTimeline({ legs }: RouteTimelineProps) {
             <span
               className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full"
               style={{
-                backgroundColor: isWalk ? "#EEEEE8" : LEG_COLORS[i % LEG_COLORS.length],
-                color: isWalk ? "#5B6169" : "#FFFFFF",
+                backgroundColor: isWalk ? "#ECEAF3" : LEG_COLORS[i % LEG_COLORS.length],
+                color: isWalk ? "#5B5876" : "#FFFFFF",
               }}
               aria-hidden
             >

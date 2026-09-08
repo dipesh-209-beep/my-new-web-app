@@ -99,9 +99,19 @@ export function sequencedStopIcon(sequenceNo: number, color: string): L.DivIcon 
 
 export type PinRole = "origin" | "destination" | "transfer" | "user";
 
+// Origin=blue/destination=red matches the pre-existing convention already
+// used by SearchForm.tsx's From/To connector dots (and is the near-
+// universal "start/end" mapping-app convention) -- these pins intentionally
+// do NOT reach for the brand marigold. Marigold is reserved for the user's
+// own location and the active/picked stop state below, where it can't
+// collide with an existing, already-understood color meaning. It also
+// matters for a reason beyond consistency: marigold's contrast against
+// white is too low to double as a small-text/link color (~2.2:1), so
+// confining it to icon fills (which pair it with white/ink glyphs, not
+// text-on-white) keeps every use of it accessible.
 const PIN_COLOR: Record<PinRole, string> = {
-  origin: BRAND,
-  destination: INK,
+  origin: "#2563EB",
+  destination: "#DC2626",
   transfer: "#7C3AED", // unchanged functional purple, matches existing leg/transfer color
   user: BRAND,
 };

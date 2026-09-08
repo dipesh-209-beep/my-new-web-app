@@ -37,17 +37,17 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div
           role="alert"
-          className="flex flex-col gap-4 rounded-xl border border-red-200 bg-red-50 p-6 text-center"
+          className="flex flex-col gap-4 rounded-xl border border-accent-red/30 bg-accent-red/5 p-6 text-center"
         >
-          <TransferIcon size={48} className="mx-auto text-red-500" />
+          <TransferIcon size={48} className="mx-auto text-accent-red" />
           <div>
-            <h2 className="text-lg font-semibold text-red-800">Something went wrong</h2>
-            <p className="mt-2 text-sm text-red-700">
+            <h2 className="text-lg font-semibold text-accent-red">Something went wrong</h2>
+            <p className="mt-2 text-sm text-accent-red">
               {this.state.error?.message ?? "An unexpected error occurred"}
             </p>
-            <details className="mt-4 text-left text-xs text-red-600">
+            <details className="mt-4 text-left text-xs text-accent-red">
               <summary className="cursor-pointer">Error details</summary>
-              <pre className="mt-2 p-3 bg-red-100 rounded overflow-auto max-h-40">
+              <pre className="mt-2 p-3 bg-accent-red/10 rounded overflow-auto max-h-40">
                 {this.state.error?.stack}
               </pre>
             </details>
@@ -55,7 +55,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <button
             type="button"
             onClick={this.handleRetry}
-            className="mx-auto inline-flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
+            className="mx-auto inline-flex items-center gap-2 rounded-md bg-accent-red px-4 py-2 text-sm font-medium text-white transition-colors hover:opacity-90"
           >
             <ChevronIcon direction="up" size={16} />
             Try again

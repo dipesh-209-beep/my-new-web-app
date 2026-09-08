@@ -3,6 +3,7 @@
 import { FareOut, RouteAlternative, RouteLeg, RouteSearchResult } from "@/types/route";
 import RouteTimeline from "./RouteTimeline";
 import { BusIcon, ClockIcon, TransferIcon, WalkIcon } from "@/components/icons/TransitIcons";
+import InlineAlert from "@/components/ui/InlineAlert";
 
 type LoadingStage = "idle" | "searching" | "calculating_alternatives" | "done";
 
@@ -106,18 +107,9 @@ export default function RouteResultPanel({
 
   if (error) {
     return (
-      <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 flex flex-col gap-2">
-        <p role="alert">{error}</p>
-        {onRetry && (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="self-start text-xs font-medium text-red-700 underline hover:text-red-800"
-          >
-            Retry
-          </button>
-        )}
-      </div>
+      <InlineAlert variant="error" action={onRetry ? { label: "Retry", onClick: onRetry } : undefined}>
+        {error}
+      </InlineAlert>
     );
   }
 
@@ -239,7 +231,7 @@ export default function RouteResultPanel({
             <>
               <span className="text-3xl font-bold leading-none tracking-tight text-ink">{duration.value}</span>
               <span className="text-sm font-medium text-ink-secondary">{duration.unit}</span>
-              <span className="text-xs text-amber-600 font-medium ml-1">(est.)</span>
+              <span className="text-xs text-accent-yellow font-medium ml-1">(est.)</span>
             </>
           ) : (
             <>

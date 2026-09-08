@@ -63,7 +63,7 @@ export default function RoutesPage() {
                 </p>
               </div>
               {route.status !== "active" && (
-                <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+                <span className="shrink-0 rounded-full bg-accent-yellow/10 px-2 py-0.5 text-xs text-accent-yellow">
                   {route.status}
                 </span>
               )}

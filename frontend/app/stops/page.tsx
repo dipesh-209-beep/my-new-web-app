@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useStops } from "@/hooks/useStops";
 import { buildStopLabel } from "@/lib/stopLabel";
 import { PinDotIcon } from "@/components/icons/TransitIcons";
+import InlineAlert from "@/components/ui/InlineAlert";
 
 export default function StopsPage() {
   const { stops, loading, error } = useStops();
@@ -37,9 +38,7 @@ export default function StopsPage() {
       />
 
       {error && (
-        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-          Couldn&apos;t load the stop list from the server.
-        </p>
+        <InlineAlert variant="warning">Couldn&apos;t load the stop list from the server.</InlineAlert>
       )}
 
       {loading && (
@@ -75,7 +74,7 @@ export default function StopsPage() {
                   </span>
                 )}
                 {stop.status !== "active" && (
-                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+                  <span className="rounded-full bg-accent-yellow/10 px-2 py-0.5 text-xs text-accent-yellow">
                     {stop.status}
                   </span>
                 )}

@@ -4,13 +4,7 @@ import { useEffect } from "react";
 import L from "leaflet";
 import { CongestionSegment, Stop } from "@/types/route";
 import { escapeHtml } from "@/lib/escapeHtml";
-
-const CONGESTION_COLORS: Record<string, string> = {
-  free_flow: "#22C55E",
-  moderate: "#F59E0B",
-  heavy: "#EF4444",
-  unknown: "#6B7280",
-};
+import { CONGESTION_COLORS } from "@/lib/constants";
 
 interface UseCongestionLayerProps {
   map: L.Map | null;

@@ -97,7 +97,7 @@ export default function StopDetailPage() {
   if (error || !stop) {
     return (
       <div className="mx-auto flex h-full max-w-xl flex-col items-start gap-2 p-4">
-        <p role="alert" className="text-sm text-red-700">
+        <p role="alert" className="text-sm text-accent-red">
           {error ?? "Something went wrong."}
         </p>
         <Link href="/stops" className="text-sm text-accent-blue hover:underline">
@@ -131,7 +131,7 @@ export default function StopDetailPage() {
             </span>
           )}
           {stop.status !== "active" && (
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+            <span className="rounded-full bg-accent-yellow/10 px-2 py-0.5 text-xs text-accent-yellow">
               {stop.status}
             </span>
           )}
