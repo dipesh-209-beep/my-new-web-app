@@ -53,6 +53,7 @@ def get_route(session: Session, route_id: str) -> Optional[Route]:
         .options(
             selectinload(Route.route_stops).selectinload(RouteStop.stop),
             selectinload(Route.route_operators).selectinload(RouteOperator.operator),
+            selectinload(Route.operator_ref),
         )
     )
     return session.execute(stmt).scalar_one_or_none()
@@ -254,7 +255,8 @@ def record_congestion_sample(
         },
     )
     session.execute(stmt)
-    session.commit()
+    # No commit here -- caller owns the transaction.
+    # Background task in _record_leg_congestion commits after all samples.
 
 
 def seed_congestion_baseline(
@@ -374,10 +376,10 @@ def bump_graph_version(session: Session) -> int:
     add_route_stop, update_route_status, create_route/create_stop (the
     latter two are harmless no-ops for the graph until linked via
     add_route_stop, but bumping anyway is cheap and one less thing to
-    reason about). Does its own commit -- call after your main commit
-    so a failed version bump never rolls back the actual write."""
+    reason about). Does NOT commit -- caller owns the transaction so
+    mutation and version bump are atomic. Cache invalidation should
+    happen after the commit succeeds."""
     session.execute(
         text("UPDATE graph_meta SET version = version + 1 WHERE id = 1")
     )
-    session.commit()
     return get_graph_version(session)

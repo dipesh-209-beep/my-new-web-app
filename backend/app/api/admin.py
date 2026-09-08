@@ -16,6 +16,7 @@ actual blast radius:
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.response_cache import invalidate as invalidate_cache
@@ -61,15 +62,9 @@ def create_stop(payload: StopCreate, db: Session = Depends(get_db)) -> StopOut:
     # geom is populated by the trg_stops_set_geom trigger from lat/lng --
     # do not set it here.
     db.add(row)
+    bump_graph_version(db)
     db.commit()
     db.refresh(row)
-    # Not linked to any route yet, so this alone can't change routing
-    # results -- but bump anyway so the code matches what
-    # bump_graph_version's own docstring already promises callers, and so
-    # a stop created and linked to a route in quick succession can't ever
-    # race a stale cache. Cheap: a no-op rebuild if nothing actually
-    # changed graph shape.
-    bump_graph_version(db)
     invalidate_cache("stops")
     return StopOut.model_validate(row)
 
@@ -97,12 +92,9 @@ def create_route(payload: RouteCreate, db: Session = Depends(get_db)) -> RouteOu
         is_express=payload.is_express,
     )
     db.add(row)
+    bump_graph_version(db)
     db.commit()
     db.refresh(row)
-    # Same reasoning as create_stop above: harmless no-op until stops are
-    # linked via add_route_stop, but keeps the code honest against
-    # bump_graph_version's documented contract.
-    bump_graph_version(db)
     invalidate_cache("routes")
     return RouteOut.model_validate(row)
 
@@ -114,9 +106,27 @@ def add_route_stop(route_id: str, payload: RouteStopCreate, db: Session = Depend
     if db.get(StopORM, payload.stop_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Stop {payload.stop_id} not found.")
 
+    # Validate sequence_no is contiguous (no gaps). Allow appending at the end
+    # or inserting at an existing position (which would shift later stops via DB
+    # but we don't support shifting here, so reject if not max+1).
+    max_seq = db.execute(
+        text("SELECT COALESCE(MAX(sequence_no), 0) FROM route_stops WHERE route_id = :rid"),
+        {"rid": route_id},
+    ).scalar_one()
+    if payload.sequence_no > max_seq + 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"sequence_no {payload.sequence_no} would create a gap. "
+                f"Max existing sequence_no is {max_seq}. "
+                f"Must be <= {max_seq + 1}."
+            ),
+        )
+
     row = RouteStopORM(route_id=route_id, stop_id=payload.stop_id, sequence_no=payload.sequence_no)
     db.add(row)
     try:
+        bump_graph_version(db)
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -125,12 +135,6 @@ def add_route_stop(route_id: str, payload: RouteStopCreate, db: Session = Depend
             detail=f"Route {route_id} already has a stop at sequence_no {payload.sequence_no}.",
         ) from exc
 
-    # This changes graph shape (a new ride node/edge) -- previously nothing
-    # invalidated the cache here at all, so this write was silently
-    # invisible to /route-finder until someone remembered to call
-    # /admin/graph/reload by hand. bump_graph_version() makes every worker
-    # process notice on its next request instead of relying on that.
-    bump_graph_version(db)
     invalidate_cache("routes")
     invalidate_cache("route_geometry")
 
@@ -143,13 +147,13 @@ def update_route_status(route_id: str, payload: RouteStatusUpdate, db: Session =
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Route {route_id} not found.")
 
     row.status = payload.status
+    bump_graph_version(db)
     db.commit()
     db.refresh(row)
 
-    # Bump the shared DB version (every worker notices on its next
-    # request) *and* refresh this process's own cache immediately, so
-    # whichever admin made this call sees it reflected right away too.
-    bump_graph_version(db)
+    # Refresh this process's own cache immediately so the admin sees it
+    # reflected right away. Other workers will notice on their next request
+    # via the version bump.
     get_cached_graph(db, refresh=True)
     invalidate_cache("routes")
     # A status flip (e.g. active -> inactive) changes which routes

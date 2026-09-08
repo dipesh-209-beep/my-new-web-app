@@ -56,7 +56,9 @@ class RouteOut(BaseModel):
     # Route.operator (the column) is the free-text name as originally
     # recorded in the source data; the *linked* operator row lives on the
     # relationship Route.operator_ref, so pull from there instead.
-    operator: Optional[OperatorOut] = Field(default=None, validation_alias="operator_ref")
+    operator: Optional[OperatorOut] = Field(
+        default=None, validation_alias="operator_ref", serialization_alias="operator"
+    )
 
 
 class RouteStopOut(BaseModel):

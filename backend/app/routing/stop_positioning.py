@@ -59,11 +59,11 @@ from app.routing.graph_builder import haversine_distance_m
 # coordinate is treated as untrustworthy (the route geometry doesn't
 # actually run near this stop -- bad/incomplete OSM data, a bad OSRM
 # match, or a stop that's genuinely not right on the route's road) and
-# the canonical coordinate is used unchanged instead. Deliberately the
-# same order of magnitude as WAYPOINT_SNAP_RADIUS_M in
-# app/api/routing.py -- both exist to bound how far a "correction" is
-# allowed to move something from where it was recorded.
-MAX_STOP_OFFSET_M = 60.0
+# the canonical coordinate is used unchanged instead. Increased from 60m
+# to 100m to account for GPS accuracy in Kathmandu (10-30m) plus OSRM
+# snap error. WAYPOINT_SNAP_RADIUS_M in app/api/routing.py is 50m for
+# OSRM waypoint snapping; this is for post-hoc projection validation.
+MAX_STOP_OFFSET_M = 100.0
 
 # How far ahead of the current cursor (meters, summed along the
 # geometry) to search for a stop's segment before giving up on this

@@ -240,6 +240,10 @@ def read_route_geometry(
     stops = [StopOut.model_validate(rs.stop) for rs in travel_order]
     coords = _thin_waypoints(stops)
 
+        # Same resilience pattern as _display_positions_for_direction: the
+    # bearing+radius constraint is deliberately tight (WAYPOINT_SNAP_RADIUS_M),
+    # so it's expected to occasionally have no matching edge within range even
+    # when an unconstrained request for the same coordinates would succeed.
     try:
         return get_route_geometry(
             coords,
@@ -247,4 +251,13 @@ def read_route_geometry(
             radiuses=[WAYPOINT_SNAP_RADIUS_M] * len(coords),
         )
     except OSRMError as exc:
-        raise HTTPException(status_code=502, detail=f"Couldn't compute route geometry: {exc}")
+        logger.info(
+            "route_geometry: constrained OSRM call failed for route %s "
+            "(direction=%s), retrying unconstrained: %s", route_id, direction, exc,
+        )
+        try:
+            return get_route_geometry(coords)
+        except OSRMError as exc2:
+            raise HTTPException(
+                status_code=502, detail=f"Couldn't compute route geometry: {exc2}"
+            )

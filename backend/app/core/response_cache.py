@@ -17,27 +17,57 @@ TTL cache for read-mostly GET endpoints (GET /stops, GET /routes, GET
      behavior degrades to exactly what this module has always done, on
      a per-worker basis -- never to "no caching" or a hard error.
 
-Values are pickled for Redis storage. That's an intentional choice, not
-an oversight: the values cached here are Python objects built entirely by
-this codebase's own endpoint functions (Pydantic models, plain dicts) --
-nothing here ever deserializes untrusted external input, which is the
-actual risk pickle carries. It also means callers keep returning whatever
-plain Python objects they already return; nothing about the
-@cached_response call sites in stops.py/routes.py/etc needs to change to
-be JSON-serialization-safe.
+Values are JSON-serialized for Redis storage (safer than pickle).
+The in-memory tier keeps raw Python objects. Pydantic models are
+serialized via model_dump() for JSON compatibility.
 """
 
-import pickle
+import json
 import time
 from collections import defaultdict
 from functools import wraps
-from typing import Callable
+from typing import Any, Callable
 
 from app.core.redis_client import get_redis
 
-# namespace -> {key: (expires_at_monotonic, value)} -- the fallback tier,
-# always present regardless of whether Redis is configured.
-_store: dict[str, dict[tuple, tuple[float, object]]] = defaultdict(dict)
+def _json_dumps(obj: Any) -> str:
+    """Serialize to JSON, handling Pydantic models via model_dump().
+    
+    For RouteOut and similar models with validation_alias/serialization_alias
+    mismatch on operator field, we need to convert operator -> operator_ref
+    for storage so that model_validate can correctly reconstruct the object.
+    """
+    if hasattr(obj, "model_dump"):
+        data = obj.model_dump()
+        # Convert operator -> operator_ref for storage (validation alias)
+        if "operator" in data and data["operator"] is not None:
+            data["operator_ref"] = data.pop("operator")
+        return json.dumps(data)
+    if hasattr(obj, "dict"):  # Pydantic v1
+        data = obj.dict()
+        if "operator" in data and data["operator"] is not None:
+            data["operator_ref"] = data.pop("operator")
+        return json.dumps(data)
+    return json.dumps(obj)
+
+
+def _json_loads(data: str) -> Any:
+    """Deserialize from JSON. Returns plain dicts/lists, not Pydantic models.
+    Callers that need Pydantic models should re-validate."""
+    return json.loads(data)
+
+
+# Max entries per namespace in the in-memory tier to prevent unbounded growth.
+# LRU eviction is applied when this limit is reached.
+_MAX_ENTRIES_PER_NAMESPACE = 500
+
+
+# namespace -> OrderedDict[key, (expires_at_monotonic, value)] -- the fallback tier,
+# always present regardless of whether Redis is configured. OrderedDict maintains
+# insertion/access order for LRU eviction.
+from collections import OrderedDict
+
+_store: dict[str, OrderedDict[tuple, tuple[float, object]]] = defaultdict(OrderedDict)
 
 _REDIS_KEY_PREFIX = "respcache"
 
@@ -71,9 +101,9 @@ def cached_response(namespace: str, ttl_seconds: float, key_params: tuple[str, .
             if client is not None:
                 redis_key = _redis_key(namespace, key)
                 try:
-                    cached_bytes = client.get(redis_key)
-                    if cached_bytes is not None:
-                        return pickle.loads(cached_bytes)
+                    cached_str = client.get(redis_key)
+                    if cached_str is not None:
+                        return _json_loads(cached_str)
                 except Exception:
                     # Redis configured but unreachable/erroring this call --
                     # fall through to the in-memory tier below rather than
@@ -84,15 +114,24 @@ def cached_response(namespace: str, ttl_seconds: float, key_params: tuple[str, .
             now = time.monotonic()
             cached = bucket.get(key)
             if cached is not None and cached[0] > now:
+                # LRU: move to end (most recently used)
+                bucket.move_to_end(key)
                 return cached[1]
+            elif cached is not None:
+                # Expired entry
+                del bucket[key]
 
             result = fn(*args, **kwargs)
 
             if client is not None:
                 try:
-                    client.set(_redis_key(namespace, key), pickle.dumps(result), ex=int(ttl_seconds))
+                    client.set(_redis_key(namespace, key), _json_dumps(result), ex=int(ttl_seconds))
                 except Exception:
                     pass  # same reasoning as above -- degrade, don't fail
+
+            # LRU eviction: if namespace exceeds max, remove oldest entry
+            if len(bucket) >= _MAX_ENTRIES_PER_NAMESPACE:
+                bucket.popitem(last=False)  # Remove first (oldest) item
 
             bucket[key] = (now + ttl_seconds, result)
             return result

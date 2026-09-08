@@ -1,7 +1,12 @@
 import os
 import threading
 import time
-import requests
+import logging
+from typing import Optional
+
+import httpx
+
+logger = logging.getLogger(__name__)
 
 OSRM_BASE_URL = os.environ.get("OSRM_BASE_URL", "http://localhost:5000")
 
@@ -17,9 +22,80 @@ _PROFILE_BASE_URLS = {
     "foot": OSRM_FOOT_BASE_URL,
 }
 
+# Timeout configuration (seconds)
+CONNECT_TIMEOUT = 2.0
+READ_TIMEOUT = 8.0
+WRITE_TIMEOUT = 5.0
+POOL_TIMEOUT = 5.0
+
+# Circuit breaker configuration
+_CIRCUIT_FAILURE_THRESHOLD = 5  # failures before opening circuit
+_CIRCUIT_RECOVERY_TIME = 30.0  # seconds before half-open
+_CIRCUIT_HALF_OPEN_MAX = 3  # successful requests to close circuit
+
 
 class OSRMError(Exception):
     pass
+
+
+class CircuitBreaker:
+    """Simple circuit breaker for OSRM calls.
+
+    States: CLOSED (normal), OPEN (failing fast), HALF_OPEN (testing recovery).
+    Maintains separate state per profile (driving/foot).
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        # profile -> {"state": "CLOSED"|"OPEN"|"HALF_OPEN", "failures": int, "last_failure": float, "successes": int}
+        self._state: dict[str, dict] = {}
+
+    def _get(self, profile: str) -> dict:
+        if profile not in self._state:
+            self._state[profile] = {"state": "CLOSED", "failures": 0, "last_failure": 0.0, "successes": 0}
+        return self._state[profile]
+
+    def can_execute(self, profile: str) -> bool:
+        with self._lock:
+            st = self._get(profile)
+            if st["state"] == "CLOSED":
+                return True
+            if st["state"] == "OPEN":
+                if time.monotonic() - st["last_failure"] >= _CIRCUIT_RECOVERY_TIME:
+                    st["state"] = "HALF_OPEN"
+                    st["successes"] = 0
+                    logger.info("OSRM circuit breaker for %s: OPEN -> HALF_OPEN", profile)
+                    return True
+                return False
+            # HALF_OPEN
+            return True
+
+    def record_success(self, profile: str) -> None:
+        with self._lock:
+            st = self._get(profile)
+            if st["state"] == "HALF_OPEN":
+                st["successes"] += 1
+                if st["successes"] >= _CIRCUIT_HALF_OPEN_MAX:
+                    st["state"] = "CLOSED"
+                    st["failures"] = 0
+                    logger.info("OSRM circuit breaker for %s: HALF_OPEN -> CLOSED", profile)
+            elif st["state"] == "CLOSED":
+                st["failures"] = 0  # reset on success
+
+    def record_failure(self, profile: str) -> None:
+        with self._lock:
+            st = self._get(profile)
+            st["failures"] += 1
+            st["last_failure"] = time.monotonic()
+            if st["state"] == "HALF_OPEN":
+                st["state"] = "OPEN"
+                logger.warning("OSRM circuit breaker for %s: HALF_OPEN -> OPEN", profile)
+            elif st["state"] == "CLOSED" and st["failures"] >= _CIRCUIT_FAILURE_THRESHOLD:
+                st["state"] = "OPEN"
+                logger.warning("OSRM circuit breaker for %s: CLOSED -> OPEN (failures=%d)", profile, st["failures"])
+
+
+_circuit_breaker = CircuitBreaker()
 
 
 # Small in-process cache. Road geometry between two fixed points
@@ -68,6 +144,48 @@ def _cache_set(key: tuple, value: dict) -> None:
         _route_cache[key] = (time.monotonic(), value)
 
 
+# Per-profile HTTP clients with connection pooling
+_http_clients: dict[str, httpx.Client] = {}
+_clients_lock = threading.Lock()
+
+
+def _get_client(profile: str) -> httpx.Client:
+    """Get or create a pooled HTTP client for the given profile."""
+    with _clients_lock:
+        if profile not in _http_clients:
+            base_url = _PROFILE_BASE_URLS.get(profile, OSRM_BASE_URL)
+            _http_clients[profile] = httpx.Client(
+                base_url=base_url,
+                timeout=httpx.Timeout(
+                    connect=CONNECT_TIMEOUT,
+                    read=READ_TIMEOUT,
+                    write=WRITE_TIMEOUT,
+                    pool=POOL_TIMEOUT,
+                ),
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+        return _http_clients[profile]
+
+
+def _should_retry(exc: Exception, response: Optional[httpx.Response] = None) -> bool:
+    """Determine if an exception/response warrants a retry.
+
+    Retry on:
+    - Connection errors (httpx.ConnectError, ConnectTimeout)
+    - Read timeouts (httpx.ReadTimeout)
+    - Server errors 502, 503, 504
+
+    Do NOT retry on:
+    - Client errors 4xx (invalid request, bad coordinates, etc.)
+    - Other unexpected exceptions
+    """
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout)):
+        return True
+    if response is not None and response.status_code in (502, 503, 504):
+        return True
+    return False
+
+
 def get_route_geometry(
     coords: list[tuple[float, float]],
     profile: str = "driving",
@@ -101,9 +219,13 @@ def get_route_geometry(
     if radiuses is not None and len(radiuses) != len(coords):
         raise ValueError("radiuses must have exactly one entry per coordinate")
 
+    # Round coordinates to 6 decimal places (~0.1m) for cache key to avoid
+    # cache misses due to floating-point precision differences in DB data.
+    rounded_coords = tuple((round(lat, 6), round(lon, 6)) for lat, lon in coords)
+
     cache_key = (
         profile,
-        tuple(coords),
+        rounded_coords,
         tuple(bearings) if bearings is not None else None,
         tuple(radiuses) if radiuses is not None else None,
     )
@@ -111,9 +233,13 @@ def get_route_geometry(
     if cached is not None:
         return cached
 
+    # Circuit breaker check
+    if not _circuit_breaker.can_execute(profile):
+        raise OSRMError(f"Circuit breaker OPEN for {profile} OSRM")
+
     base_url = _PROFILE_BASE_URLS.get(profile, OSRM_BASE_URL)
     coord_str = ";".join(f"{lon},{lat}" for lat, lon in coords)
-    url = f"{base_url}/route/v1/{profile}/{coord_str}"
+    url = f"/route/v1/{profile}/{coord_str}"
     params = {"overview": "full", "geometries": "geojson"}
     if bearings is not None:
         params["bearings"] = ";".join(
@@ -124,23 +250,46 @@ def get_route_geometry(
             (str(r) if r is not None else "unlimited") for r in radiuses
         )
 
-    # One retry on transient network errors (connection reset, brief OSRM
-    # hiccup) before giving up -- avoids surfacing a hard failure to the
-    # user for what's often a one-off blip.
-    last_exc: requests.RequestException | None = None
-    for attempt in range(2):
-        try:
-            resp = requests.get(url, params=params, timeout=5)
-            resp.raise_for_status()
-            break
-        except requests.RequestException as exc:
-            last_exc = exc
-            if attempt == 0:
-                time.sleep(0.2)
-    else:
-        raise OSRMError(str(last_exc)) from last_exc
+    client = _get_client(profile)
+    last_exc: Optional[Exception] = None
+    last_response: Optional[httpx.Response] = None
 
-    data = resp.json()
+    # Up to 2 retries (3 attempts total) for transient failures
+    for attempt in range(3):
+        try:
+            resp = client.get(url, params=params)
+            last_response = resp
+            resp.raise_for_status()
+            _circuit_breaker.record_success(profile)
+            break
+        except httpx.HTTPStatusError as exc:
+            last_exc = exc
+            last_response = exc.response
+            if not _should_retry(exc, exc.response):
+                _circuit_breaker.record_failure(profile)
+                raise OSRMError(f"OSRM returned HTTP {exc.response.status_code}") from exc
+            logger.warning("OSRM %s attempt %d failed (HTTP %d), retrying: %s", profile, attempt + 1, exc.response.status_code, exc)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+            last_exc = exc
+            logger.warning("OSRM %s attempt %d failed (network), retrying: %s", profile, attempt + 1, exc)
+        except httpx.RequestError as exc:
+            last_exc = exc
+            _circuit_breaker.record_failure(profile)
+            raise OSRMError(f"OSRM request error: {exc}") from exc
+        else:
+            # No exception
+            break
+
+        if attempt < 2:  # Not the last attempt
+            time.sleep(0.2 * (attempt + 1))  # Exponential backoff: 0.2s, 0.4s
+    else:
+        # All retries exhausted
+        _circuit_breaker.record_failure(profile)
+        if last_response is not None:
+            raise OSRMError(f"OSRM returned HTTP {last_response.status_code} after retries") from last_exc
+        raise OSRMError(f"OSRM request failed after retries: {last_exc}") from last_exc
+
+    data = last_response.json()
     if data.get("code") != "Ok":
         raise OSRMError(f"OSRM returned code={data.get('code')}")
 

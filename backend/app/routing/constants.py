@@ -1,6 +1,6 @@
 """Small set of tunable constants (meters)."""
 EARTH_RADIUS: int = 6_371_000
-INTERCHANGE_DISTANCE: int = 100
+INTERCHANGE_DISTANCE: int = 200
 TRANSFER_PENALTY: int = 3000
 
 # How strongly the Dijkstra transfer-search fallback (find_shortest_path

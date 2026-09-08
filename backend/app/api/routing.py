@@ -212,38 +212,37 @@ def _record_leg_congestion(legs: list[RouteLeg]) -> None:
                 duration_s=leg.road_geometry["duration_s"],
                 distance_m=leg.road_geometry["distance_m"],
             )
+        db.commit()
     finally:
         db.close()
 
 
 def _build_legs(
-    db: Session,
     segments: list[PathSegment],
     route_names: dict[str, str],
+    stop_map: dict[str, StopOut],
 ) -> list[RouteLeg]:
     """Shared segment -> leg consolidation, used for both the primary
-    result and each alternative. route_names is a pre-fetched route_id ->
-    route_name lookup (see queries.get_route_names) -- passed in rather
-    than queried per-call so a request with alternatives does one lookup
-    total instead of one per result."""
+    result and each alternative. All stops are pre-fetched in stop_map
+    so no DB access is needed here."""
 
     legs: list[RouteLeg] = []
     for seg in segments:
         seg_route_id = seg.route_id or "TRANSFER"
-        to_stop = StopOut.model_validate(queries.get_stop(db, seg.to_stop_id))
+        to_stop = stop_map[seg.to_stop_id]
         if legs and legs[-1].route_id == seg_route_id:
             legs[-1].alight_stop = to_stop
             legs[-1].num_ride_segments += 1
             legs[-1].stops.append(to_stop)
         else:
-            from_stop = StopOut.model_validate(queries.get_stop(db, seg.from_stop_id))
+            from_stop = stop_map[seg.from_stop_id]
             legs.append(
                 RouteLeg(
                     route_id=seg_route_id,
                     route_name=(
                         "Transfer (walk)"
                         if seg.is_transfer
-                        else route_names.get(seg.route_id, seg.route_id)
+                        else route_names.get(seg_route_id, seg_route_id)
                     ),
                     board_stop=from_stop,
                     alight_stop=to_stop,
@@ -331,6 +330,7 @@ def find_route(
     ),
     db: Session = Depends(get_db),
 ):
+    # --- STEP 1: All DB work inside the session ---
     try:
         if via:
             result = find_route_via_stops(
@@ -347,11 +347,31 @@ def find_route(
     except NoRouteFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    route_names = queries.get_route_names(
-        db, _all_route_ids(result.segments, result.alternatives)
-    )
+    # Collect all stop_ids needed for this result + alternatives
+    all_route_ids = _all_route_ids(result.segments, result.alternatives)
+    route_names = queries.get_route_names(db, all_route_ids)
 
-    legs = _build_legs(db, result.segments, route_names)
+    # Build stop_map with all unique stops referenced by primary + alternatives
+    needed_stop_ids: set[str] = set()
+    for seg in result.segments:
+        needed_stop_ids.add(seg.from_stop_id)
+        needed_stop_ids.add(seg.to_stop_id)
+    for alt in result.alternatives:
+        for seg in alt.segments:
+            needed_stop_ids.add(seg.from_stop_id)
+            needed_stop_ids.add(seg.to_stop_id)
+
+    stop_map: dict[str, StopOut] = {}
+    for stop_id in needed_stop_ids:
+        stop = queries.get_stop(db, stop_id)
+        if stop is not None:
+            stop_map[stop_id] = StopOut.model_validate(stop)
+
+    # Build legs with pre-fetched stops (no DB access in _build_legs)
+    legs = _build_legs(result.segments, route_names, stop_map)
+
+    # --- STEP 2: Session closes here (FastAPI dependency) ---
+    # --- STEP 3: OSRM calls outside DB session ---
     _attach_road_geometry(legs)
     background_tasks.add_task(_record_leg_congestion, legs)
 
@@ -369,7 +389,7 @@ def find_route(
 
     alternatives: list[RouteAlternative] = []
     for alt in result.alternatives:
-        alt_legs = _build_legs(db, alt.segments, route_names)
+        alt_legs = _build_legs(alt.segments, route_names, stop_map)
         _attach_road_geometry(alt_legs)
         alternatives.append(
             RouteAlternative(
