@@ -4,18 +4,10 @@ import { useEffect } from "react";
 import L from "leaflet";
 import { LatLng, WalkingRoute, Stop } from "@/types/route";
 import { escapeHtml } from "@/lib/escapeHtml";
+import { userLocationPulseIcon } from "./markerKit";
 
 const USER_WALK_COLOR = "#0D9488";
-
-const userLocationIcon = L.divIcon({
-  className: "",
-  html: `<span style="position:relative;display:block;width:16px;height:16px;">
-      <span style="position:absolute;inset:-8px;border-radius:9999px;background:rgba(37,99,235,0.25);"></span>
-      <span style="position:absolute;inset:0;border-radius:9999px;background:#2563EB;border:2px solid #ffffff;box-shadow:0 0 0 1px rgba(0,0,0,0.25);"></span>
-    </span>`,
-  iconSize: [16, 16],
-  iconAnchor: [8, 8],
-});
+const userLocationIcon = userLocationPulseIcon();
 
 interface UseUserLocationLayerProps {
   map: L.Map | null;

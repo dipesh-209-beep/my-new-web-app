@@ -83,6 +83,10 @@ function makeMarker(kind: MockMarker["kind"], latlng: unknown, options: Record<s
       Object.assign(marker.options, opts);
       return api;
     },
+    setIcon: (icon: unknown) => {
+      marker.options.icon = icon;
+      return api;
+    },
     addTo: () => api,
     remove: () => {
       marker.removed = true;

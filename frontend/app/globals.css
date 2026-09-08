@@ -8,15 +8,17 @@ html,
 body {
   height: 100%;
   background-color: #ffffff;
-  color: #14171c;
+  color: #1b1a2e;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
 /* One consistent focus ring app-wide instead of the browser default, which
-   varies by element and is easy to lose track of against a light theme. */
+   varies by element and is easy to lose track of against a light theme.
+   Marigold here (not the functional blue) since focus is a brand/UI
+   signal, not a route-color signal. */
 :focus-visible {
-  outline: 2px solid #2563eb;
+  outline: 2px solid #e0a614;
   outline-offset: 2px;
   border-radius: 2px;
 }
@@ -26,7 +28,7 @@ body {
   width: 36px;
   height: 4px;
   border-radius: 9999px;
-  background-color: #d8d9d3;
+  background-color: #d9d6e8;
 }
 
 /* Mobile-specific adjustments for the bottom sheet */
@@ -64,17 +66,18 @@ body {
 /* Reduce unnecessary rendering - identify and optimize */
 
 /* Leaflet's stock popup chrome is already light -- just tighten it up to
-   match the app's crisp-border, low-shadow documentation aesthetic. */
+   match the app's crisp-hairline, signage-flat aesthetic (see
+   boxShadow.card in tailwind.config.ts). */
 .leaflet-popup-content-wrapper,
 .leaflet-popup-tip {
   background: #ffffff;
-  color: #171717;
+  color: #1b1a2e;
 }
 
 .leaflet-popup-content-wrapper {
-  border: 1px solid #e4e4df;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  border: 1px solid #dedcf0;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(27, 26, 46, 0.08);
 }
 
 .leaflet-popup-content {
@@ -91,17 +94,16 @@ body {
 }
 
 /* Tooltips (stop names on hover, cluster bubble hints, browse-route
-   numbered stops) previously used Leaflet's stock look, which reads as
-   visually bolted-on next to the rest of the app's crisp-border, subtle
-   background aesthetic used for popups above and cards throughout
-   app/page.tsx. Same treatment, applied to tooltips. */
+   numbered stops) get the same crisp-hairline, signage-flat treatment as
+   popups above, in the ink/indigo palette rather than a neutral gray. */
 .leaflet-tooltip {
-  background: #ffffff;
-  color: #14171c;
-  border: 1px solid #e3e4de;
-  border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  background: #1b1a2e;
+  color: #ffffff;
+  border: none;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(27, 26, 46, 0.15);
   font-size: 12px;
+  font-weight: 600;
   padding: 3px 8px;
 }
 
@@ -109,5 +111,5 @@ body {
 .leaflet-tooltip-bottom:before,
 .leaflet-tooltip-left:before,
 .leaflet-tooltip-right:before {
-  border-top-color: #e3e4de;
+  border-top-color: #1b1a2e;
 }

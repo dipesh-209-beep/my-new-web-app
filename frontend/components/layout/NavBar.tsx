@@ -66,12 +66,12 @@ export default function NavBar() {
     <Link href="/" className="flex items-center gap-1.5 font-semibold tracking-tight">
       <span
         aria-hidden
-        className="flex h-5 w-5 items-center justify-center rounded-[5px] bg-accent-blue text-[10px] font-bold text-white"
+        className="flex h-5 w-5 items-center justify-center rounded-[3px] bg-brand text-[10px] font-bold text-ink"
       >
         K
       </span>
       <span className="text-ink">KTM</span>
-      <span className="text-accent-blue">Transit</span>
+      <span className="text-brand-dark">Transit</span>
     </Link>
   );
 
@@ -105,7 +105,7 @@ export default function NavBar() {
               aria-current={isActive ? "page" : undefined}
               className={`border-b-2 pb-[3px] transition-colors ${
                 isActive
-                  ? "border-accent-blue font-medium text-ink"
+                  ? "border-brand font-medium text-ink"
                   : "border-transparent text-ink-secondary hover:text-ink"
               }`}
             >

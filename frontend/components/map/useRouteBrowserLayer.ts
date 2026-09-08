@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import L from "leaflet";
 import { RouteStopEntry, RouteGeometry } from "@/types/route";
 import { escapeHtml } from "@/lib/escapeHtml";
+import { sequencedStopIcon } from "./markerKit";
 
 const BROWSE_ROUTE_COLOR = "#7C3AED";
 
@@ -63,12 +64,7 @@ export function useRouteBrowserLayer({
 
     validEntries.forEach(({ entry, lat, lng }) => {
       const marker = L.marker([lat, lng], {
-        icon: L.divIcon({
-          className: "",
-          html: `<span style="display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:9999px;background:${BROWSE_ROUTE_COLOR};color:#ffffff;font-size:11px;font-weight:600;border:2px solid #ffffff;box-shadow:0 0 0 1px rgba(0,0,0,0.25);">${entry.sequence_no}</span>`,
-          iconSize: [20, 20],
-          iconAnchor: [10, 10],
-        }),
+        icon: sequencedStopIcon(entry.sequence_no, BROWSE_ROUTE_COLOR),
       });
       marker.bindTooltip(`${entry.sequence_no}. ${escapeHtml(entry.stop.stop_name)}`, {
         direction: "top",

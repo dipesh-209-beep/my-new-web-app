@@ -338,7 +338,7 @@ export default function SearchForm({
       <button
         type="submit"
         disabled={loading}
-        className="mt-1 rounded-md bg-accent-blue py-2.5 text-sm font-semibold tracking-wide text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+        className="mt-1 rounded-md bg-brand py-2.5 text-sm font-semibold tracking-wide text-ink transition-colors hover:bg-brand-dark disabled:opacity-50"
       >
         {loading ? "Searching…" : "Find route"}
       </button>

@@ -46,7 +46,7 @@ export class MapErrorBoundary extends Component<Props, State> {
           <button
             type="button"
             onClick={this.handleRetry}
-            className="inline-flex items-center gap-2 rounded-md bg-accent-blue px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+            className="inline-flex items-center gap-2 rounded-md bg-brand px-4 py-2 text-sm font-medium text-ink transition-colors hover:bg-brand-dark"
           >
             <ChevronIcon direction="up" size={16} />
             Reload map

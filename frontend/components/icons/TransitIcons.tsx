@@ -31,6 +31,28 @@ export function BusIcon({ className, size = 14 }: IconProps) {
   );
 }
 
+/** Same silhouette as BusIcon but filled solid rather than outlined --
+ * used wherever the bus glyph sits on a colored chip (the map's stop
+ * markers, route badges) rather than inline with text, since a filled
+ * mark reads clearly at the small sizes those chips render at. Kept as a
+ * separate component (not a `variant` prop on BusIcon) so each call site
+ * states its intent -- outline for text-adjacent use, filled for
+ * chip/badge use -- without a boolean to look up. */
+export function BusIconFilled({ className, size = 14 }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+      aria-hidden
+    >
+      <path d="M5 4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v11a2 2 0 0 1-1 1.73V19a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H8v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-2.27A2 2 0 0 1 4 15V4Zm2 0v6h10V4H7Zm.5 9.25a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5Zm9 0a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5Z" />
+    </svg>
+  );
+}
+
 export function WalkIcon({ className, size = 14 }: IconProps) {
   return (
     <svg

@@ -181,7 +181,7 @@ export default function RouteDetailPage() {
 
       <Link
         href={`/?route=${encodeURIComponent(route.route_id)}`}
-        className="self-start rounded-md bg-accent-blue px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        className="self-start rounded-md bg-brand px-4 py-2 text-sm font-medium text-ink hover:bg-brand-dark"
       >
         View on full map
       </Link>

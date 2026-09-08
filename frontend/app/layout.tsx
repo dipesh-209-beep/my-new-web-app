@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import "@fontsource-variable/archivo";
 import "./globals.css";
 import NavBar from "@/components/layout/NavBar";
 import ServiceWorkerRegistration from "@/components/ServiceWorkerRegistration";
@@ -15,7 +16,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#2563EB",
+  themeColor: "#E0A614",
 };
 
 export default function RootLayout({
@@ -25,7 +26,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="flex h-full flex-col">
+      <body className="flex h-full flex-col font-sans">
         <ServiceWorkerRegistration />
         <NavBar />
         <div className="min-h-0 flex-1">{children}</div>

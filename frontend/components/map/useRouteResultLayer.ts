@@ -5,27 +5,15 @@ import L from "leaflet";
 import { RouteSearchResult } from "@/types/route";
 import { LEG_COLORS } from "@/lib/constants";
 import { escapeHtml } from "@/lib/escapeHtml";
+import { pinIcon } from "./markerKit";
 
-const originIcon = L.divIcon({
-  className: "",
-  html: `<span style="display:block;width:18px;height:18px;border-radius:9999px;background:#2563EB;border:2px solid #ffffff;box-shadow:0 0 0 1px rgba(0,0,0,0.25);"></span>`,
-  iconSize: [18, 18],
-  iconAnchor: [9, 9],
-});
-
-const destinationIcon = L.divIcon({
-  className: "",
-  html: `<span style="display:block;width:18px;height:18px;border-radius:9999px;background:#DC2626;border:2px solid #ffffff;box-shadow:0 0 0 1px rgba(0,0,0,0.25);"></span>`,
-  iconSize: [18, 18],
-  iconAnchor: [9, 9],
-});
-
-const transferIcon = L.divIcon({
-  className: "",
-  html: `<span style="display:block;width:14px;height:14px;border-radius:9999px;background:#7C3AED;border:2px solid #ffffff;box-shadow:0 0 0 1px rgba(0,0,0,0.25);"></span>`,
-  iconSize: [14, 14],
-  iconAnchor: [7, 7],
-});
+// Pins (not tags) for origin/destination/transfer -- these are the
+// specific singular points a found trip is about, distinct in shape (not
+// just color) from the repeatable bus-tag stops along the way. See
+// markerKit.ts's module comment for the reasoning.
+const originIcon = pinIcon("origin");
+const destinationIcon = pinIcon("destination");
+const transferIcon = pinIcon("transfer");
 
 interface UseRouteResultLayerProps {
   map: L.Map | null;
@@ -162,13 +150,13 @@ export function useRouteResultLayer({
       onAdd: () => {
         const div = L.DomUtil.create("div");
         div.style.background = "#ffffff";
-        div.style.border = "1px solid #E4E4DF";
-        div.style.borderRadius = "8px";
+        div.style.border = "1px solid #DEDCF0";
+        div.style.borderRadius = "4px";
         div.style.padding = "8px 10px";
         div.style.fontSize = "12px";
-        div.style.color = "#171717";
+        div.style.color = "#1B1A2E";
         div.style.lineHeight = "1.6";
-        div.style.boxShadow = "0 1px 3px rgba(0,0,0,0.08)";
+        div.style.boxShadow = "0 0 0 1px rgba(27,26,46,0.08)";
         div.style.maxWidth = "min(220px, 60vw)";
 
         legendRows.forEach((row, i) => {

@@ -40,24 +40,26 @@ describe("BusMap", () => {
   });
 
   describe("all-stops layer", () => {
-    it("renders one circle marker per stop and escapes the tooltip content", () => {
+    it("renders one bus-tag marker per stop and escapes the tooltip content", () => {
       // Distinct, well-separated coordinates -- two stops sharing a
       // location would fall into the same cluster (lib/stopClustering.ts)
       // at the default zoom and render as one cluster bubble instead of
-      // two individual circle markers, which isn't what this test means
-      // to exercise.
+      // two individual stop markers, which isn't what this test means to
+      // exercise.
       const stops = [
         makeStop({ stop_id: "S0001", stop_name: "Ratna Park", lat: 27.7041, lng: 85.31 }),
         makeStop({ stop_id: "S0002", stop_name: 'New Road <script>alert(1)</script>', lat: 27.75, lng: 85.36 }),
       ];
       render(<BusMap allStops={stops} />);
 
-      const circleMarkers = leafletState.markers.filter((m) => m.kind === "circleMarker");
-      expect(circleMarkers).toHaveLength(2);
+      // Individual stops render as `L.marker` with a busTagIcon divIcon
+      // (see components/map/markerKit.ts), not a plain circleMarker.
+      const stopMarkers = leafletState.markers.filter((m) => m.kind === "marker");
+      expect(stopMarkers).toHaveLength(2);
       // HTML-unsafe characters in stop names must be escaped before being
       // interpolated into Leaflet's HTML-as-string tooltip content.
-      expect(circleMarkers[1].tooltip?.content).toContain("&lt;script&gt;");
-      expect(circleMarkers[1].tooltip?.content).not.toContain("<script>");
+      expect(stopMarkers[1].tooltip?.content).toContain("&lt;script&gt;");
+      expect(stopMarkers[1].tooltip?.content).not.toContain("<script>");
     });
 
     it("only invokes onStopPick when a pickTarget is active", () => {
@@ -87,10 +89,12 @@ describe("BusMap", () => {
 
       render(<BusMap allStops={stops} pickTarget="origin" onStopPick={onStopPick} />);
 
-      // Two stops this close together render as one cluster (a marker, not
-      // a circleMarker) at the map's default zoom.
-      expect(leafletState.markers.filter((m) => m.kind === "circleMarker")).toHaveLength(0);
-      const clusterMarker = leafletState.markers.find((m) => m.kind === "marker");
+      // Two stops this close together render as exactly one cluster
+      // marker at the map's default zoom, not two individual bus-tag
+      // stop markers (both kinds are `L.marker`, see markerKit.ts, so the
+      // count -- not just the kind -- is what proves clustering happened).
+      expect(leafletState.markers).toHaveLength(1);
+      const clusterMarker = leafletState.markers[0];
       expect(clusterMarker).toBeDefined();
 
       clusterMarker!.handlers["click"]?.forEach((h) => h());
@@ -105,7 +109,7 @@ describe("BusMap", () => {
       expect(leafletState.markers).toHaveLength(0);
     });
 
-    it("dims (but does not hide) stop dots once a route result is found", () => {
+    it("dims (but does not hide) stop markers once a route result is found", () => {
       const stop = makeStop();
       const foundResult: RouteSearchResult = {
         found: true,
@@ -119,13 +123,19 @@ describe("BusMap", () => {
       };
 
       const { rerender } = render(<BusMap allStops={[stop]} result={{ found: false }} />);
-      const brightDot = leafletState.markers.find((m) => m.kind === "circleMarker")!;
-      const brightOpacity = brightDot.options.fillOpacity;
+      const brightMarker = leafletState.markers.find((m) => m.kind === "marker")!;
+      const brightIcon = brightMarker.options.icon as { html: string };
 
       leafletState.reset();
       rerender(<BusMap allStops={[stop]} result={foundResult} />);
-      const dimmedDot = leafletState.markers.find((m) => m.kind === "circleMarker")!;
-      expect(dimmedDot.options.fillOpacity).toBeLessThan(brightOpacity as number);
+      const dimmedMarker = leafletState.markers.find((m) => m.kind === "marker")!;
+      const dimmedIcon = dimmedMarker.options.icon as { html: string };
+
+      // Both states render a marker (never hidden); the dimmed state uses
+      // a visibly different (lighter) fill than the bright/default state
+      // -- see busTagIcon's "dimmed" vs "default" case in markerKit.ts.
+      expect(dimmedIcon.html).not.toEqual(brightIcon.html);
+      expect(dimmedIcon.html).toContain("#C9C7D6");
     });
   });
 

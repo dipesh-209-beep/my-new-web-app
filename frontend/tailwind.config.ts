@@ -8,30 +8,35 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Light, documentation-style base palette. `route.accent` stays as
-        // the single default interactive color (blue) so existing
-        // hover/focus states don't need per-file color decisions; sections
-        // that want a specific semantic hue reach for `accent.*` instead.
-        //
-        // Functional mapping used across the app (map legend, route cards,
-        // timeline): bus/origin = blue, walking = purple, transfer = orange,
-        // destination = red, success/normal = green, congestion = green →
-        // amber → red.
+        // Deep indigo-ink base with ONE brand accent (marigold) reserved
+        // for "this is the interactive, brand-owned thing" -- primary CTAs,
+        // the active/picked stop marker, the nav brand mark. Every other
+        // color in `accent.*` stays purely functional (route legend, leg
+        // colors, congestion), same mapping as before: bus/origin = blue,
+        // walking = purple, transfer = orange, destination = red,
+        // success/normal = green, congestion = green -> amber -> red.
+        // Reserving marigold for brand-only meaning keeps it from
+        // colliding with any of those functional hues on the map.
         route: {
           bg: "#FFFFFF",
           panel: "#FFFFFF",
           accent: "#2563EB",
-          line: "#E3E4DE",
+          line: "#DEDCF0",
         },
         surface: {
-          DEFAULT: "#F7F7F4",
+          DEFAULT: "#F6F5F2",
           raised: "#FFFFFF",
-          sunken: "#EFEFEA",
+          sunken: "#ECEAF3",
         },
         ink: {
-          DEFAULT: "#14171C",
-          secondary: "#5B6169",
-          tertiary: "#8B9098",
+          DEFAULT: "#1B1A2E",
+          secondary: "#5B5876",
+          tertiary: "#8D89A6",
+        },
+        brand: {
+          DEFAULT: "#E0A614",
+          dark: "#B9860B",
+          soft: "#FBF0D6",
         },
         accent: {
           blue: "#2563EB",
@@ -45,10 +50,18 @@ const config: Config = {
         },
       },
       fontFamily: {
+        // Single grotesk family for everything (display and body alike);
+        // the weight/tracking does the differentiating, not a second
+        // typeface. Self-hosted via @fontsource-variable/archivo
+        // (imported once in app/layout.tsx) rather than a live Google
+        // Fonts fetch, so the build has no external network dependency
+        // and this is the only place naming a font family in code --
+        // swapping the family later is a one-line change here plus the
+        // matching @fontsource package.
         sans: [
+          "Archivo Variable",
           "-apple-system",
           "BlinkMacSystemFont",
-          "Inter",
           "Segoe UI",
           "Helvetica Neue",
           "Arial",
@@ -63,8 +76,12 @@ const config: Config = {
         ],
       },
       boxShadow: {
-        sheet: "0 -4px 24px rgba(20, 23, 28, 0.10)",
-        card: "0 1px 2px rgba(20, 23, 28, 0.05)",
+        sheet: "0 -4px 24px rgba(27, 26, 46, 0.12)",
+        // Flatter, signage-like: a crisp hairline reads more like a
+        // printed route board than a soft SaaS drop shadow. Kept as a
+        // named shadow (not a plain border utility) so existing
+        // `shadow-card` usages pick this up with no per-file changes.
+        card: "0 0 0 1px rgba(27, 26, 46, 0.08)",
       },
     },
   },

@@ -149,7 +149,7 @@ export default function StopDetailPage() {
       <div className="flex flex-wrap gap-2">
         <Link
           href={`/?origin=${encodeURIComponent(stop.stop_id)}`}
-          className="rounded-md bg-accent-blue px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          className="rounded-md bg-brand px-4 py-2 text-sm font-medium text-ink hover:bg-brand-dark"
         >
           Set as origin
         </Link>
