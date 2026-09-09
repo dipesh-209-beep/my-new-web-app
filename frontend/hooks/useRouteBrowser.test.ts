@@ -1,8 +1,8 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { describe, expect, it, vi, afterEach, type Mock } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { useRouteBrowser } from "@/hooks/useRouteBrowser";
 import * as api from "@/lib/api";
-import { RouteSummary, RouteStopEntry, RouteGeometry, RouteDirection } from "@/types/route";
+import { RouteSummary, RouteStopEntry, RouteGeometry } from "@/types/route";
 
 function makeRoute(overrides: Partial<RouteSummary> = {}): RouteSummary {
   return {
@@ -85,7 +85,7 @@ describe("useRouteBrowser", () => {
     expect(result.current.visibleRouteGeometry).toEqual(forwardGeometry);
   });
 
-  it("setDirection updates direction state but does not trigger fetches; fetch occurs on next showRouteById", async () => {
+  it("setDirection reloads stops/geometry for the visible route in the new direction (no stale data)", async () => {
     const route = makeRoute({ route_id: "R1", is_bidirectional: true });
     const forwardStops = makeStops(5, "F");
     const reverseStops = makeStops(5, "R");
@@ -111,33 +111,43 @@ describe("useRouteBrowser", () => {
     expect(result.current.direction).toBe("forward");
     expect(api.getRouteStops).toHaveBeenCalledTimes(1);
     expect(api.getRouteGeometry).toHaveBeenCalledTimes(1);
+    expect(result.current.visibleRouteStops).toEqual(forwardStops);
+    expect(result.current.visibleRouteGeometry).toEqual(forwardGeometry);
 
-    // setDirection only updates state, no fetch triggered
+    // setDirection alone -- with no toggle-off/showRouteById dance --
+    // must reload both stops and geometry for the new direction so the
+    // map/timeline never keep showing the previous direction's data.
     await act(async () => {
       result.current.setDirection("reverse");
-    });
-
-    expect(result.current.direction).toBe("reverse");
-    expect(api.getRouteStops).toHaveBeenCalledTimes(1);
-    expect(api.getRouteGeometry).toHaveBeenCalledTimes(1);
-
-    // Toggle off first, then showRouteById respects current direction - triggers fetch with reverse
-    await act(async () => {
-      await result.current.toggleVisible(route); // toggle off
-    });
-    await act(async () => {
-      await result.current.showRouteById("R1");
     });
 
     await waitFor(() => expect(result.current.visibleRouteStopsLoading).toBe(false));
     await waitFor(() => expect(result.current.visibleRouteGeometryLoading).toBe(false));
 
+    expect(result.current.direction).toBe("reverse");
     expect(api.getRouteStops).toHaveBeenCalledTimes(2);
     expect(api.getRouteStops).toHaveBeenNthCalledWith(2, "R1", "reverse");
     expect(api.getRouteGeometry).toHaveBeenCalledTimes(2);
     expect(api.getRouteGeometry).toHaveBeenNthCalledWith(2, "R1", "reverse");
     expect(result.current.visibleRouteStops).toEqual(reverseStops);
     expect(result.current.visibleRouteGeometry).toEqual(reverseGeometry);
+  });
+
+  it("setDirection with no route currently visible does not fetch", async () => {
+    vi.spyOn(api, "getRoutes").mockResolvedValue({ total: 0, limit: 50, offset: 0, items: [] });
+    const getRouteStopsSpy = vi.spyOn(api, "getRouteStops");
+    const getRouteGeometrySpy = vi.spyOn(api, "getRouteGeometry");
+
+    const { result } = renderHook(() => useRouteBrowser());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.setDirection("reverse");
+    });
+
+    expect(result.current.direction).toBe("reverse");
+    expect(getRouteStopsSpy).not.toHaveBeenCalled();
+    expect(getRouteGeometrySpy).not.toHaveBeenCalled();
   });
 
   it("switching back to 'forward' after caching both directions does NOT re-fetch (uses cache)", async () => {
@@ -178,8 +188,8 @@ describe("useRouteBrowser", () => {
     await waitFor(() => expect(result.current.visibleRouteStopsLoading).toBe(false));
     await waitFor(() => expect(result.current.visibleRouteGeometryLoading).toBe(false));
 
-    const stopsCallCountAfterReverse = (api.getRouteStops as vi.Mock).mock.calls.length;
-    const geometryCallCountAfterReverse = (api.getRouteGeometry as vi.Mock).mock.calls.length;
+    const stopsCallCountAfterReverse = (api.getRouteStops as Mock).mock.calls.length;
+    const geometryCallCountAfterReverse = (api.getRouteGeometry as Mock).mock.calls.length;
 
     // Switch back to forward, toggle off, use showRouteById - should use cache, no new fetch
     await act(async () => {
@@ -198,8 +208,8 @@ describe("useRouteBrowser", () => {
     expect(result.current.direction).toBe("forward");
     expect(result.current.visibleRouteStops).toEqual(forwardStops);
     expect(result.current.visibleRouteGeometry).toEqual(forwardGeometry);
-    expect((api.getRouteStops as vi.Mock).mock.calls.length).toBe(stopsCallCountAfterReverse);
-    expect((api.getRouteGeometry as vi.Mock).mock.calls.length).toBe(geometryCallCountAfterReverse);
+    expect((api.getRouteStops as Mock).mock.calls.length).toBe(stopsCallCountAfterReverse);
+    expect((api.getRouteGeometry as Mock).mock.calls.length).toBe(geometryCallCountAfterReverse);
   });
 
   it("showRouteById respects the current direction state, not always 'forward'", async () => {
@@ -224,7 +234,6 @@ describe("useRouteBrowser", () => {
       result.current.setDirection("reverse");
     });
 
-    const route2 = makeRoute({ route_id: "R2", is_bidirectional: true });
     const route2ReverseStops = makeStops(3, "R2");
     const route2ReverseGeometry = makeGeometry({ distance_m: 900 });
 
@@ -419,7 +428,7 @@ describe("useRouteBrowser", () => {
 
     // Fire toggleVisible for route A (slow)
     let togglePromise: Promise<void>;
-    act(() => {
+    await act(async () => {
       togglePromise = result.current.toggleVisible(routeA);
     });
 

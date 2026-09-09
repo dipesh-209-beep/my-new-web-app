@@ -24,8 +24,11 @@ interface UseRouteBrowserResult {
   /** Current travel direction for the visible route. Only meaningful when
    * `visibleRouteId` is non-null and the route is bidirectional. */
   direction: RouteDirection;
+  /** Switches direction for the currently visible route and reloads its
+   * stops/geometry for that direction (cache-aware, race-guarded). A
+   * no-op if no route is currently visible. */
   setDirection: (d: RouteDirection) => void;
-  toggleVisible: (route: RouteSummary) => void;
+  toggleVisible: (route: RouteSummary) => Promise<void>;
   /** Show a specific route's stops by ID without requiring it to be in
    * the currently loaded/paged list -- used for deep links like
    * /routes/[routeId]'s "View on map" action. */
@@ -48,7 +51,7 @@ export function useRouteBrowser(): UseRouteBrowserResult {
   const [searchQuery, setSearchQuery] = useState("");
 
   const [visibleRouteId, setVisibleRouteId] = useState<string | null>(null);
-  const [direction, setDirection] = useState<RouteDirection>("forward");
+  const [direction, setDirectionState] = useState<RouteDirection>("forward");
   const [visibleRouteStops, setVisibleRouteStops] = useState<RouteStopEntry[]>([]);
   const [visibleRouteStopsLoading, setVisibleRouteStopsLoading] = useState(false);
   // Cache keyed by `${routeId}:${direction}` so forward/reverse don't collide
@@ -153,6 +156,43 @@ export function useRouteBrowser(): UseRouteBrowserResult {
     }
   }
 
+  // Shared by toggleVisible/showRouteById/changeDirection so all three
+  // paths that can put a (routeId, direction) pair on screen go through
+  // the same cache + race-guard logic. On failure the caller decides
+  // whether to also clear visibleRouteId (deep link vs. direction flip
+  // want different fallback behavior), so this only clears the stop list.
+  async function loadStops(routeId: string, dir: RouteDirection): Promise<{ ok: boolean }> {
+    const requestId = ++stopsRequestIdRef.current;
+    const cacheKey = makeCacheKey(routeId, dir);
+
+    const cached = routeStopsCache[cacheKey];
+    if (cached) {
+      if (stopsRequestIdRef.current === requestId) {
+        setVisibleRouteStops(cached);
+      }
+      return { ok: true };
+    }
+
+    if (stopsRequestIdRef.current === requestId) {
+      setVisibleRouteStopsLoading(true);
+      setVisibleRouteStops([]);
+    }
+    try {
+      const data = await getRouteStops(routeId, dir);
+      if (stopsRequestIdRef.current !== requestId) return { ok: true };
+      setVisibleRouteStops(data);
+      setRouteStopsCache((prev) => ({ ...prev, [cacheKey]: data }));
+      return { ok: true };
+    } catch {
+      if (stopsRequestIdRef.current !== requestId) return { ok: true };
+      return { ok: false };
+    } finally {
+      if (stopsRequestIdRef.current === requestId) {
+        setVisibleRouteStopsLoading(false);
+      }
+    }
+  }
+
   async function toggleVisible(route: RouteSummary) {
     if (visibleRouteId === route.route_id) {
       setVisibleRouteId(null);
@@ -161,74 +201,40 @@ export function useRouteBrowser(): UseRouteBrowserResult {
       return;
     }
 
-    const requestId = ++stopsRequestIdRef.current;
     setVisibleRouteId(route.route_id);
     // Reset direction to forward when switching routes
-    setDirection("forward");
+    setDirectionState("forward");
     loadGeometry(route.route_id, "forward");
-
-    const cacheKey = makeCacheKey(route.route_id, "forward");
-    const cached = routeStopsCache[cacheKey];
-    if (cached) {
-      if (stopsRequestIdRef.current === requestId) {
-        setVisibleRouteStops(cached);
-      }
-      return;
-    }
-
-    if (stopsRequestIdRef.current === requestId) {
-      setVisibleRouteStopsLoading(true);
-      setVisibleRouteStops([]);
-    }
-    try {
-      const data = await getRouteStops(route.route_id, "forward");
-      if (stopsRequestIdRef.current !== requestId) return;
-      setVisibleRouteStops(data);
-      setRouteStopsCache((prev) => ({ ...prev, [cacheKey]: data }));
-    } catch {
-      if (stopsRequestIdRef.current !== requestId) return;
-      // supplementary feature -- leave the list empty rather than erroring
-    } finally {
-      if (stopsRequestIdRef.current === requestId) {
-        setVisibleRouteStopsLoading(false);
-      }
-    }
+    await loadStops(route.route_id, "forward");
+    // supplementary feature -- a failed fetch here just leaves the stop
+    // list empty rather than erroring, same as before this was extracted.
   }
 
   async function showRouteById(routeId: string) {
     if (visibleRouteId === routeId) return;
 
-    const stopsRequestId = ++stopsRequestIdRef.current;
     setVisibleRouteId(routeId);
     // Use current direction for deep links (defaults to forward)
     loadGeometry(routeId, direction);
-
-    const cacheKey = makeCacheKey(routeId, direction);
-    const cached = routeStopsCache[cacheKey];
-    if (cached) {
-      if (stopsRequestIdRef.current === stopsRequestId) {
-        setVisibleRouteStops(cached);
-      }
-      return;
-    }
-
-    if (stopsRequestIdRef.current === stopsRequestId) {
-      setVisibleRouteStopsLoading(true);
-      setVisibleRouteStops([]);
-    }
-    try {
-      const data = await getRouteStops(routeId, direction);
-      if (stopsRequestIdRef.current !== stopsRequestId) return;
-      setVisibleRouteStops(data);
-      setRouteStopsCache((prev) => ({ ...prev, [cacheKey]: data }));
-    } catch {
-      if (stopsRequestIdRef.current !== stopsRequestId) return;
+    const { ok } = await loadStops(routeId, direction);
+    if (!ok) {
+      // Bad/stale route id -- undo so the panel doesn't look "stuck"
+      // showing a route that never loaded.
       setVisibleRouteId(null);
-    } finally {
-      if (stopsRequestIdRef.current === stopsRequestId) {
-        setVisibleRouteStopsLoading(false);
-      }
     }
+  }
+
+  // Direction is only meaningful together with whichever route is
+  // currently visible, so switching it re-runs both fetches for the new
+  // (routeId, direction) pair -- previously this only flipped the
+  // Forward/Return UI state and left the map/timeline showing the other
+  // direction's stops and geometry until something else (a re-toggle)
+  // happened to refresh them.
+  function changeDirection(dir: RouteDirection) {
+    setDirectionState(dir);
+    if (!visibleRouteId) return;
+    loadGeometry(visibleRouteId, dir);
+    loadStops(visibleRouteId, dir);
   }
 
   return {
@@ -244,7 +250,7 @@ export function useRouteBrowser(): UseRouteBrowserResult {
     visibleRouteGeometry,
     visibleRouteGeometryLoading,
     direction,
-    setDirection,
+    setDirection: changeDirection,
     toggleVisible,
     showRouteById,
     loadMore,
