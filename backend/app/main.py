@@ -61,7 +61,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # set CORS_ORIGINS to the exact domain(s) and remove the localhost patterns
 # from _LAN_ORIGIN_RE.
 # ---------------------------------------------------------------------------
-_CORS_ALLOW_METHODS = "GET, POST, PATCH, OPTIONS"
+_CORS_ALLOW_METHODS = "GET, POST, PATCH, DELETE, OPTIONS"
 _CORS_ALLOW_HEADERS = "Content-Type, Authorization, X-Admin-Api-Key"
 
 # Patterns that are always accepted in addition to explicit CORS_ORIGINS.

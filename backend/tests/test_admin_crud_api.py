@@ -286,3 +286,176 @@ def test_add_route_stop_409s_on_duplicate_sequence_no(client, route_with_no_stop
         headers=_admin_headers(),
     )
     assert dup.status_code == 409
+
+
+# --- DELETE /routes/{route_id}/stops/{sequence_no} ---------------------------
+
+
+@pytest.fixture
+def route_with_three_stops(client):
+    """A route with 3 sequentially-linked stops (seq 1..3), deleted (including
+    its route_stops) afterward. Yields (route_id, [stop_id, stop_id, stop_id])."""
+    resp = client.post(
+        "/stops",
+        json={"stop_name": f"Seq Stop {uuid.uuid4().hex[:6]}", "lat": 27.7, "lng": 85.3},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 201
+    stop_ids = [resp.json()["stop_id"]]
+    for _ in range(2):
+        resp = client.post(
+            "/stops",
+            json={"stop_name": f"Seq Stop {uuid.uuid4().hex[:6]}", "lat": 27.71, "lng": 85.31},
+            headers=_admin_headers(),
+        )
+        assert resp.status_code == 201
+        stop_ids.append(resp.json()["stop_id"])
+
+    resp = client.post(
+        "/routes",
+        json={
+            "route_name": f"Sequence Route {uuid.uuid4().hex[:6]}",
+            "vehicle_type": "bus",
+            "start_stop_id": stop_ids[0],
+            "end_stop_id": stop_ids[2],
+            "total_stops": 0,
+        },
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 201
+    route_id = resp.json()["route_id"]
+    for seq, sid in enumerate(stop_ids, start=1):
+        resp = client.post(
+            f"/routes/{route_id}/stops",
+            json={"stop_id": sid, "sequence_no": seq},
+            headers=_admin_headers(),
+        )
+        assert resp.status_code == 201, resp.text
+
+    yield route_id, stop_ids
+    session = SessionLocal()
+    session.execute(text("DELETE FROM route_stops WHERE route_id = :rid"), {"rid": route_id})
+    session.execute(text("DELETE FROM routes WHERE route_id = :rid"), {"rid": route_id})
+    session.execute(text("DELETE FROM stops WHERE stop_id = ANY(:ids)"), {"ids": stop_ids})
+    session.commit()
+    session.close()
+
+
+def test_remove_route_stop_succeeds_and_resequences(client, route_with_three_stops):
+    route_id, _ = route_with_three_stops
+    resp = client.delete(f"/routes/{route_id}/stops/2", headers=_admin_headers())
+    assert resp.status_code == 204, resp.text
+
+    session = SessionLocal()
+    rows = session.execute(
+        text("SELECT stop_id, sequence_no FROM route_stops WHERE route_id = :rid ORDER BY sequence_no"),
+        {"rid": route_id},
+    ).all()
+    seqs = [r.sequence_no for r in rows]
+    total = session.execute(text("SELECT total_stops FROM routes WHERE route_id = :rid"), {"rid": route_id}).scalar_one()
+    session.close()
+    # The old position 3 shifted down to 2; no gap.
+    assert seqs == [1, 2]
+    assert total == 2
+
+
+def test_remove_route_stop_bumps_graph_version(client, route_with_three_stops):
+    route_id, _ = route_with_three_stops
+    session = SessionLocal()
+    version_before = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
+    session.close()
+    resp = client.delete(f"/routes/{route_id}/stops/1", headers=_admin_headers())
+    assert resp.status_code == 204
+    session = SessionLocal()
+    version_after = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
+    session.close()
+    assert version_after > version_before
+
+
+def test_remove_route_stop_404s_for_unknown_route(client, route_with_three_stops):
+    resp = client.delete("/routes/R_DOES_NOT_EXIST/stops/1", headers=_admin_headers())
+    assert resp.status_code == 404
+
+
+def test_remove_route_stop_404s_for_unknown_sequence(client, route_with_three_stops):
+    route_id, _ = route_with_three_stops
+    resp = client.delete(f"/routes/{route_id}/stops/99", headers=_admin_headers())
+    assert resp.status_code == 404
+
+
+def test_remove_route_stop_requires_admin_key(client, route_with_three_stops):
+    route_id, _ = route_with_three_stops
+    resp = client.delete(f"/routes/{route_id}/stops/1")
+    assert resp.status_code in (401, 403)
+
+
+# --- PATCH /routes/{route_id}/stops/order ------------------------------------
+
+
+def test_reorder_route_stops_succeeds(client, route_with_three_stops):
+    route_id, stop_ids = route_with_three_stops
+    # New order: old seq 3 -> 1, old seq 1 -> 2, old seq 2 -> 3.
+    resp = client.patch(
+        f"/routes/{route_id}/stops/order",
+        json={"sequence": [3, 1, 2]},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [e["sequence_no"] for e in body] == [1, 2, 3]
+    assert [e["stop_id"] for e in body] == [stop_ids[2], stop_ids[0], stop_ids[1]]
+
+    session = SessionLocal()
+    rows = session.execute(
+        text("SELECT stop_id, sequence_no FROM route_stops WHERE route_id = :rid ORDER BY sequence_no"),
+        {"rid": route_id},
+    ).all()
+    session.close()
+    assert [(r.stop_id, r.sequence_no) for r in rows] == [
+        (stop_ids[2], 1),
+        (stop_ids[0], 2),
+        (stop_ids[1], 3),
+    ]
+
+
+def test_reorder_route_stops_rejects_non_permutation(client, route_with_three_stops):
+    route_id, _ = route_with_three_stops
+    for bad_seq in ([1, 1, 1], [1, 2, 3, 4], [2]):
+        resp = client.patch(
+            f"/routes/{route_id}/stops/order",
+            json={"sequence": bad_seq},
+            headers=_admin_headers(),
+        )
+        assert resp.status_code == 400, resp.text
+
+
+def test_reorder_route_stops_404s_for_unknown_route(client, route_with_three_stops):
+    resp = client.patch(
+        "/routes/R_DOES_NOT_EXIST/stops/order",
+        json={"sequence": [1]},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 404
+
+
+def test_reorder_route_stops_requires_admin_key(client, route_with_three_stops):
+    route_id, _ = route_with_three_stops
+    resp = client.patch(f"/routes/{route_id}/stops/order", json={"sequence": [1, 2, 3]})
+    assert resp.status_code in (401, 403)
+
+
+def test_reorder_route_stops_bumps_graph_version(client, route_with_three_stops):
+    route_id, _ = route_with_three_stops
+    session = SessionLocal()
+    version_before = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
+    session.close()
+    resp = client.patch(
+        f"/routes/{route_id}/stops/order",
+        json={"sequence": [3, 2, 1]},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 200
+    session = SessionLocal()
+    version_after = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
+    session.close()
+    assert version_after > version_before

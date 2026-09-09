@@ -220,6 +220,25 @@ class RouteStopCreate(BaseModel):
     sequence_no: int = Field(ge=1)
 
 
+class RouteStopRef(BaseModel):
+    """One row of route_stops, as returned by the route-stop write
+    endpoints (add/remove/reorder)."""
+    route_id: str
+    stop_id: str
+    sequence_no: int
+
+
+class RouteStopReorder(BaseModel):
+    # Desired order of a route's existing stop rows, expressed as their
+    # *current* sequence_no values -- a permutation of 1..N where N is the
+    # route's current stop count. Expressing the order as sequence numbers
+    # rather than stop_ids keeps loop routes with legitimately repeated
+    # stops unambiguous (two occurrences of the same stop are distinct
+    # rows: e.g. [1, 3, 1] can't distinguish which "1" moves where, but
+    # [2, 1, 3] can).
+    sequence: list[int] = Field(min_length=1)
+
+
 # ---------------------------------------------------------------------------
 # Admin login (AdminUser)
 # ---------------------------------------------------------------------------

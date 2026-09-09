@@ -14,6 +14,8 @@
 - `backend/app/routing/pathfinder.py` — Core routing algorithm (direct route check → NetworkX Dijkstra fallback)
 - `backend/app/routing/graph_builder.py` — NetworkX graph construction with caching via `graph_meta.version`
 - `backend/app/routing/stop_positioning.py` — stop→geometry placement heuristics (projection w/ canonical fallback, monotonic cursor, loop-route anchor)
+- `backend/app/api/admin.py` — admin data-entry endpoints (create stop/route, add/remove/reorder route stops, route status, graph reload); auth via `backend/app/core/security.py` (`require_admin`: shared `X-Admin-Api-Key` OR `POST /admin/login` JWT)
+- `frontend/app/admin/page.tsx` — browser admin UI (/admin) backed by `frontend/lib/adminApi.ts` (JWT in localStorage); forms live in `frontend/components/admin/`
 - `frontend/app/page.tsx` — Main search UI composition
 - `backend/app/core/response_cache.py` — response caching layer; check here before assuming an endpoint hits the DB/graph directly
 

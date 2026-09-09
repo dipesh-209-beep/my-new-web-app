@@ -95,7 +95,8 @@ Backend runs at `http://localhost:8000` (interactive docs at `/docs`).
 ## Admin API
 
 Data-entry endpoints in `app/api/admin.py` (`POST /stops`, `POST /routes`,
-`POST /routes/{route_id}/stops`, `PATCH /routes/{route_id}/status`,
+`POST /routes/{route_id}/stops`, `DELETE /routes/{route_id}/stops/{sequence_no}`,
+`PATCH /routes/{route_id}/stops/order`, `PATCH /routes/{route_id}/status`,
 `POST /graph/reload`) are behind `require_admin`, which accepts **either**
 of two credentials:
 
@@ -115,6 +116,26 @@ space, which is OSM-sourced and not sequential — see
 `app/db/id_generator.py`).
 
 Flipping a route's status via `PATCH /routes/{route_id}/status`, or adding a stop to a route via `POST /routes/{route_id}/stops`, bumps a shared `graph_meta.version` counter in the database and refreshes this process's own cache immediately. Every other worker process/replica notices the version change on its own next request and rebuilds automatically -- this is what makes cache invalidation correct beyond a single-process deployment, rather than relying solely on the request that happened to make the change. See `app/models/graph_meta.py` for the full rationale. `POST /graph/reload` remains available as a manual escape hatch.
+
+### Editing a route's stop sequence
+
+- `DELETE /routes/{route_id}/stops/{sequence_no}` removes that stop and
+  re-numbers the remaining stops to stay contiguous (`db.flush()` keeps the
+  resequence UPDATE from matching the row it's about to delete). Removing a
+  stop from a 1-stop route is rejected (a route needs both an end and — via
+  the reverse leg or a second stop — a loop anchor, so `networkx` can route
+  through it).
+- `PATCH /routes/{route_id}/stops/order` takes `{"sequence": [1, 2, ...]}`
+  — a permutation of the route's *current `sequence_no` values*, not stop
+  ids — because loop routes legitimately visit the same stop more than once.
+  Reorder applies with a two-pass offset (`+1_000_000` park, then final) so
+  the `sequence_no > 0` CHECK constraint isn't violated mid-update.
+- Both, plus `POST /routes/{route_id}/stops`'s append, update
+  `routes.total_stops`.
+- To *insert* a stop in the middle, append it — `POST /routes/{route_id}/stops`
+  with `sequence_no = max + 1` — then reorder; the add endpoint deliberately
+  refuses to shift existing rows (add always appends or hits the existing 409
+  on duplicate `sequence_no`).
 
 `routes.operator_id` can legitimately be `NULL` — this isn't a data bug.
 Some routes are run by informal/unregistered local microbus services with
@@ -197,7 +218,7 @@ stop-placement edge cases -- closed-loop / ring-road routes (Baneshwor stop
 tie breaks), snap-radius-constrained OSRM failures, and monotonic-cursor
 regressions -- so the fallback heuristics can't silently regress.
 
-`tests/test_admin_auth_api.py`, `tests/test_fare_api.py`, and `tests/test_admin_crud_api.py` cover the admin-auth login flow (success, wrong password, unknown username, timing-safe error parity, and the 5/minute rate limit actually tripping), `GET /fare` band matching (inclusive-min/exclusive-max boundaries, 404 with no covering band), and the admin data-entry endpoints (`POST /stops`, `POST /routes`, `POST /routes/{id}/stops` — auth enforcement, 404s on unknown references, the 409 on duplicate `sequence_no`, and `graph_meta.version` bumping). All three create and tear down their own fixtures, so they don't depend on the shipped dataset like `test_stops.py` does.
+`tests/test_admin_auth_api.py`, `tests/test_fare_api.py`, and `tests/test_admin_crud_api.py` cover the admin-auth login flow (success, wrong password, unknown username, timing-safe error parity, and the 5/minute rate limit actually tripping), `GET /fare` band matching (inclusive-min/exclusive-max boundaries, 404 with no covering band), and the admin data-entry endpoints (`POST /stops`, `POST /routes`, `POST /routes/{id}/stops`, `DELETE /routes/{id}/stops/{seq}`, `PATCH /routes/{id}/stops/order` — auth enforcement, 404s on unknown references, the 409 on duplicate `sequence_no`, resequencing stays contiguous, reorder accepts any `sequence_no` permutation, and `graph_meta.version` bumping). All three create and tear down their own fixtures, so they don't depend on the shipped dataset like `test_stops.py` does.
 
 `tests/test_stops_api.py`, `tests/test_route_finder_api.py`, and
 `tests/test_route_geometry_api.py` are DB-backed integration tests for

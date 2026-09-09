@@ -8,15 +8,16 @@ and require_role's docstring there for the editor/admin role split.
 Each route below is gated to the narrowest role that still covers its
 actual blast radius:
 
-  editor: create_stop, create_route, add_route_stop -- additive dataset
-    growth, easy to undo if wrong.
+  editor: create_stop, create_route, add_route_stop, remove_route_stop,
+    reorder_route_stops -- additive/structural dataset changes, easy to
+    undo if wrong (re-insert the row / restore the order).
   admin:  update_route_status, reload_graph_cache -- these can
     immediately change what /route-finder returns to real users.
 """
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import select, text
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.response_cache import invalidate as invalidate_cache
@@ -29,7 +30,16 @@ from app.models import Route as RouteORM
 from app.models import RouteStop as RouteStopORM
 from app.models import Stop as StopORM
 
-from app.schemas import RouteCreate, RouteOut, RouteStatusUpdate, RouteStopCreate, StopCreate, StopOut
+from app.schemas import (
+    RouteCreate,
+    RouteOut,
+    RouteStatusUpdate,
+    RouteStopCreate,
+    RouteStopRef,
+    RouteStopReorder,
+    StopCreate,
+    StopOut,
+)
 
 router = APIRouter()
 
@@ -38,6 +48,24 @@ router = APIRouter()
 # implying a role hierarchy the code would otherwise have to compute.
 _EDIT = Depends(require_role(ROLE_EDITOR, ROLE_ADMIN))
 _ADMIN_ONLY = Depends(require_role(ROLE_ADMIN))
+
+# Re-keyed cache namespaces that a route_stops write can change (see the
+# individual endpoints for why each one matters).
+_ROUTE_STOP_CACHE_KEYS = ("routes", "route_geometry", "stops")
+
+
+def _sync_total_stops(db: Session, route_id: str) -> None:
+    """Keep routes.total_stops in line with the actual route_stops count
+    after any structural mutation. The shipped dataset's sanity checks
+    expect these to match (see data/scripts/validate_clean.py), so a
+    divergent value would look like a data bug downstream."""
+    count = db.execute(
+        text("SELECT COUNT(*) FROM route_stops WHERE route_id = :rid"), {"rid": route_id}
+    ).scalar_one()
+    db.execute(
+        text("UPDATE routes SET total_stops = :count WHERE route_id = :rid"),
+        {"count": count, "rid": route_id},
+    )
 
 
 @router.post("/stops", response_model=StopOut, status_code=status.HTTP_201_CREATED, dependencies=[_EDIT])
@@ -100,7 +128,7 @@ def create_route(payload: RouteCreate, db: Session = Depends(get_db)) -> RouteOu
 
 
 @router.post("/routes/{route_id}/stops", status_code=status.HTTP_201_CREATED, dependencies=[_EDIT])
-def add_route_stop(route_id: str, payload: RouteStopCreate, db: Session = Depends(get_db)) -> dict:
+def add_route_stop(route_id: str, payload: RouteStopCreate, db: Session = Depends(get_db)) -> RouteStopRef:
     if db.get(RouteORM, route_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Route {route_id} not found.")
     if db.get(StopORM, payload.stop_id) is None:
@@ -127,6 +155,7 @@ def add_route_stop(route_id: str, payload: RouteStopCreate, db: Session = Depend
     db.add(row)
     try:
         bump_graph_version(db)
+        _sync_total_stops(db, route_id)
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -135,10 +164,105 @@ def add_route_stop(route_id: str, payload: RouteStopCreate, db: Session = Depend
             detail=f"Route {route_id} already has a stop at sequence_no {payload.sequence_no}.",
         ) from exc
 
-    invalidate_cache("routes")
-    invalidate_cache("route_geometry")
+    for key in _ROUTE_STOP_CACHE_KEYS:
+        invalidate_cache(key)
 
-    return {"route_id": route_id, "stop_id": payload.stop_id, "sequence_no": payload.sequence_no}
+    return RouteStopRef(route_id=route_id, stop_id=payload.stop_id, sequence_no=payload.sequence_no)
+
+
+@router.delete("/routes/{route_id}/stops/{sequence_no}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_EDIT])
+def remove_route_stop(route_id: str, sequence_no: int, db: Session = Depends(get_db)) -> None:
+    """Remove one stop from a route and re-sequence the remaining entries
+    so sequence_no stays contiguous (1..N). Only touches route_stops --
+    the physical stop row is untouched."""
+    if db.get(RouteORM, route_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Route {route_id} not found.")
+
+    row = db.get(RouteStopORM, (route_id, sequence_no))
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Route {route_id} has no stop at sequence_no {sequence_no}.",
+        )
+
+    db.delete(row)
+    # Flush the DELETE before resequencing: otherwise SQLAlchemy's queued
+    # delete would run *after* the UPDATE below and match a different row
+    # (the guard is the row's sequence_no, which the UPDATE has already
+    # shifted), silently removing the wrong stop.
+    db.flush()
+    # Close the gap: re-sequence every higher row down by one so the
+    # sequence stays contiguous (add_route_stop relies on that invariant).
+    db.execute(
+        text(
+            "UPDATE route_stops SET sequence_no = sequence_no - 1 "
+            "WHERE route_id = :rid AND sequence_no > :seq"
+        ),
+        {"rid": route_id, "seq": sequence_no},
+    )
+    bump_graph_version(db)
+    _sync_total_stops(db, route_id)
+    db.commit()
+
+    for key in _ROUTE_STOP_CACHE_KEYS:
+        invalidate_cache(key)
+
+
+@router.patch("/routes/{route_id}/stops/order", response_model=list[RouteStopRef], dependencies=[_EDIT])
+def reorder_route_stops(route_id: str, payload: RouteStopReorder, db: Session = Depends(get_db)) -> list[RouteStopRef]:
+    """Reorder a route's stops in one call. The payload is the route's
+    *current* sequence_no values arranged in the desired new order (a
+    permutation of 1..N) -- see RouteStopReorder in app/schemas.py for
+    why it's sequence numbers and not stop_ids."""
+    if db.get(RouteORM, route_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Route {route_id} not found.")
+
+    rows = db.execute(
+        select(RouteStopORM)
+        .where(RouteStopORM.route_id == route_id)
+        .order_by(RouteStopORM.sequence_no)
+    ).scalars().all()
+
+    n = len(rows)
+    expected = list(range(1, n + 1))
+    if sorted(payload.sequence) != expected:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"sequence must be a permutation of the route's current "
+                f"sequence_no values: {expected}. Got: {sorted(payload.sequence)}."
+            ),
+        )
+
+    by_seq = {row.sequence_no: row for row in rows}
+    # Two-pass reassignment: setting a row to its final position directly
+    # can collide with a row that hasn't moved yet (e.g. swapping 1 and 3:
+    # setting 1 -> 3 duplicates the still-3 row). Park every row at a
+    # unique large offset first (kept positive -- sequence_no has a > 0
+    # check constraint), then land each row on its final position.
+    offset = 1_000_000
+    for new_seq, old_seq in enumerate(payload.sequence, start=1):
+        by_seq[old_seq].sequence_no = new_seq + offset
+    db.flush()
+    for new_seq, old_seq in enumerate(payload.sequence, start=1):
+        by_seq[old_seq].sequence_no = new_seq
+
+    bump_graph_version(db)
+    _sync_total_stops(db, route_id)
+    db.commit()
+
+    rows = db.execute(
+        select(RouteStopORM)
+        .where(RouteStopORM.route_id == route_id)
+        .order_by(RouteStopORM.sequence_no)
+    ).scalars().all()
+    for key in _ROUTE_STOP_CACHE_KEYS:
+        invalidate_cache(key)
+
+    return [
+        RouteStopRef(route_id=row.route_id, stop_id=row.stop_id, sequence_no=row.sequence_no)
+        for row in rows
+    ]
 
 @router.patch("/routes/{route_id}/status", response_model=RouteOut, dependencies=[_ADMIN_ONLY])
 def update_route_status(route_id: str, payload: RouteStatusUpdate, db: Session = Depends(get_db)) -> RouteOut:

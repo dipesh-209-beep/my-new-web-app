@@ -9,6 +9,7 @@ const LINKS = [
   { href: "/", label: "Plan" },
   { href: "/routes", label: "Routes" },
   { href: "/stops", label: "Stops" },
+  { href: "/admin", label: "Admin" },
 ];
 
 // Persisted so a minimized bar stays minimized across page loads/navigation

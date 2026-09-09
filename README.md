@@ -25,7 +25,7 @@ Kathmandu's public bus network has no unified digital route-finding tool — rid
 - Distance-banded fare lookup (`GET /fare`), returned automatically alongside every `/route-finder` result
 - FastAPI backend with NetworkX-based graph routing
 - PostgreSQL + PostGIS spatial data layer
-- Admin data-entry API for stops, routes, and route-stop assignments, gated by either a shared admin API key or a per-admin JWT login
+- Admin data-entry API and browser UI for stops, routes, route-stop ordering, and route status, gated by either a shared admin API key or a per-admin JWT login
 
 There is no real-time GPS bus tracking or live schedules in the running app — see [Known Limitations](#known-limitations).
 
@@ -196,7 +196,9 @@ Interactive OpenAPI/Swagger docs are available at `http://localhost:8000/docs` o
 | GET | `/congestion/buckets` | The fixed set of valid hour buckets | — |
 | POST | `/stops` | Create a stop | `require_admin` |
 | POST | `/routes` | Create a route | `require_admin` |
-| POST | `/routes/{route_id}/stops` | Add a stop to a route | `require_admin` |
+| POST | `/routes/{route_id}/stops` | Append a stop to a route | `require_admin` |
+| DELETE | `/routes/{route_id}/stops/{sequence_no}` | Remove a stop and resequence | `require_admin` |
+| PATCH | `/routes/{route_id}/stops/order` | Reorder a route's stops (permutation of current `sequence_no` values) | `require_admin` |
 | PATCH | `/routes/{route_id}/status` | Update a route's status | `require_admin` |
 | POST | `/graph/reload` | Force-rebuild the cached routing graph | `require_admin` |
 | POST | `/admin/login` | Log in an `AdminUser`, returns a JWT | — |
@@ -234,7 +236,7 @@ pytest -v
 - `tests/test_routing.py`, `tests/test_pathfinder_alternatives.py`, `tests/test_stop_positioning_adversarial.py` — unit tests for graph construction, the pathfinder (bidirectional/one-directional edges, transfer edges, direct-vs-transfer preference, graph caching, route alternatives), and the stop-placement heuristics (closed-loop / ring-road routes, snap-radius-constrained failures, monotonic-cursor regressions), no database required.
 - `tests/test_congestion_weight_fn.py`, `tests/test_duration_weight_fn.py`, `tests/test_congestion_zones.py` — unit tests for the congestion-aware and estimated-duration edge-weighting functions used by `avoid_congestion` and the `fastest_estimated` alternative.
 - `tests/test_stops.py`, `tests/test_stops_api.py`, `tests/test_route_finder_api.py`, `tests/test_route_geometry_api.py`, `tests/test_admin_route_status.py` — integration tests against a live database; they skip cleanly if Postgres isn't reachable (`docker compose up -d db` + `alembic upgrade head` first).
-- `tests/test_admin_auth_api.py`, `tests/test_fare_api.py`, `tests/test_admin_crud_api.py` — self-contained coverage for `POST /admin/login` (including the 5/minute rate limit and timing-safe error parity), `GET /fare` band matching, and the admin data-entry endpoints (`POST /stops`, `POST /routes`, `POST /routes/{id}/stops`), each creating and tearing down its own fixtures rather than depending on the shipped dataset.
+- `tests/test_admin_auth_api.py`, `tests/test_fare_api.py`, `tests/test_admin_crud_api.py` — self-contained coverage for `POST /admin/login` (including the 5/minute rate limit and timing-safe error parity), `GET /fare` band matching, and the admin data-entry endpoints (`POST /stops`, `POST /routes`, `POST /routes/{id}/stops`, `DELETE /routes/{id}/stops/{seq}`, `PATCH /routes/{id}/stops/order`), each creating and tearing down its own fixtures rather than depending on the shipped dataset.
 - CI (`.github/workflows/ci.yml`) runs the full suite against a real `postgis/postgis:15-3.4` container on every PR.
 
 Frontend tests use **Vitest + React Testing Library**:
@@ -264,12 +266,14 @@ Set in `backend/.env` (see `backend/.env.example`):
 
 ## Admin/Data Management
 
-The data-entry endpoints (`POST /stops`, `POST /routes`, `POST /routes/{id}/stops`, `PATCH /routes/{id}/status`, `POST /graph/reload`) are behind `require_admin`, which accepts **either** of two credentials:
+The data-entry endpoints (`POST /stops`, `POST /routes`, `POST /routes/{id}/stops`, `DELETE /routes/{id}/stops/{seq}`, `PATCH /routes/{id}/stops/order`, `PATCH /routes/{id}/status`, `POST /graph/reload`) are behind `require_admin`, which accepts **either** of two credentials:
 
 - **`X-Admin-Api-Key` header** — one shared secret, for scripted/ETL callers.
 - **JWT via `POST /admin/login`** — authenticates an `AdminUser` account (seeded with `python3 -m scripts.seed_admin`) and returns a bearer token, attaching that specific admin to the request for future per-admin authorization/audit use. Rate-limited to 5 requests/minute per IP.
 
 New `stop_id`/`route_id` values are server-generated, not caller-supplied. See `backend/README.md` for details.
+
+The frontend exposes a browser-based data-entry UI at `/admin` (link in the nav bar): sign in with the per-admin JWT, then create stops/routes and manage each route's stop sequence (add, in-place reorder, remove) and status from the map app itself. The `DELETE`/`PATCH` methods are why the backend CORS allow-list includes both of those verbs.
 
 ## Known Limitations
 

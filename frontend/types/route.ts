@@ -186,3 +186,58 @@ export interface StopListOut {
 // backend), aliased separately so call sites reading a single route don't
 // have to import "RouteSummary" for a non-list context.
 export type RouteOut = RouteSummary;
+
+// ---------------------------------------------------------------------------
+// Admin data-entry (mirrors backend/app/schemas.py + app/api/admin.py)
+// ---------------------------------------------------------------------------
+
+export interface AdminTokenResponse {
+  access_token: string;
+  token_type: string;
+}
+
+// POST /stops request body -- server generates stop_id.
+export interface StopCreatePayload {
+  stop_name: string;
+  lat: number;
+  lng: number;
+  aliases?: string | null;
+  zone?: string | null;
+  district?: string | null;
+  ward?: number | null;
+  landmark?: string | null;
+  is_major_stop?: boolean;
+  has_shelter?: boolean;
+  has_ticket_counter?: boolean;
+  is_interchange?: boolean;
+  wheelchair_access?: boolean;
+  audio_support?: boolean;
+}
+
+// POST /routes request body -- server generates route_id.
+export interface RouteCreatePayload {
+  route_name: string;
+  short_name?: string | null;
+  vehicle_type: string;
+  route_type?: string | null;
+  operator?: string | null;
+  operator_id?: string | null;
+  start_stop_id: string;
+  end_stop_id: string;
+  /** Required by the backend (initial value only -- add-route-stop syncs it). */
+  total_stops: number;
+  is_bidirectional?: boolean;
+  has_ac?: boolean;
+  is_express?: boolean;
+}
+
+// POST/PATCH response from the route-stop write endpoints (add/remove/
+// reorder) -- one row of route_stops.
+export interface RouteStopRef {
+  route_id: string;
+  stop_id: string;
+  sequence_no: number;
+}
+
+// Route statuses allowed by PATCH /routes/{route_id}/status.
+export type RouteStatus = "active" | "pending_release";
