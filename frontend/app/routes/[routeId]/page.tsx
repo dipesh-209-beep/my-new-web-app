@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ApiError, getRoute, getRouteGeometry, getRouteStops } from "@/lib/api";
 import { formatRouteDistance } from "@/lib/routeDistance";
+import SuggestionBox from "@/components/user/SuggestionBox";
 import { RouteDirection, RouteGeometry, RouteOut, RouteStopEntry } from "@/types/route";
 
 const BusMap = dynamic(() => import("@/components/BusMap"), {
@@ -218,6 +219,8 @@ export default function RouteDetailPage() {
           ))}
         </ol>
       </div>
+
+      <SuggestionBox targetType="route" targetId={routeId} currentStops={stops} />
     </div>
   );
 }

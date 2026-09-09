@@ -241,3 +241,47 @@ export interface RouteStopRef {
 
 // Route statuses allowed by PATCH /routes/{route_id}/status.
 export type RouteStatus = "active" | "pending_release";
+
+// ---------------------------------------------------------------------------
+// Public-user auth + crowd-sourced suggestions (mirrors backend/app/schemas.py
+// app/api/auth.py + app/api/suggestions.py)
+// ---------------------------------------------------------------------------
+
+// POST /auth/register + /auth/login response.
+export interface UserTokenResponse {
+  access_token: string;
+  token_type: string;
+}
+
+// Which kinds of change a logged-in user can propose. Mirrors the backend's
+// SuggestionCreate.suggestion_type Literal exactly.
+export type SuggestionType =
+  | "stop_name_change"
+  | "route_name_change"
+  | "stop_sequence_change";
+
+export type SuggestionStatus = "pending" | "approved" | "rejected" | "auto_applied";
+
+// Mirrors SuggestionOut in backend/app/schemas.py.
+export interface Suggestion {
+  suggestion_id: number;
+  target_type: "stop" | "route";
+  target_id: string;
+  suggestion_type: SuggestionType;
+  payload: Record<string, unknown>;
+  status: SuggestionStatus;
+  vote_count: number;
+  created_at: string;
+  submitted_by: string | null;
+  reviewed_by: string | null;
+  /** null when the listing request carried no user token. */
+  voted_by_me: boolean | null;
+}
+
+// POST /suggestions request body -- mirrors backend SuggestionCreate.
+export interface SuggestionCreatePayload {
+  target_type: "stop" | "route";
+  target_id: string;
+  suggestion_type: SuggestionType;
+  payload: Record<string, unknown>;
+}

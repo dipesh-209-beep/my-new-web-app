@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "@fontsource-variable/archivo";
 import "./globals.css";
 import NavBar from "@/components/layout/NavBar";
+import { UserAuthProvider } from "@/components/user/UserAuthContext";
 import ServiceWorkerRegistration from "@/components/ServiceWorkerRegistration";
 
 export const metadata: Metadata = {
@@ -28,8 +29,10 @@ export default function RootLayout({
     <html lang="en">
       <body className="flex h-full flex-col font-sans">
         <ServiceWorkerRegistration />
-        <NavBar />
-        <div className="min-h-0 flex-1">{children}</div>
+        <UserAuthProvider>
+          <NavBar />
+          <div className="min-h-0 flex-1">{children}</div>
+        </UserAuthProvider>
       </body>
     </html>
   );

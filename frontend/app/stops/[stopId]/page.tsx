@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ApiError, getStop, getStopRoutes } from "@/lib/api";
+import SuggestionBox from "@/components/user/SuggestionBox";
 import { RouteOut, Stop } from "@/types/route";
 
 const BusMap = dynamic(() => import("@/components/BusMap"), {
@@ -196,6 +197,8 @@ export default function StopDetailPage() {
           ))}
         </ul>
       </div>
+
+      <SuggestionBox targetType="stop" targetId={stopId} />
     </div>
   );
 }

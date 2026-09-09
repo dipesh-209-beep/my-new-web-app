@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronIcon } from "@/components/icons/TransitIcons";
+import UserLogin from "@/components/user/UserLogin";
+import { useUserAuth } from "@/components/user/UserAuthContext";
 
 const LINKS = [
   { href: "/", label: "Plan" },
@@ -38,6 +40,8 @@ export default function NavBar() {
   // mismatch.
   const [minimized, setMinimized] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
+  const { token, username, hydrated: authHydrated, logout } = useUserAuth();
 
   useEffect(() => {
     // Deferred a tick (rather than calling setState synchronously in the
@@ -120,6 +124,48 @@ export default function NavBar() {
           <span className="h-1.5 w-1.5 rounded-full bg-accent-green" aria-hidden />
           Kathmandu Valley
         </span>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setAuthOpen((v) => !v)}
+            aria-expanded={authOpen}
+            aria-haspopup="true"
+            className="flex max-w-[14rem] items-center gap-1.5 rounded-md border border-route-line px-2.5 py-1 text-sm text-ink transition-colors hover:border-accent-blue"
+          >
+            {authHydrated && token ? (
+              <>
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-green" aria-hidden />
+                <span className="truncate">{username ?? "Signed in"}</span>
+              </>
+            ) : (
+              <span className="text-ink-secondary">Sign in</span>
+            )}
+            <ChevronIcon direction={authOpen ? "up" : "down"} />
+          </button>
+          {authOpen && (
+            <div className="absolute right-0 top-full z-50 mt-2 w-80">
+              {authHydrated && token ? (
+                <div className="rounded-xl border border-route-line bg-surface-raised p-4 shadow-card">
+                  <p className="text-sm text-ink">
+                    Signed in as <span className="font-medium">{username ?? "a user"}</span>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      logout();
+                      setAuthOpen(false);
+                    }}
+                    className="mt-3 rounded-md border border-route-line px-3 py-1.5 text-sm text-ink-secondary transition-colors hover:border-accent-red hover:text-accent-red"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              ) : (
+                <UserLogin onDone={() => setAuthOpen(false)} />
+              )}
+            </div>
+          )}
+        </div>
         <button
           type="button"
           onClick={toggleMinimized}
