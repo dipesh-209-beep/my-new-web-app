@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import L from "leaflet";
 import { CongestionSegment, Stop } from "@/types/route";
 import { escapeHtml } from "@/lib/escapeHtml";
-import { CONGESTION_COLORS } from "@/lib/constants";
+import { getCongestionColor } from "@/lib/congestionColor";
 
 interface UseCongestionLayerProps {
   map: L.Map | null;
@@ -38,7 +38,7 @@ export function useCongestionLayer({
         return;
       }
 
-      const color = CONGESTION_COLORS[seg.congestion_level] ?? CONGESTION_COLORS.unknown;
+      const color = getCongestionColor(seg.congestion_ratio);
       const line = L.polyline(
         [
           [from.lat, from.lng],
