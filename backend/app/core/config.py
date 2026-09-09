@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # "https://app.example.com,https://staging.example.com".
     # Defaults to the local Next.js dev server so `docker compose up`
     # works out of the box; override in staging/prod via the env var.
+    # In dev, localhost/LAN origins are also accepted via the regex-based
+    # CORS middleware in app/main.py, so only exact production origins
+    # need to be listed here.
     CORS_ORIGINS: str = "http://localhost:3000"
 
     @property

@@ -33,7 +33,21 @@ import {
   WalkingRoute,
 } from "@/types/route";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE = (() => {
+  // Allow explicit override via env var (production deployments, Docker, etc.)
+  const envBase = process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (envBase) return envBase;
+
+  // In development, derive the backend URL from the current page hostname so
+  // LAN access works (e.g. opening http://192.168.1.5:3000 will talk to
+  // http://192.168.1.5:8000 instead of trying localhost which doesn't exist
+  // on the client machine).  In production (or when window is unavailable
+  // during SSR), fall back to localhost.
+  if (typeof window !== "undefined") {
+    return `http://${window.location.hostname}:8000`;
+  }
+  return "http://localhost:8000";
+})();
 
 // Most requests are quick DB reads; route-finder/walking-route also call
 // out to OSRM so get a longer allowance. Keeping one shared default and
