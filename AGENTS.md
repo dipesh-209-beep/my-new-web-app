@@ -13,6 +13,7 @@
 - `backend/app/main.py` — FastAPI app startup, router registration
 - `backend/app/routing/pathfinder.py` — Core routing algorithm (direct route check → NetworkX Dijkstra fallback)
 - `backend/app/routing/graph_builder.py` — NetworkX graph construction with caching via `graph_meta.version`
+- `backend/app/routing/stop_positioning.py` — stop→geometry placement heuristics (projection w/ canonical fallback, monotonic cursor, loop-route anchor)
 - `frontend/app/page.tsx` — Main search UI composition
 - `backend/app/core/response_cache.py` — response caching layer; check here before assuming an endpoint hits the DB/graph directly
 
@@ -39,33 +40,28 @@ npm run lint  # ESLint
 
 ### Full Stack (Makefile)
 ```bash
-make setup  # One-time: data clean, db up, migrate, import, OSRM prep
-make up     # Start full stack (db + osrm + backend)
+make setup  # One-time: data clean + validate, db up, migrate, import, OSRM prep
+make up     # Build backend image + start full stack (db + osrm + backend)
 make down   # Stop everything
 make seed-admin  # Create first admin login
 ```
 
 ## Critical Gotchas
 
-1. **Database URL Context**: `DATABASE_URL` uses `localhost` for host dev, `db` service name for Docker. Check `.env` vs `docker-compose.yml`.
-
-2. **Migration Discipline**: Only ONE migration chain exists. Coordinate before adding migrations. After pulling new migrations: `cd backend && alembic upgrade head`.
-
-3. **SQLAlchemy Models Are Hand-Written**: Models in `backend/app/models/` are NOT auto-generated from migrations. When adding/changing columns, update both migration AND model file manually. Verify with: `docker exec -it ktm_bus_db psql -U ktm_bus -d ktm_bus_route_finder -c "\d <table>"`
-
-4. **Graph Cache Invalidation**: The in-memory NetworkX graph caches via `graph_meta.version`. Admin writes bump this version; each process rebuilds on next request. Don't bypass this mechanism.
-
-5. **Test Dependencies**: Backend integration tests require a live database (`docker compose up -d db` + `alembic upgrade head`). Unit tests for routing work without DB. CI loads the full dataset from `data/processed/*_clean.csv`.
-
-6. **Data Pipeline**: Raw CSVs → `data/scripts/clean_data.py` → `data/processed/*_clean.csv` → `data/scripts/import_data.py` → PostgreSQL. Never edit processed CSVs directly.
-
-7. **OSRM Is Optional**: Backend works without OSRM (returns `road_geometry: null`). Setup: `make osrm` (one-time extract) + `make osrm-up` or `docker compose up -d osrm osrm-foot`.
-
-8. **Congestion & Alternatives Are Implemented, Not Planned**: `avoid_congestion` and `include_alternatives` (up to 2 alternate paths) are live in `pathfinder.py`/`api/routing.py` — don't reimplement or assume they're TODOs.
+1. **Dev `--reload` lives in the compose overlay, not the image**: the backend Dockerfile runs a stable uvicorn; `docker-compose.override.yml` (auto-loaded by `docker compose`/`make up`) adds `--reload`. Logs full of "Reloading process"/"Started server process" under `backend/` are the dev hot-reloader reacting to file writes (incl. tests/scripts you create), not a crash loop. Deployments that exclude the override don't reload.
+2. **`make up` builds before starting**: `up` re-runs `docker compose build backend` so pip deps baked into the image stay current (app code is bind-mounted in dev). `make setup` now **validates** the cleaned CSVs (`validate_clean.py`) before importing.
+3. **Database URL Context**: `DATABASE_URL` uses `localhost` for host dev, `db` service name for Docker. Check `.env` vs `docker-compose.yml`.
+4. **Migration Discipline**: Only ONE migration chain exists. Coordinate before adding migrations. After pulling new migrations: `cd backend && alembic upgrade head`.
+5. **SQLAlchemy Models Are Hand-Written**: Models in `backend/app/models/` are NOT auto-generated from migrations. When adding/changing columns, update both migration AND model file manually. Verify with: `docker exec -it ktm_bus_db psql -U ktm_bus -d ktm_bus_route_finder -c "\d <table>"`
+6. **Graph Cache Invalidation**: The in-memory NetworkX graph caches via `graph_meta.version`. Admin writes bump this version; each process rebuilds on next request. Don't bypass this mechanism.
+7. **Test Dependencies**: Backend integration tests require a live database (`docker compose up -d db` + `alembic upgrade head`). Unit tests for routing work without DB. CI loads the full dataset from `data/processed/*_clean.csv`.
+8. **Data Pipeline**: Raw CSVs → `data/scripts/clean_data.py` → `data/processed/*_clean.csv` → `data/scripts/import_data.py` → PostgreSQL. Never edit processed CSVs directly.
+9. **OSRM Is Optional**: Backend works without OSRM (returns `road_geometry: null`). Setup: `make osrm` (one-time extract) + `make osrm-up` or `docker compose up -d osrm osrm-foot`.
+10. **Congestion & Alternatives Are Implemented, Not Planned**: `avoid_congestion` and `include_alternatives` (up to 2 alternate paths) are live in `pathfinder.py`/`api/routing.py` — don't reimplement or assume they're TODOs.
 
 ## Testing Strategy
 
-- **Backend unit tests**: `tests/test_routing.py`, `tests/test_pathfinder_alternatives.py` (no DB needed)
+- **Backend unit tests**: `tests/test_routing.py`, `tests/test_pathfinder_alternatives.py`, `tests/test_stop_positioning_adversarial.py` (no DB needed)
 - **Backend integration tests**: `tests/test_stops_api.py`, `tests/test_route_finder_api.py` (need live DB)
 - **Admin API tests**: Self-contained fixtures (create/teardown per test)
 - **Frontend**: `lib/` (pure helpers) + `hooks/` (mocked API)

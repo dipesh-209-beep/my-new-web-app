@@ -65,6 +65,30 @@ from app.routing.graph_builder import haversine_distance_m
 # OSRM waypoint snapping; this is for post-hoc projection validation.
 MAX_STOP_OFFSET_M = 100.0
 
+# Grace applied to the monotonic-route-progress invariant
+# progress(stop[i+1]) >= progress(stop[i]) - tolerance.  Letting the
+# cursor tolerate a few metres of backwardness absorbs GPS noise and
+# stops recorded a couple of metres out of strict road order along an
+# otherwise-straight road, without ever allowing a true same-segment
+# backstep (those are typically tens to hundreds of metres).
+MONOTONIC_POSITION_TOLERANCE_M = 5.0
+
+# Distance (m) within which two projection candidates for the FIRST stop
+# are treated as equally good, so the one closest to the start of the
+# route geometry wins. OSRM always begins a route's geometry at its first
+# waypoint, so a normal route has exactly one candidate near progress ~0
+# for its first stop. A tie within this epsilon is thus the fingerprint
+# of a closed loop -- a route whose geometry end and start coincide at
+# (approximately) the same physical point (e.g. the ring road, which
+# records the same stop as both first and last). Without the tie-break,
+# the nearest candidate is equally the loop's end, and the progress
+# cursor jumps straight to the far end of the polyline, stranding every
+# later stop behind it (measured: 94% of a 36-stop ring-road loop fell
+# back to canonical). Anchoring the first stop at the loop's start keeps
+# the cursor at the true beginning of travel; the loop-closing repeated
+# stop then naturally projects at the far end on its own re-appearance.
+FIRST_STOP_TIE_EPS_M = 10.0
+
 
 @dataclass(frozen=True)
 class AdjustedStopPosition:
@@ -73,6 +97,13 @@ class AdjustedStopPosition:
     lng: float
     offset_m: float
     source: str  # "projected" | "canonical_fallback"
+    # Cumulative route distance (m) from the start of the direction's
+    # geometry to the accepted projection point. None for canonical
+    # fallbacks (the canonical coordinate isn't on the geometry). Set by
+    # the matcher, not read by any caller today -- but it makes the
+    # monotonic-progress invariant auditable (used by validation scripts
+    # and the test suite) without re-deriving the projection.
+    progress_m: float | None = None
 
 
 def geojson_linestring_to_coords(geometry: dict) -> list[tuple[float, float]]:
@@ -99,6 +130,21 @@ def _project_point_to_segment(
     Returns (proj_lat, proj_lng, distance_m), distance_m being the
     haversine distance from (lat, lng) to the projected point.
     """
+    proj_lat, proj_lng, _, distance_m = _project_point_to_segment_with_t(
+        lat, lng, seg_start, seg_end
+    )
+    return proj_lat, proj_lng, distance_m
+
+
+def _project_point_to_segment_with_t(
+    lat: float, lng: float, seg_start: tuple[float, float], seg_end: tuple[float, float]
+) -> tuple[float, float, float, float]:
+    """
+    Like _project_point_to_segment, but also returns the clamped
+    interpolation fraction t in [0, 1] along the segment, which callers
+    need to combine with per-segment cumulative distances to compute a
+    monotonic route-progress value.
+    """
     lat0 = seg_start[0]
     coslat = max(0.1, math.cos(math.radians(lat0)))
 
@@ -111,12 +157,36 @@ def _project_point_to_segment(
     seg_len_sq = ex * ex + ey * ey
     if seg_len_sq == 0.0:
         proj_lat, proj_lng = seg_start
+        t = 0.0
     else:
         t = max(0.0, min(1.0, (px * ex + py * ey) / seg_len_sq))
         proj_lng = seg_start[1] + (ex * t) / coslat
         proj_lat = seg_start[0] + ey * t
 
-    return proj_lat, proj_lng, haversine_distance_m(lat, lng, proj_lat, proj_lng)
+    return proj_lat, proj_lng, haversine_distance_m(lat, lng, proj_lat, proj_lng), t
+
+
+def _cumulative_route_metrics(
+    route_coords: list[tuple[float, float]],
+) -> tuple[list[float], list[float]]:
+    """Precompute per-segment haversine lengths and the cumulative distance
+    at each vertex, so callers can turn (segment_index, t) into an absolute
+    route-progress distance in O(1).
+
+    Returns (segment_lengths, vertex_cumulative) where
+    vertex_cumulative[i] is the distance from the route start to vertex i,
+    length n_segments+1, and segment_lengths[i] is the length of the
+    segment between vertices i and i+1."""
+    n_segments = len(route_coords) - 1
+    segment_lengths: list[float] = []
+    vertex_cumulative = [0.0] * (n_segments + 1)
+    for i in range(n_segments):
+        (lat0, lng0) = route_coords[i]
+        (lat1, lng1) = route_coords[i + 1]
+        d = haversine_distance_m(lat0, lng0, lat1, lng1)
+        segment_lengths.append(d)
+        vertex_cumulative[i + 1] = vertex_cumulative[i] + d
+    return segment_lengths, vertex_cumulative
 
 
 def compute_adjusted_stop_positions(
@@ -143,38 +213,81 @@ def compute_adjusted_stop_positions(
     connect them). A global search finds the true nearest point
     regardless of that ratio.
 
-    The cursor still only ever advances (this module never snaps a
-    stop backward onto an earlier part of a route that loops back and
-    passes close by again later, or onto a crossing street) -- but
-    "ahead" is now determined by comparing the *found* global match's
-    index against the cursor, rather than by only searching within
-    some limited window ahead of it. A stop whose true nearest point
-    is behind the cursor gets no match and falls back to canonical,
-    same as before.
+    Monotonicity is enforced with a route-progress cursor, not a
+    segment-index one. A segment index alone cannot distinguish two
+    projections that both fall on the same segment: stop A at 80% along
+    segment N and stop B at 20% along that same segment N would both
+    resolve "at or past" a segment-index cursor of N -- yet B is
+    physically BEHIND A on the road. Instead, the cursor tracks the
+    cumulative route distance (segment length once, precomputed) of the
+    most recently accepted projection, and a candidate for the next
+    stop is only eligible if its cumulative progress is at least
+    (cursor - MONOTONIC_POSITION_TOLERANCE_M). This guarantees
+    progress(stop[i+1]) >= progress(stop[i]) - tolerance for stops in
+    travel order, which is what actually keeps markers from walking
+    backward along a road, across an intersection, or onto a repeated/
+    looped section of the route.
+
+    A stop whose nearest eligible point is still within
+    MAX_STOP_OFFSET_M gets projected and advances the cursor; one whose
+    nearest eligible point is too far away (route doesn't actually pass
+    near it at or after the cursor) falls back to its canonical
+    coordinate and leaves the cursor untouched.
     """
     if len(route_coords) < 2:
         return [
             AdjustedStopPosition(stop_id, lat, lng, 0.0, "canonical_fallback")
             for stop_id, lat, lng in stops
         ]
-    results: list[AdjustedStopPosition] = []
-    cursor = 0
+
+    segment_lengths, vertex_cumulative = _cumulative_route_metrics(route_coords)
     n_segments = len(route_coords) - 1
+
+    results: list[AdjustedStopPosition] = []
+    cursor_m = 0.0  # cumulative route distance of the last accepted projection
+    first_stop = True
     for stop_id, lat, lng in stops:
         best_dist = float("inf")
         best_point: tuple[float, float] | None = None
-        best_index = cursor
-        for i in range(cursor, n_segments):
+        best_progress = 0.0
+        for i in range(n_segments):
             seg_start, seg_end = route_coords[i], route_coords[i + 1]
-            proj_lat, proj_lng, dist_m = _project_point_to_segment(lat, lng, seg_start, seg_end)
-            if dist_m < best_dist:
-                best_dist, best_point, best_index = dist_m, (proj_lat, proj_lng), i
+            proj_lat, proj_lng, dist_m, t = _project_point_to_segment_with_t(
+                lat, lng, seg_start, seg_end
+            )
+            progress_m = vertex_cumulative[i] + t * segment_lengths[i]
+            if progress_m < cursor_m - MONOTONIC_POSITION_TOLERANCE_M:
+                continue  # behind the last accepted projection -- not eligible
+            if dist_m < best_dist - FIRST_STOP_TIE_EPS_M:
+                best_dist, best_point, best_progress = (
+                    dist_m,
+                    (proj_lat, proj_lng),
+                    progress_m,
+                )
+            elif (
+                first_stop
+                and best_point is not None
+                and abs(dist_m - best_dist) <= FIRST_STOP_TIE_EPS_M
+                and progress_m < best_progress
+            ):
+                # Within epsilon of the best distance -- keep the candidate
+                # closest to the start of the route geometry (see the
+                # FIRST_STOP_TIE_EPS_M comment about closed loops).
+                best_point, best_progress = (proj_lat, proj_lng), progress_m
         if best_point is not None and best_dist <= MAX_STOP_OFFSET_M:
             results.append(
-                AdjustedStopPosition(stop_id, best_point[0], best_point[1], best_dist, "projected")
+                AdjustedStopPosition(
+                    stop_id,
+                    best_point[0],
+                    best_point[1],
+                    best_dist,
+                    "projected",
+                    best_progress,
+                )
             )
-            cursor = best_index  # monotonic: never search backward for the next stop
+            cursor_m = best_progress
         else:
             results.append(AdjustedStopPosition(stop_id, lat, lng, 0.0, "canonical_fallback"))
             # cursor deliberately left in place -- no confirmed progress for this stop
+        first_stop = False
     return results

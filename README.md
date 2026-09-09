@@ -78,10 +78,19 @@ git clone https://github.com/080bct026dipesh-beep/my-new-web-app.git
 cd my-new-web-app
 make setup       # data clean+validate, db up, migrate, CSV import, OSRM prep+up
 make seed-admin  # interactive -- create the first admin login
-make up          # build + start the backend
+make up          # build + start the backend (db + osrm + backend)
 
 cd frontend && npm install && npm run dev   # separate terminal
 ```
+
+> **Dev reload vs. stable image:** the backend Docker image itself runs a
+> *stable* uvicorn (no `--reload`). Local dev hot-reloads through
+> `docker-compose.override.yml`, which `docker compose` / `make up` pick up
+> automatically — so the API restarts on file edits under `backend/` in dev,
+> but a deployment that runs the image directly, or excludes the override
+> (`docker compose -f docker-compose.yml up -d`), gets a normal,
+> non-restarting process. `make up` always rebuilds the backend image so its
+> baked pip deps stay current (the bind-mounted app code runs in dev).
 
 Or step by step, without `make`:
 
@@ -116,7 +125,7 @@ OSRM (road-following geometry) is optional for local dev — see [OSRM](#osrm) b
 ### Running backend on host vs. inside Docker
 
 - **On host** (`uvicorn` run directly, as above): `DATABASE_URL` should point at `localhost` — this is the default in `.env.example`.
-- **Inside Docker** (`docker compose up -d backend`): the `backend` service in `docker-compose.yml` already sets `DATABASE_URL` to use the Compose service name `db` as the host, since containers can't reach each other via `localhost`.
+- **Inside Docker** (`make up`, or `docker compose up -d backend`): the `backend` service in `docker-compose.yml` already sets `DATABASE_URL` to use the Compose service name `db` as the host, since containers can't reach each other via `localhost`. `make up` rebuilds the backend image before starting (so baked pip deps stay current), and dev hot-reloads via `docker-compose.override.yml` — the image itself defaults to a stable uvicorn (see the note above).
 
 ## Database Setup
 
@@ -161,7 +170,7 @@ you're not using `make`. Then `make osrm-up`, or
 ```bash
 # Backend
 cd backend
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload   # host dev; inside Docker use `make up` instead
 
 # Frontend
 cd frontend
@@ -222,7 +231,7 @@ cd backend
 pytest -v
 ```
 
-- `tests/test_routing.py`, `tests/test_pathfinder_alternatives.py` — unit tests for graph construction and the pathfinder (bidirectional/one-directional edges, transfer edges, direct-vs-transfer preference, graph caching, route alternatives), no database required.
+- `tests/test_routing.py`, `tests/test_pathfinder_alternatives.py`, `tests/test_stop_positioning_adversarial.py` — unit tests for graph construction, the pathfinder (bidirectional/one-directional edges, transfer edges, direct-vs-transfer preference, graph caching, route alternatives), and the stop-placement heuristics (closed-loop / ring-road routes, snap-radius-constrained failures, monotonic-cursor regressions), no database required.
 - `tests/test_congestion_weight_fn.py`, `tests/test_duration_weight_fn.py`, `tests/test_congestion_zones.py` — unit tests for the congestion-aware and estimated-duration edge-weighting functions used by `avoid_congestion` and the `fastest_estimated` alternative.
 - `tests/test_stops.py`, `tests/test_stops_api.py`, `tests/test_route_finder_api.py`, `tests/test_route_geometry_api.py`, `tests/test_admin_route_status.py` — integration tests against a live database; they skip cleanly if Postgres isn't reachable (`docker compose up -d db` + `alembic upgrade head` first).
 - `tests/test_admin_auth_api.py`, `tests/test_fare_api.py`, `tests/test_admin_crud_api.py` — self-contained coverage for `POST /admin/login` (including the 5/minute rate limit and timing-safe error parity), `GET /fare` band matching, and the admin data-entry endpoints (`POST /stops`, `POST /routes`, `POST /routes/{id}/stops`), each creating and tearing down its own fixtures rather than depending on the shipped dataset.

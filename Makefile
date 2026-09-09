@@ -7,7 +7,7 @@
 # already exist. Targets are safe to re-run individually.
 #
 # First-time setup:  make setup
-# Day-to-day:         make up        (start db + osrm + backend)
+# Day-to-day:         make up        (build + start db + osrm + backend)
 #                      make down      (stop everything)
 
 SHELL := /bin/bash
@@ -17,11 +17,12 @@ PROCESSED_DIR := data/processed
 
 .PHONY: setup data validate db-up backend-env migrate import seed-admin osrm osrm-up backend-build up down logs
 
-## Full first-time bootstrap, in dependency order.
-setup: data db-up backend-env migrate import osrm osrm-up
+## Full first-time bootstrap, in dependency order (data -> validate -> db ->
+## migrate -> import -> OSRM prep + up).
+setup: data validate db-up backend-env migrate import osrm osrm-up
 	@echo ""
 	@echo "Core stack is up. Run 'make seed-admin' to create the first admin login,"
-	@echo "then 'make backend-build up' (or 'uvicorn app.main:app --reload' from backend/)."
+	@echo "then 'make up' to build + start the backend."
 
 ## Create backend/.env from .env.example on first run, with real generated
 ## ADMIN_API_KEY/JWT_SECRET_KEY values. Never overwrites an existing file.
@@ -33,6 +34,7 @@ data:
 	pip install -q -r $(DATA_SCRIPTS)/requirements.txt
 	python $(DATA_SCRIPTS)/clean_data.py --raw-dir data/raw --out-dir $(PROCESSED_DIR)
 
+## Validate the cleaned CSVs (integrity/consistency checks run in CI too).
 validate:
 	python $(DATA_SCRIPTS)/validate_clean.py --dir $(PROCESSED_DIR)
 
@@ -62,11 +64,15 @@ osrm:
 osrm-up: osrm
 	$(COMPOSE) up -d osrm osrm-foot
 
+## Build the backend Docker image (installs baked-in pip deps).
 backend-build:
 	$(COMPOSE) build backend
 
-## Start the full stack (db, osrm, osrm-foot, backend).
-up: backend-env osrm
+## Start the full stack (db, osrm, osrm-foot, backend). Builds the backend
+## image first so local pip deps are actually baked in (the bind-mounted
+## app code is what runs, but requirements come from the image).
+## Picks up the dev --reload overlay via docker-compose.override.yml.
+up: backend-env osrm backend-build
 	$(COMPOSE) up -d
 
 down:

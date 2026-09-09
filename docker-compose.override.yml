@@ -1,0 +1,12 @@
+# Local-development overlay. Docker Compose auto-loads this file whenever it
+# exists, so `make up` / `docker compose up` (the day-to-day dev workflow)
+# get a hot-reloading backend.
+#
+# The backend Dockerfile itself defaults to a STABLE uvicorn (no --reload).
+# Development overlays the reload flag here instead of baking it into the
+# image: running the image directly, or deploying with the override excluded
+# (`docker compose -f docker-compose.yml up -d`, or a prod overlay), gives a
+# normal, non-restarting process -- no reload churn from file writes.
+services:
+  backend:
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

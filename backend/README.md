@@ -31,6 +31,14 @@ the CSV-import case, reimplemented in Python instead of hand-edited `\copy`.
 `docker compose logs -f` / `make logs` to watch it, `make down` to stop
 everything.
 
+When running the backend inside Docker (`make up`, or `docker compose up -d
+backend`), the service hot-reloads on edits under `backend/` because the
+dev-only `docker-compose.override.yml` adds `uvicorn --reload`. That reload
+lives in the compose overlay, not the Dockerfile, so the image default is a
+stable uvicorn -- a deployment that runs the image directly, or excludes the
+override (`docker compose -f docker-compose.yml up -d`), gets a normal,
+non-restarting process. See the root README for the same note.
+
 <details>
 <summary>Manual, step-by-step setup (what <code>make setup</code> does under the hood)</summary>
 
@@ -136,6 +144,41 @@ See `app/routing/graph_builder.py`'s congestion/duration weight
 functions and `tests/test_congestion_weight_fn.py` /
 `tests/test_duration_weight_fn.py` / `tests/test_congestion_zones.py`.
 
+## Stop positioning (stop markers onto route geometry)
+
+`GET /routes/{route_id}/stops` places each stop onto its direction's road
+geometry before returning it. `app/routing/stop_positioning.py` walks each
+direction's stop sequence **forward along the route's LineString — never
+backward** — and projects each stop onto the closest point of the segment the
+route is actually on:
+
+- **Monotonic cursor** (`MONOTONIC_POSITION_TOLERANCE_M = 5.0`): the
+  projection point may only advance along the path, so a crossing street or a
+  parallel carriageway can't steal a stop, and nothing snaps backward onto an
+  earlier part of a route that loops and passes close by again later.
+- **Closed-loop / ring-road anchor** (`FIRST_STOP_TIE_EPS_M = 10.0`): when a
+  route's geometry end and start coincide — the fingerprint of a closed loop —
+  the first stop is anchored at the true start of travel instead of the
+  (roughly equidistant) end. Without it, the cursor jumps to the far end of
+  the polyline and later stops fall back; measured 94% of a 36-stop ring-road
+  loop (R3351751) stranded on canonical coordinates before the fix.
+- **Canonical fallback** (`MAX_STOP_OFFSET_M = 100.0`): a stop whose
+  projection lands more than this from its canonical coordinate isn't
+  considered on the route and keeps its canonical `lat`/`lng`. The adjusted
+  position is returned per stop as `display_lat`/`display_lng` (nullable);
+  the frontend prefers it when present (else falls back to `lat`/`lng`).
+
+Related, in `app/api/routing.py`: `WAYPOINT_SNAP_RADIUS_M = 150` bounds how
+far OSRM may snap waypoints (per-waypoint `radiuses`) when computing the
+route geometry itself — distinct from the post-hoc projection here.
+
+Diagnostics and regression coverage:
+- `scripts/validate_stop_positioning.py` — re-runs the placement over every
+  route and reports projection/fallback counts and per-stop offsets.
+- `scripts/replay_old_matcher.py` — replays the pre-fix matching logic for
+  before/after comparisons.
+- `tests/test_stop_positioning_adversarial.py` — pins the edge cases above.
+
 ## Running tests
 
 ```bash
@@ -149,7 +192,10 @@ Routing/pathfinder unit tests live in `tests/test_routing.py` and
 `shortest_distance`, `fastest_estimated`). `tests/test_congestion_weight_fn.py`,
 `tests/test_duration_weight_fn.py`, and `tests/test_congestion_zones.py` cover the
 edge-weighting functions behind `avoid_congestion` and the `fastest_estimated`
-alternative.
+alternative. `tests/test_stop_positioning_adversarial.py` pins down the
+stop-placement edge cases -- closed-loop / ring-road routes (Baneshwor stop
+tie breaks), snap-radius-constrained OSRM failures, and monotonic-cursor
+regressions -- so the fallback heuristics can't silently regress.
 
 `tests/test_admin_auth_api.py`, `tests/test_fare_api.py`, and `tests/test_admin_crud_api.py` cover the admin-auth login flow (success, wrong password, unknown username, timing-safe error parity, and the 5/minute rate limit actually tripping), `GET /fare` band matching (inclusive-min/exclusive-max boundaries, 404 with no covering band), and the admin data-entry endpoints (`POST /stops`, `POST /routes`, `POST /routes/{id}/stops` — auth enforcement, 404s on unknown references, the 409 on duplicate `sequence_no`, and `graph_meta.version` bumping). All three create and tear down their own fixtures, so they don't depend on the shipped dataset like `test_stops.py` does.
 
@@ -203,8 +249,10 @@ backend/
 │   │                     constants, osrm_client, time_buckets)
 │   └── main.py
 ├── migrations/          Alembic migration scripts
-├── scripts/              One-off admin scripts (seed_admin.py, seed_congestion_stats.py,
-│                           seed_demo_congestion.py, compute_osrm_route_distances.py) +
+├── scripts/              Admin/ops scripts (seed_admin.py, seed_congestion_stats.py,
+│                           seed_demo_congestion.py, compute_osrm_route_distances.py),
+│                           stop-placement diagnostics (validate_stop_positioning.py,
+│                           replay_old_matcher.py) +
 │                           prepare_osrm_data.sh (idempotent OSRM car+foot extract, see Setup)
 ├── tests/                DB-backed integration tests + routing unit tests
 ├── .env.example

@@ -38,7 +38,19 @@ MIN_WAYPOINT_SPACING_M = 80
 # if nothing satisfying both is within range, OSRM errors, which
 # _attach_road_geometry already handles by falling back (see its
 # `except OSRMError: pass`), so tightening this can only fail safely.
-WAYPOINT_SNAP_RADIUS_M = 50
+#
+# Tuned against the full live dataset: stops in Kathmandu routinely sit
+# 50-80m from the road centreline OSRM routes on (real measured offsets
+# on 113 routes / 396 stops), and OSRM rejects the whole constrained
+# request with NoSegment as soon as ANY waypoint exceeds the radius.
+# At 50m that rejected ~85% of route directions outright (measured:
+# 222/223) -- silently discarding the bearing protection for the entire
+# direction. At 150m the same constrained call succeeds for ~94% of
+# directions (209/223) while the post-projection trust bound
+# (MAX_STOP_OFFSET_M=100m in app/routing/stop_positioning.py) still
+# governs whether any individual projection is actually shown. The
+# remaining ~6% fall through to the unconstrained retry as before.
+WAYPOINT_SNAP_RADIUS_M = 150
 
 # Tolerance either side of the computed heading. Wide enough to allow a
 # gently curving road, tight enough to reject the opposite-direction

@@ -45,7 +45,8 @@ created, in the same table order and with the same COPY options the old
 CSV directory as an argument instead of requiring a hardcoded absolute
 path hand-edited per machine/container first. Those two `.sql` files have
 been retired now that this path is proven out end-to-end (data clean →
-migrate → import → OSRM → backend, all via `make setup`); this script is
+validate → migrate → import → OSRM, all via `make setup`, then `make up` to
+build + start the backend); this script is
 the only supported way to load the dataset.
 Reads `DATABASE_URL` from `backend/.env` by default (`--database-url` to
 override). Add `--truncate` to clear the six tables first when
