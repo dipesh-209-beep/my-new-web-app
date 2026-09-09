@@ -131,8 +131,11 @@ function StopAutocompleteImpl({
 
   const showEmptyState = isOpen && debouncedValue.trim().length > 0 && results.length === 0;
 
-  // Check if current input matches a selected stop (for visual feedback)
-  const isSelectedStop = selectedStop && inputValue.trim().toLowerCase() === selectedStop.stop_name.toLowerCase();
+  // Check if current input matches a selected stop (for visual feedback).
+  // Compare against the disambiguated label (which is what the user sees)
+  // rather than raw stop_name, so disambiguated stops like "Chowk (Kathmandu)"
+  // still get the green selected border.
+  const isSelectedStop = selectedStop && inputValue.trim().toLowerCase() === buildStopLabel(selectedStop, stops).toLowerCase();
 
   return (
     <div ref={containerRef} className="relative flex flex-col gap-1">

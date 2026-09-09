@@ -41,7 +41,6 @@ data/processed/ready/
 
 # --- Docker ---
 *.log
-!data/raw/yatayat_export.osm
 data/import_run.sql
 
 # Ignore ad-hoc SQL backups that may contain sensitive dumps

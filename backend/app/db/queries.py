@@ -158,7 +158,8 @@ def list_routes(
     whichever single route the user expands (GET /routes/{route_id}/stops)."""
     stmt = select(Route).where(Route.status == status)
     if q:
-        stmt = stmt.where(Route.route_name.ilike(f"%{q}%"))
+        escaped_q = q.replace("%", "\\%").replace("_", "\\_")
+        stmt = stmt.where(Route.route_name.ilike(f"%{escaped_q}%"))
     stmt = stmt.order_by(Route.route_name).limit(limit).offset(offset)
     return session.execute(stmt).scalars().all()
 
@@ -167,7 +168,8 @@ def count_routes(session: Session, status: str = "active", q: Optional[str] = No
     """Total routes matching `status`/`q`, for pagination totals alongside list_routes()."""
     stmt = select(func.count()).select_from(Route).where(Route.status == status)
     if q:
-        stmt = stmt.where(Route.route_name.ilike(f"%{q}%"))
+        escaped_q = q.replace("%", "\\%").replace("_", "\\_")
+        stmt = stmt.where(Route.route_name.ilike(f"%{escaped_q}%"))
     return session.execute(stmt).scalar_one()
 
 

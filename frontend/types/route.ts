@@ -7,8 +7,15 @@ export interface Stop {
   lng: number;
   zone?: string | null;
   district?: string | null;
+  aliases?: string | null;
+  ward?: number | null;
+  landmark?: string | null;
   is_major_stop: boolean;
+  has_shelter?: boolean;
+  has_ticket_counter?: boolean;
   is_interchange: boolean;
+  wheelchair_access?: boolean;
+  audio_support?: boolean;
   status: string;
 }
 
@@ -124,6 +131,7 @@ export interface RouteSummary {
   route_name: string;
   short_name: string | null;
   vehicle_type: string;
+  route_type?: string | null;
   start_stop_id: string;
   end_stop_id: string;
   total_stops: number;
@@ -135,6 +143,8 @@ export interface RouteSummary {
   /** Real OSRM road distance -- prefer this over approx_distance_km
    * (source-data-supplied, not reliably accurate) whenever it's set. */
   osrm_distance_km: number | null;
+  has_ac?: boolean;
+  is_express?: boolean;
   status: string;
   operator: RouteOperator | null;
 }

@@ -62,7 +62,7 @@ TABLES: list[tuple[str, list[str], str]] = [
             "operator_id", "return_leg_verified", "operator_id_raw", "is_multi_operator",
             "haversine_distance_km", "max_consecutive_stop_jump_km", "approx_distance_km_original",
             "distance_flagged_for_recompute", "status_original", "status_corrected_for_return_leg",
-            "is_bidirectional",
+            "is_bidirectional", "osrm_distance_km",
         ],
         "routes_clean.csv",
     ),

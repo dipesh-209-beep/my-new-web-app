@@ -247,20 +247,6 @@ def _normalize_stop_name(name: str) -> str:
     return n.strip()
 
 
-def _names_similar(
-    name_a: str,
-    name_b: str,
-    threshold: float = 0.55,
-) -> bool:
-    a = _normalize_stop_name(name_a)
-    b = _normalize_stop_name(name_b)
-
-    if not a or not b:
-        return False
-
-    return difflib.SequenceMatcher(None, a, b).ratio() >= threshold
-
-
 def haversine_km(lat1, lng1, lat2, lng2) -> float:
     """Great-circle distance in km between two coordinates."""
     r = 6371.0088

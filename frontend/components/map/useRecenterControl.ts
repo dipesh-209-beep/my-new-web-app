@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import L from "leaflet";
 import { LatLng } from "@/types/route";
 
@@ -15,6 +15,8 @@ export function useRecenterControl({
   routeBoundsRef,
   userLocationRef,
 }: UseRecenterControlProps) {
+  const controlRef = useRef<L.Control | null>(null);
+
   useEffect(() => {
     if (!map) return;
 
@@ -49,10 +51,12 @@ export function useRecenterControl({
         return button;
       },
     });
-    new RecenterControl({ position: "bottomright" }).addTo(map);
+    controlRef.current = new RecenterControl({ position: "bottomright" });
+    controlRef.current.addTo(map);
 
     return () => {
-      // Leaflet control removal is handled by map.remove() in useMap
+      controlRef.current?.remove();
+      controlRef.current = null;
     };
   }, [map, routeBoundsRef, userLocationRef]);
 }

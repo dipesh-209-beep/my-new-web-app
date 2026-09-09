@@ -6,7 +6,7 @@
 - **Frontend**: Next.js 16 (App Router) + React 18 + TypeScript + Leaflet.js
 - **Database**: PostgreSQL 15 + PostGIS 3.4 (via `postgis/postgis:15-3.4`)
 - **Routing**: NetworkX Dijkstra with OSRM road geometry enrichment (optional)
-- **Caching**: In-process TTL cache (`app/core/response_cache.py`) — no Redis — wired into `/stops`, `/routes`, `/congestion`; admin writes invalidate the relevant namespace
+- **Caching**: Two-tier TTL cache (`app/core/response_cache.py`) — Redis (when `REDIS_URL` is set, shared across workers) with in-memory fallback (always present, LRU-evicted) — wired into `/stops`, `/routes`, `/congestion`; admin writes invalidate the relevant namespace
 
 ## Key Entry Points
 
