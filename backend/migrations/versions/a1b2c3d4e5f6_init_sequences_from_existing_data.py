@@ -19,11 +19,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Initialize stop_id_seq to max numeric part of existing stop IDs + 1
-    # to prevent collisions with imported data (e.g. S0198 -> next val = 199).
+    # to prevent collisions with imported data (e.g. S0198 or S_391 ->
+    # next val = max+1). The trailing-digit regex handles both the S####
+    # and S_#### forms that exist in the imported data; rows with no
+    # trailing digits just contribute NULL (ignored by MAX/COALESCE).
     op.execute("""
         SELECT setval('stop_id_seq',
             COALESCE(
-                (SELECT MAX(CAST(SUBSTRING(stop_id FROM 2) AS int)) + 1 FROM stops),
+                (SELECT MAX(CAST(SUBSTRING(stop_id FROM '([0-9]+)$') AS int)) + 1 FROM stops),
                 1
             )
         )
@@ -33,7 +36,7 @@ def upgrade() -> None:
     op.execute("""
         SELECT setval('route_id_seq',
             COALESCE(
-                (SELECT MAX(CAST(SUBSTRING(route_id FROM 2) AS int)) + 1 FROM routes),
+                (SELECT MAX(CAST(SUBSTRING(route_id FROM '([0-9]+)$') AS int)) + 1 FROM routes),
                 1
             )
         )

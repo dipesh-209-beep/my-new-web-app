@@ -385,3 +385,70 @@ def bump_graph_version(session: Session) -> int:
         text("UPDATE graph_meta SET version = version + 1 WHERE id = 1")
     )
     return get_graph_version(session)
+
+
+def sync_route_total_stops(session: Session, route_id: str) -> None:
+    """Keep routes.total_stops in line with the actual route_stops count
+    after any structural mutation. The shipped dataset's sanity checks
+    expect these to match (see data/scripts/validate_clean.py), so a
+    divergent value would look like a data bug downstream. Does NOT
+    commit -- caller owns the transaction. (Was app/api/admin.py's
+    _sync_total_stops; moved here so non-HTTP callers -- e.g. the
+    suggestion auto-apply path -- can reuse it without an API import.)"""
+    count = session.execute(
+        text("SELECT COUNT(*) FROM route_stops WHERE route_id = :rid"), {"rid": route_id}
+    ).scalar_one()
+    session.execute(
+        text("UPDATE routes SET total_stops = :count WHERE route_id = :rid"),
+        {"count": count, "rid": route_id},
+    )
+
+
+def apply_stop_sequence_change(
+    session: Session, route_id: str, sequence: Sequence[int]
+) -> Sequence[RouteStop]:
+    """Apply a new desired order to a route's existing stop rows and
+    re-number sequence_no to 1..N.
+
+    `sequence` must be a permutation of the route's CURRENT sequence_no
+    values (see RouteStopReorder in app/schemas.py for why it's expressed
+    as sequence numbers rather than stop_ids -- loop routes can repeat a
+    stop, making raw stop_ids ambiguous). Raises ValueError with a
+    caller-friendly message otherwise.
+
+    Two-pass reassignment: setting a row to its final position directly
+    can collide with a row that hasn't moved yet (e.g. swapping 1 and 3:
+    setting 1 -> 3 duplicates the still-3 row). Park every row at a
+    unique large offset first (kept positive -- sequence_no has a > 0
+    check constraint), then land each row on its final position.
+
+    Bumps the graph version and syncs routes.total_stops (a structural
+    change, same as add/remove stop in app/api/admin.py). Does NOT
+    commit -- caller owns the transaction, and should invalidate the
+    routes/route_geometry/stops response caches after committing, since
+    this function has no visibility into that."""
+    rows = session.execute(
+        select(RouteStop)
+        .where(RouteStop.route_id == route_id)
+        .order_by(RouteStop.sequence_no)
+    ).scalars().all()
+
+    n = len(rows)
+    expected = list(range(1, n + 1))
+    if sorted(sequence) != expected:
+        raise ValueError(
+            f"sequence must be a permutation of the route's current "
+            f"sequence_no values: {expected}. Got: {sorted(sequence)}."
+        )
+
+    by_seq = {row.sequence_no: row for row in rows}
+    offset = 1_000_000
+    for new_seq, old_seq in enumerate(sequence, start=1):
+        by_seq[old_seq].sequence_no = new_seq + offset
+    session.flush()
+    for new_seq, old_seq in enumerate(sequence, start=1):
+        by_seq[old_seq].sequence_no = new_seq
+
+    bump_graph_version(session)
+    sync_route_total_stops(session, route_id)
+    return rows

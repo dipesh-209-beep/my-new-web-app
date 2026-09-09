@@ -50,7 +50,7 @@ from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import AdminUser
+from app.models import AdminUser, User
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _bearer_scheme = HTTPBearer()
@@ -68,10 +68,31 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
     return _pwd_context.verify(plain_password, password_hash)
 
 
+# Tokens are scoped by a "type" claim ("admin" for AdminUser JWTs,
+# "user" for public-user JWTs). Without it, a user token (whose `sub` is a
+# users.user_id) and an admin token (whose `sub` is an admin_users.admin_id)
+# are indistinguishable -- and since both are serially autoincrementing from
+# 1, the first user and first admin share sub="1", which would let a user
+# token slip through require_admin's db.get(AdminUser, sub). Every decoder
+# checks the claim matches its audience.
+_ADMIN_TYPE = "admin"
+_USER_TYPE = "user"
+
+
 def create_access_token(admin_id: int, username: str, role: str) -> str:
     settings = get_settings()
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
-    payload = {"sub": str(admin_id), "username": username, "role": role, "exp": expire}
+    payload = {"sub": str(admin_id), "username": username, "role": role, "type": _ADMIN_TYPE, "exp": expire}
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+def create_user_token(user_id: int, username: str) -> str:
+    """JWT for a public User (see app/models/user.py and app/api/auth.py).
+    Separate from scoped so a leaked user token can never satisfy an
+    admin endpoint, even over the same secret key."""
+    settings = get_settings()
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
+    payload = {"sub": str(user_id), "username": username, "type": _USER_TYPE, "exp": expire}
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
@@ -84,6 +105,10 @@ def _decode_admin_token(token: str, db: Session) -> Optional[AdminUser]:
     try:
         payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
     except jwt.PyJWTError:
+        return None
+    # A token signed for a different audience (i.e. a public user token)
+    # is not an admin credential, regardless of sub.
+    if payload.get("type") != _ADMIN_TYPE:
         return None
     return db.get(AdminUser, int(payload["sub"]))
 
@@ -98,6 +123,55 @@ def get_current_admin(
     if admin is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token.")
     return admin
+
+
+# ---------------------------------------------------------------------------
+# Public-user auth (app/models/user.py) -- separate audience from the
+# AdminUser JWTs above. get_current_user is what suggestion/vote endpoints
+# use; get_current_user_optional handles endpoints that work anonymously
+# and only need the identity when one is present.
+# ---------------------------------------------------------------------------
+
+def _decode_user_token(token: str, db: Session) -> Optional[User]:
+    """Shared decode logic for get_current_user / get_current_user_optional.
+    Returns None (never raises) on any invalid/expired/unknown token, or
+    on a token minted for a different audience (an admin token is not a
+    user credential, regardless of sub)."""
+    settings = get_settings()
+    try:
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    except jwt.PyJWTError:
+        return None
+    if payload.get("type") != _USER_TYPE:
+        return None
+    return db.get(User, int(payload["sub"]))
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    """FastAPI dependency: decode the bearer token, load and return the
+    public User it names. Raises 401 on any invalid/expired/unknown token
+    (or on an admin token -- different audience)."""
+    user = _decode_user_token(credentials.credentials, db)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token.")
+    return user
+
+
+def get_current_user_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_optional_bearer_scheme),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    """FastAPI dependency like get_current_user, but returns None when no
+    (or no valid) Authorization header is present instead of raising.
+    Callers must only use this to *enrich* an otherwise-anonymous request
+    (e.g. "did the logged-in user already vote on this suggestion?"), never
+    to gate access on it."""
+    if credentials is None:
+        return None
+    return _decode_user_token(credentials.credentials, db)
 
 
 def require_admin(

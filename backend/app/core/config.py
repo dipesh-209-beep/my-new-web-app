@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
+    # Crowd-sourced suggestions (app/api/suggestions.py): once a still-pending
+    # suggestion's vote_count reaches this, it's applied to the live dataset
+    # automatically (status -> "auto_applied") instead of waiting for an
+    # editor/admin. Tuned low enough that a handful of genuinely-useful
+    # fixes float up on their own, high enough that a single person can't
+    # push a change through alone.
+    AUTO_APPLY_VOTE_THRESHOLD: int = 26
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, extra="ignore")
 
 

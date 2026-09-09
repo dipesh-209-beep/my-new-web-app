@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request, Response
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api import admin, admin_auth, congestion, fare, routes, routing, stops
+from app.api import admin, admin_auth, auth, congestion, fare, routes, routing, stops, suggestions
 from app.core.config import get_settings
 from app.core.rate_limit import limiter
 from app.db.session import SessionLocal
@@ -40,13 +40,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Rate limiting: currently only applied to /admin/login (see
-# app/api/admin_auth.py) -- that endpoint is intentionally unprotected by
-# require_admin, which makes it the one open door for password
-# brute-forcing. Keyed by client IP; fine for a small internal tool,
-# revisit if this ever sits behind a proxy that doesn't forward the real
-# client IP, or runs with multiple worker processes (the in-memory
-# storage backend below doesn't share state across workers).
+# Rate limiting: applied to /admin/login (app/api/admin_auth.py) and
+# /auth/register + /auth/login (app/api/auth.py) -- these are the
+# intentionally unprotected endpoints that would otherwise be open doors
+# for password brute-forcing / account creation. Keyed by client IP; fine
+# for a small internal tool, revisit if this ever sits behind a proxy that
+# doesn't forward the real client IP, or runs with multiple worker
+# processes (the in-memory storage backend below doesn't share state
+# across workers).
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -128,3 +129,5 @@ app.include_router(fare.router)
 app.include_router(congestion.router)
 app.include_router(admin.router)
 app.include_router(admin_auth.router)
+app.include_router(auth.router)
+app.include_router(suggestions.router)

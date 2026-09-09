@@ -1,6 +1,7 @@
-from typing import Optional, Literal
+from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic import ValidationError
 
 
 class StopOut(BaseModel):
@@ -228,6 +229,36 @@ class RouteStopRef(BaseModel):
     sequence_no: int
 
 
+class StopNameUpdate(BaseModel):
+    """Body for PATCH /stops/{stop_id} -- a direct (editorial) stop-name
+    correction. This is the admin path for what users can suggest via
+    POST /suggestions (stop_name_change)."""
+    stop_name: str = Field(min_length=1, max_length=150)
+
+    @field_validator("stop_name")
+    @classmethod
+    def strip_stop_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("stop_name must not be blank")
+        return v
+
+
+class RouteNameUpdate(BaseModel):
+    """Body for PATCH /routes/{route_id} -- a direct (editorial) route-name
+    correction. The admin path for what users can suggest via
+    POST /suggestions (route_name_change)."""
+    route_name: str = Field(min_length=1, max_length=150)
+
+    @field_validator("route_name")
+    @classmethod
+    def strip_route_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("route_name must not be blank")
+        return v
+
+
 class RouteStopReorder(BaseModel):
     # Desired order of a route's existing stop rows, expressed as their
     # *current* sequence_no values -- a permutation of 1..N where N is the
@@ -249,6 +280,36 @@ class AdminLoginRequest(BaseModel):
 
 
 class AdminTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+# ---------------------------------------------------------------------------
+# Public-user auth (app/api/auth.py, backed by models/user.py) -- same
+# JWT shape as the admin login so the frontend can treat both the same way;
+# the tokens themselves are scoped by a "type" claim instead (see
+# app/core/security.py).
+# ---------------------------------------------------------------------------
+
+class UserRegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def normalize_username(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("username must not be blank")
+        return v
+
+
+class UserLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=50)
+    password: str = Field(min_length=1)
+
+
+class UserTokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
 
@@ -281,3 +342,115 @@ class CongestionResponse(BaseModel):
     day_of_week: int
     hour_bucket: int
     segments: list[CongestionSegmentOut]
+
+
+# ---------------------------------------------------------------------------
+# Crowd-sourced suggestions (app/api/suggestions.py)
+#
+# POST /suggestions takes `suggestion_type` at the TOP LEVEL plus the change
+# body in `payload` WITHOUT the type tag. SuggestionCreate.model_validator
+# injects the tag into payload and re-validates it as the discriminated
+# union below, so a mismatch (e.g. sequence fields on a stop_name_change)
+# fails 422 with the union's own error detail. payload is stored raw (no
+# injected tag) so its hash matches what the client sent.
+# ---------------------------------------------------------------------------
+
+class _SuggestionPayload:
+    """Marker base for the suggestion payload union -- each member pins
+    suggestion_type with a Literal, which is what Field(discriminator=...)
+    dispatches on."""
+
+
+class StopNameChangePayload(_SuggestionPayload, BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    suggestion_type: Literal["stop_name_change"]
+    stop_name: str = Field(min_length=1, max_length=150)
+
+    @field_validator("stop_name")
+    @classmethod
+    def strip_stop_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("stop_name must not be blank")
+        return v
+
+
+class RouteNameChangePayload(_SuggestionPayload, BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    suggestion_type: Literal["route_name_change"]
+    route_name: str = Field(min_length=1, max_length=150)
+
+    @field_validator("route_name")
+    @classmethod
+    def strip_route_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("route_name must not be blank")
+        return v
+
+
+class StopSequenceChangePayload(_SuggestionPayload, BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    suggestion_type: Literal["stop_sequence_change"]
+    # The desired new order, expressed as the route's CURRENT sequence_no
+    # values -- the same convention as admin RouteStopReorder. Validated as
+    # a permutation against the route at apply time (the route can change
+    # between suggestion and application), here just non-empty + positive.
+    sequence: list[int] = Field(min_length=1)
+
+
+SuggestionPayload = Annotated[
+    Union[
+        StopNameChangePayload,
+        RouteNameChangePayload,
+        StopSequenceChangePayload,
+    ],
+    Field(discriminator="suggestion_type"),
+]
+
+# A bare typing.Union isn't a Pydantic model (no .model_validate); the
+# TypeAdapter is what actually parses a payload dict against the
+# discriminated union.
+_payload_validator = TypeAdapter(SuggestionPayload)
+
+
+class SuggestionCreate(BaseModel):
+    """Request body for POST /suggestions -- see the module comment for the
+    suggestion_type/payload split."""
+    target_type: Literal["stop", "route"]
+    target_id: str = Field(min_length=1, max_length=50)
+    suggestion_type: Literal["stop_name_change", "route_name_change", "stop_sequence_change"]
+    payload: dict
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "SuggestionCreate":
+        tagged = {**self.payload, "suggestion_type": self.suggestion_type}
+        try:
+            _payload_validator.validate_python(tagged)
+        except ValidationError as exc:
+            raise ValueError(
+                f"payload does not match suggestion_type '{self.suggestion_type}': {exc.errors()}"
+            ) from exc
+        return self
+
+
+class SuggestionOut(BaseModel):
+    suggestion_id: int
+    target_type: str
+    target_id: str
+    suggestion_type: str
+    payload: dict
+    status: str
+    vote_count: int
+    created_at: str
+    # Optional enrichment fields -- set by the endpoints, not the ORM.
+    submitted_by: Optional[str] = None
+    reviewed_by: Optional[str] = None
+    # Only meaningful on the public GET /suggestions (which accepts an
+    # optional user token): did the requesting user already back this?
+    voted_by_me: Optional[bool] = None
+
+
+class SuggestionAction(BaseModel):
+    """Body for the admin review endpoint PATCH /admin/suggestions/{id}."""
+    action: Literal["approve", "reject"]

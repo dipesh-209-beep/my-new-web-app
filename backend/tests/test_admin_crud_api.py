@@ -459,3 +459,156 @@ def test_reorder_route_stops_bumps_graph_version(client, route_with_three_stops)
     version_after = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
     session.close()
     assert version_after > version_before
+
+
+# --- PATCH /stops/{stop_id} (stop_name) --------------------------------------
+
+
+def test_update_stop_name_succeeds(client, two_stops):
+    stop_id, _ = two_stops
+    new_name = f"Renamed Stop {uuid.uuid4().hex[:6]}"
+    resp = client.patch(
+        f"/stops/{stop_id}",
+        json={"stop_name": new_name},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["stop_name"] == new_name
+
+    session = SessionLocal()
+    try:
+        row = session.get(Stop, stop_id)
+        assert row.stop_name == new_name
+    finally:
+        session.close()
+
+
+def test_update_stop_name_404s_for_unknown_stop(client):
+    resp = client.patch(
+        "/stops/S_DOES_NOT_EXIST",
+        json={"stop_name": "Nope"},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 404
+
+
+def test_update_stop_name_requires_admin_key(client, two_stops):
+    stop_id, _ = two_stops
+    resp = client.patch(f"/stops/{stop_id}", json={"stop_name": "No Auth Rename"})
+    assert resp.status_code in (401, 403)
+
+
+def test_update_stop_name_rejects_blank(client, two_stops):
+    stop_id, _ = two_stops
+    resp = client.patch(
+        f"/stops/{stop_id}",
+        json={"stop_name": "   "},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 422
+
+
+def test_update_stop_name_does_not_bump_graph_version(client, two_stops):
+    """A name-only change must not force a routing-graph rebuild -- the
+    graph is keyed by stop_id and route-finder names come from the DB."""
+    stop_id, _ = two_stops
+    session = SessionLocal()
+    version_before = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
+    session.close()
+    resp = client.patch(
+        f"/stops/{stop_id}",
+        json={"stop_name": f"Renamed Stop {uuid.uuid4().hex[:6]}"},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 200
+    session = SessionLocal()
+    version_after = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
+    session.close()
+    assert version_after == version_before
+
+
+# --- PATCH /routes/{route_id} (route_name) -----------------------------------
+
+
+@pytest.fixture
+def one_route(client, two_stops):
+    start, end = two_stops
+    resp = client.post(
+        "/routes",
+        json={
+            "route_name": f"Patchable Route {uuid.uuid4().hex[:6]}",
+            "vehicle_type": "bus",
+            "start_stop_id": start,
+            "end_stop_id": end,
+            "total_stops": 2,
+        },
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 201, resp.text
+    route_id = resp.json()["route_id"]
+    yield route_id
+    session = SessionLocal()
+    session.execute(text("DELETE FROM routes WHERE route_id = :rid"), {"rid": route_id})
+    session.commit()
+    session.close()
+
+
+def test_update_route_name_succeeds(client, one_route):
+    route_id = one_route
+    new_name = f"Renamed Route {uuid.uuid4().hex[:6]}"
+    resp = client.patch(
+        f"/routes/{route_id}",
+        json={"route_name": new_name},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["route_name"] == new_name
+
+    session = SessionLocal()
+    try:
+        row = session.get(Route, route_id)
+        assert row.route_name == new_name
+    finally:
+        session.close()
+
+
+def test_update_route_name_404s_for_unknown_route(client):
+    resp = client.patch(
+        "/routes/R_DOES_NOT_EXIST",
+        json={"route_name": "Nope"},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 404
+
+
+def test_update_route_name_requires_admin_key(client, one_route):
+    route_id = one_route
+    resp = client.patch(f"/routes/{route_id}", json={"route_name": "No Auth Rename"})
+    assert resp.status_code in (401, 403)
+
+
+def test_update_route_name_rejects_blank(client, one_route):
+    route_id = one_route
+    resp = client.patch(
+        f"/routes/{route_id}",
+        json={"route_name": "   "},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 422
+
+
+def test_update_route_name_does_not_bump_graph_version(client, one_route):
+    route_id = one_route
+    session = SessionLocal()
+    version_before = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
+    session.close()
+    resp = client.patch(
+        f"/routes/{route_id}",
+        json={"route_name": f"Renamed Route {uuid.uuid4().hex[:6]}"},
+        headers=_admin_headers(),
+    )
+    assert resp.status_code == 200
+    session = SessionLocal()
+    version_after = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
+    session.close()
+    assert version_after == version_before

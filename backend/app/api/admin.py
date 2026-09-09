@@ -17,13 +17,13 @@ actual blast radius:
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlalchemy import select, text
+from sqlalchemy import text
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.response_cache import invalidate as invalidate_cache
 from app.core.security import require_role, ROLE_ADMIN, ROLE_EDITOR
 from app.db.id_generator import next_route_id, next_stop_id
-from app.db.queries import bump_graph_version
+from app.db.queries import apply_stop_sequence_change, bump_graph_version, sync_route_total_stops
 from app.db.session import get_db
 from app.routing.graph_builder import get_cached_graph
 from app.models import Route as RouteORM
@@ -32,12 +32,14 @@ from app.models import Stop as StopORM
 
 from app.schemas import (
     RouteCreate,
+    RouteNameUpdate,
     RouteOut,
     RouteStatusUpdate,
     RouteStopCreate,
     RouteStopRef,
     RouteStopReorder,
     StopCreate,
+    StopNameUpdate,
     StopOut,
 )
 
@@ -50,22 +52,16 @@ _EDIT = Depends(require_role(ROLE_EDITOR, ROLE_ADMIN))
 _ADMIN_ONLY = Depends(require_role(ROLE_ADMIN))
 
 # Re-keyed cache namespaces that a route_stops write can change (see the
-# individual endpoints for why each one matters).
-_ROUTE_STOP_CACHE_KEYS = ("routes", "route_geometry", "stops")
-
-
-def _sync_total_stops(db: Session, route_id: str) -> None:
-    """Keep routes.total_stops in line with the actual route_stops count
-    after any structural mutation. The shipped dataset's sanity checks
-    expect these to match (see data/scripts/validate_clean.py), so a
-    divergent value would look like a data bug downstream."""
-    count = db.execute(
-        text("SELECT COUNT(*) FROM route_stops WHERE route_id = :rid"), {"rid": route_id}
-    ).scalar_one()
-    db.execute(
-        text("UPDATE routes SET total_stops = :count WHERE route_id = :rid"),
-        {"count": count, "rid": route_id},
-    )
+# individual endpoints for why each one matters):
+#   - "routes" / "route_detail": route listing + single-route responses
+#     embed total_stops, which add/remove/reorder all change.
+#   - "route_stops": the ordered stop list itself.
+#   - "route_geometry": geometry is keyed on route_id; a changed stop
+#     order invalidates a previously-cached geometry.
+#   - "stops": GET /stops/{id}/routes returns routes, and individual stop
+#     pages don't embed this, but route browsing feeds stop pages -- kept
+#     for parity with the original re-key set (cheap, conservative).
+_ROUTE_STOP_CACHE_KEYS = ("routes", "route_detail", "route_stops", "route_geometry", "stops")
 
 
 @router.post("/stops", response_model=StopOut, status_code=status.HTTP_201_CREATED, dependencies=[_EDIT])
@@ -94,6 +90,29 @@ def create_stop(payload: StopCreate, db: Session = Depends(get_db)) -> StopOut:
     db.commit()
     db.refresh(row)
     invalidate_cache("stops")
+    return StopOut.model_validate(row)
+
+
+@router.patch("/stops/{stop_id}", response_model=StopOut, dependencies=[_EDIT])
+def update_stop_name(stop_id: str, payload: StopNameUpdate, db: Session = Depends(get_db)) -> StopOut:
+    """Direct (editorial) stop-name correction -- the admin path for what
+    public users can suggest via POST /suggestions (stop_name_change).
+    Only touches stop_name; nothing else about the stop changes.
+
+    No graph-version bump: the routing graph is keyed by stop_id and the
+    route-finder response builds StopOut from the DB (app/api/routing.py),
+    so a name change never needs a graph rebuild -- just a response-cache
+    re-key. Stop names are embedded in both the /stops and /routes/{id}/stops
+    responses, so both namespaces are invalidated."""
+    row = db.get(StopORM, stop_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Stop {stop_id} not found.")
+
+    row.stop_name = payload.stop_name
+    db.commit()
+    db.refresh(row)
+    invalidate_cache("stops")
+    invalidate_cache("route_stops")
     return StopOut.model_validate(row)
 
 
@@ -127,6 +146,29 @@ def create_route(payload: RouteCreate, db: Session = Depends(get_db)) -> RouteOu
     return RouteOut.model_validate(row)
 
 
+@router.patch("/routes/{route_id}", response_model=RouteOut, dependencies=[_EDIT])
+def update_route_name(route_id: str, payload: RouteNameUpdate, db: Session = Depends(get_db)) -> RouteOut:
+    """Direct (editorial) route-name correction -- the admin path for what
+    public users can suggest via POST /suggestions (route_name_change).
+    Only touches route_name; nothing else about the route changes.
+
+    No graph-version bump: the routing graph is keyed by (stop_id,
+    route_id, sequence_no) triples and route-finder labels legs from the
+    DB (app/api/routing.py), so a name change never needs a rebuild --
+    just a response-cache re-key on the namespaces that embed route_name
+    (the browser listing and the single-route detail response)."""
+    row = db.get(RouteORM, route_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Route {route_id} not found.")
+
+    row.route_name = payload.route_name
+    db.commit()
+    db.refresh(row)
+    invalidate_cache("routes")
+    invalidate_cache("route_detail")
+    return RouteOut.model_validate(row)
+
+
 @router.post("/routes/{route_id}/stops", status_code=status.HTTP_201_CREATED, dependencies=[_EDIT])
 def add_route_stop(route_id: str, payload: RouteStopCreate, db: Session = Depends(get_db)) -> RouteStopRef:
     if db.get(RouteORM, route_id) is None:
@@ -155,7 +197,7 @@ def add_route_stop(route_id: str, payload: RouteStopCreate, db: Session = Depend
     db.add(row)
     try:
         bump_graph_version(db)
-        _sync_total_stops(db, route_id)
+        sync_route_total_stops(db, route_id)
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -201,7 +243,7 @@ def remove_route_stop(route_id: str, sequence_no: int, db: Session = Depends(get
         {"rid": route_id, "seq": sequence_no},
     )
     bump_graph_version(db)
-    _sync_total_stops(db, route_id)
+    sync_route_total_stops(db, route_id)
     db.commit()
 
     for key in _ROUTE_STOP_CACHE_KEYS:
@@ -213,49 +255,24 @@ def reorder_route_stops(route_id: str, payload: RouteStopReorder, db: Session = 
     """Reorder a route's stops in one call. The payload is the route's
     *current* sequence_no values arranged in the desired new order (a
     permutation of 1..N) -- see RouteStopReorder in app/schemas.py for
-    why it's sequence numbers and not stop_ids."""
+    why it's sequence numbers and not stop_ids.
+
+    The permutation validation + re-numbering + graph bump + total_stops
+    sync live in app/db/queries.py::apply_stop_sequence_change (also used
+    by the suggestion auto-apply path); this endpoint owns the HTTP
+    concerns: 404 for an unknown route, 400 for a non-permutation, and
+    response-cache invalidation after the commit."""
     if db.get(RouteORM, route_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Route {route_id} not found.")
 
-    rows = db.execute(
-        select(RouteStopORM)
-        .where(RouteStopORM.route_id == route_id)
-        .order_by(RouteStopORM.sequence_no)
-    ).scalars().all()
+    try:
+        rows = apply_stop_sequence_change(db, route_id, payload.sequence)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    n = len(rows)
-    expected = list(range(1, n + 1))
-    if sorted(payload.sequence) != expected:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"sequence must be a permutation of the route's current "
-                f"sequence_no values: {expected}. Got: {sorted(payload.sequence)}."
-            ),
-        )
-
-    by_seq = {row.sequence_no: row for row in rows}
-    # Two-pass reassignment: setting a row to its final position directly
-    # can collide with a row that hasn't moved yet (e.g. swapping 1 and 3:
-    # setting 1 -> 3 duplicates the still-3 row). Park every row at a
-    # unique large offset first (kept positive -- sequence_no has a > 0
-    # check constraint), then land each row on its final position.
-    offset = 1_000_000
-    for new_seq, old_seq in enumerate(payload.sequence, start=1):
-        by_seq[old_seq].sequence_no = new_seq + offset
-    db.flush()
-    for new_seq, old_seq in enumerate(payload.sequence, start=1):
-        by_seq[old_seq].sequence_no = new_seq
-
-    bump_graph_version(db)
-    _sync_total_stops(db, route_id)
     db.commit()
 
-    rows = db.execute(
-        select(RouteStopORM)
-        .where(RouteStopORM.route_id == route_id)
-        .order_by(RouteStopORM.sequence_no)
-    ).scalars().all()
+    rows = sorted(rows, key=lambda row: row.sequence_no)
     for key in _ROUTE_STOP_CACHE_KEYS:
         invalidate_cache(key)
 
