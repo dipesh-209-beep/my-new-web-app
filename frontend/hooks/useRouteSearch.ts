@@ -1,8 +1,6 @@
 import { useRef, useState } from "react";
-import { RouteSearchResult } from "@/types/route";
+import { LoadingStage, RouteSearchResult } from "@/types/route";
 import { ApiError, findRoute } from "@/lib/api";
-
-type LoadingStage = "idle" | "searching" | "calculating_alternatives" | "done";
 
 interface UseRouteSearchResult {
   result: RouteSearchResult | null;

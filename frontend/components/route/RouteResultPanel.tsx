@@ -1,11 +1,10 @@
 "use client";
 
-import { FareOut, RouteAlternative, RouteLeg, RouteSearchResult } from "@/types/route";
+import { FareOut, LoadingStage, RouteAlternative, RouteLeg, RouteSearchResult } from "@/types/route";
 import RouteTimeline from "./RouteTimeline";
 import { BusIcon, ClockIcon, TransferIcon, WalkIcon } from "@/components/icons/TransitIcons";
 import InlineAlert from "@/components/ui/InlineAlert";
-
-type LoadingStage = "idle" | "searching" | "calculating_alternatives" | "done";
+import { TRANSFER_ROUTE_ID } from "@/lib/constants";
 
 interface RouteResultPanelProps {
   result: RouteSearchResult | null;
@@ -28,8 +27,8 @@ const ALTERNATIVE_LABELS: Record<RouteAlternative["label"], string> = {
 
 // Format a compact summary for alternative tooltips
 function formatAltSummary(alt: RouteAlternative): string {
-  const altRideLegs = alt.legs.filter((leg) => leg.route_id !== "TRANSFER");
-  const altWalkLegs = alt.legs.filter((leg) => leg.route_id === "TRANSFER");
+  const altRideLegs = alt.legs.filter((leg) => leg.route_id !== TRANSFER_ROUTE_ID);
+  const altWalkLegs = alt.legs.filter((leg) => leg.route_id === TRANSFER_ROUTE_ID);
   const parts = [`${alt.legs.length} leg${alt.legs.length > 1 ? "s" : ""}`];
   if (altRideLegs.length > 0) {
     parts.push(`${altRideLegs.length} bus${altRideLegs.length > 1 ? "es" : ""}`);
@@ -137,8 +136,8 @@ export default function RouteResultPanel({
     : result.alternatives[selectedIndex];
 
   const legs = active.legs;
-  const rideLegs = legs.filter((leg) => leg.route_id !== "TRANSFER");
-  const walkLegs = legs.filter((leg) => leg.route_id === "TRANSFER");
+  const rideLegs = legs.filter((leg) => leg.route_id !== TRANSFER_ROUTE_ID);
+  const walkLegs = legs.filter((leg) => leg.route_id === TRANSFER_ROUTE_ID);
 
   // Backend now attaches real OSRM road_geometry to alternatives too
   // (deduplicated to genuinely distinct paths, capped at 2, so it's no
@@ -159,7 +158,7 @@ export default function RouteResultPanel({
     const WALK_SPEED_KMH = 4.5;
     let totalSeconds = 0;
     for (const leg of legsToEstimate) {
-      const isWalk = leg.route_id === "TRANSFER";
+      const isWalk = leg.route_id === TRANSFER_ROUTE_ID;
       const speedKmh = isWalk ? WALK_SPEED_KMH : BUS_SPEED_KMH;
       // Use road_geometry distance if available, otherwise straight-line distance
       const distanceKm = leg.road_geometry

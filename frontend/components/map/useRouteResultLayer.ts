@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import L from "leaflet";
 import { RouteSearchResult } from "@/types/route";
-import { LEG_COLORS } from "@/lib/constants";
+import { LEG_COLORS, TRANSFER_ROUTE_ID } from "@/lib/constants";
 import { escapeHtml } from "@/lib/escapeHtml";
 import { pinIcon } from "./markerKit";
 
@@ -50,7 +50,7 @@ export function useRouteResultLayer({
       const legLayer = L.layerGroup().addTo(map);
       legLayersRef.current.push(legLayer);
 
-      const isWalk = leg.route_id === "TRANSFER";
+      const isWalk = leg.route_id === TRANSFER_ROUTE_ID;
       const color = isWalk ? "#9CA3AF" : LEG_COLORS[i % LEG_COLORS.length];
       const isFirstLeg = i === 0;
       const isLastLeg = i === result.legs.length - 1;

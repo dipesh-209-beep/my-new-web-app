@@ -33,14 +33,9 @@ import {
   WalkingRoute,
 } from "@/types/route";
 import { apiBase } from "@/lib/apiBase";
+import { DEFAULT_TIMEOUT_MS, ROUTING_TIMEOUT_MS } from "@/lib/constants";
 
 const API_BASE = apiBase();
-
-// Most requests are quick DB reads; route-finder/walking-route also call
-// out to OSRM so get a longer allowance. Keeping one shared default and
-// one longer override rather than a magic number per call site.
-const DEFAULT_TIMEOUT_MS = 10_000;
-const ROUTING_TIMEOUT_MS = 20_000;
 
 export type ApiErrorKind = "http" | "network" | "timeout" | "parse";
 

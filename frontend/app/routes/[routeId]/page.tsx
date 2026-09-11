@@ -26,28 +26,25 @@ export default function RouteDetailPage() {
   const [stops, setStops] = useState<RouteStopEntry[]>([]);
   const [geometry, setGeometry] = useState<RouteGeometry | null>(null);
   const [loading, setLoading] = useState(true);
+  const [stopsLoading, setStopsLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Only meaningful once `route` has loaded and route.is_bidirectional is
   // true -- see the toggle rendered below the map.
   const [direction, setDirection] = useState<RouteDirection>("forward");
 
+  // Route metadata is direction-independent, so it's fetched once per
+  // routeId rather than every time the direction toggle is flipped.
   useEffect(() => {
     let cancelled = false;
 
-    async function load() {
+    async function loadRoute() {
       setLoading(true);
       setNotFound(false);
       setError(null);
       try {
-        const [routeData, stopsData] = await Promise.all([
-          getRoute(routeId),
-          getRouteStops(routeId, direction),
-        ]);
-        if (!cancelled) {
-          setRoute(routeData);
-          setStops(stopsData);
-        }
+        const routeData = await getRoute(routeId);
+        if (!cancelled) setRoute(routeData);
       } catch (err) {
         if (cancelled) return;
         if (err instanceof ApiError && err.status === 404) {
@@ -59,6 +56,35 @@ export default function RouteDetailPage() {
         }
       } finally {
         if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadRoute();
+    return () => {
+      cancelled = true;
+    };
+  }, [routeId]);
+
+  // Stops and the road-following geometry ARE direction-dependent, so
+  // flipping forward/return refetches exactly these two and nothing else --
+  // no re-fetch of route metadata, and no full-page skeleton flash.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setStopsLoading(true);
+      // Clear the previous direction's sequencing while the refetch is in
+      // flight, so the list/map never show a stale opposite-direction set.
+      setStops([]);
+      setGeometry(null);
+      try {
+        const stopsData = await getRouteStops(routeId, direction);
+        if (!cancelled) setStops(stopsData);
+      } catch {
+        // The route header stays fully usable even if this direction's stop
+        // list fails -- the list just stays empty until the next attempt.
+      } finally {
+        if (!cancelled) setStopsLoading(false);
       }
     }
 
@@ -82,7 +108,10 @@ export default function RouteDetailPage() {
     };
   }, [routeId, direction]);
 
-  if (loading) {
+  // Full-page skeleton while the route is first loading. Direction toggles
+  // only refetch stops/geometry (see the second effect), so they don't flip
+  // the page back to this placeholder.
+  if (loading || (!route && stopsLoading)) {
     return (
       <div className="mx-auto flex h-full max-w-2xl flex-col gap-3 overflow-y-auto p-4">
         <div className="h-6 w-1/2 animate-pulse rounded bg-surface-sunken" />

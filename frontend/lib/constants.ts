@@ -16,3 +16,16 @@ export const CONGESTION_COLORS: Record<string, string> = {
   heavy: "#EF4444",
   unknown: "#6B7280",
 };
+
+// Route-finder "transfer" legs are identified on the client by this sentinel
+// route_id (the backend's schemas emit "TRANSFER" for walking legs between
+// buses). Single source of truth so the "is this a walk?" check reads one
+// name everywhere it appears.
+export const TRANSFER_ROUTE_ID = "TRANSFER";
+
+// Request timeouts for fetch() wrappers. Most calls are quick DB reads;
+// route-finder/geometry call out to OSRM so get a longer allowance. Kept in
+// one place so lib/api.ts, lib/adminApi.ts, and lib/userApi.ts don't each
+// redefine a magic number.
+export const DEFAULT_TIMEOUT_MS = 10_000;
+export const ROUTING_TIMEOUT_MS = 20_000;

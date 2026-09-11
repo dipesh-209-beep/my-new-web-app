@@ -1,5 +1,5 @@
 import { RouteLeg } from "@/types/route";
-import { LEG_COLORS } from "@/lib/constants";
+import { LEG_COLORS, TRANSFER_ROUTE_ID } from "@/lib/constants";
 import { BusIcon, WalkIcon } from "@/components/icons/TransitIcons";
 
 interface RouteTimelineProps {
@@ -28,7 +28,7 @@ export default function RouteTimeline({ legs }: RouteTimelineProps) {
   return (
     <ol className="flex flex-col">
       {legs.map((leg, i) => {
-        const isWalk = leg.route_id === "TRANSFER";
+        const isWalk = leg.route_id === TRANSFER_ROUTE_ID;
         const isLast = i === legs.length - 1;
         const distance = legDistanceKm(leg);
         const duration = legDurationMin(leg);

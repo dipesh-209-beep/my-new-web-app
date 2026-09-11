@@ -20,6 +20,7 @@
 
 import { ApiError } from "@/lib/api";
 import { apiBase } from "@/lib/apiBase";
+import { DEFAULT_TIMEOUT_MS } from "@/lib/constants";
 import {
   AdminTokenResponse,
   RouteOut,
@@ -56,8 +57,6 @@ export function clearAdminToken(): void {
     /* nothing to clear */
   }
 }
-
-const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
  * JSON request with an optional bearer token. Returns parsed JSON, or

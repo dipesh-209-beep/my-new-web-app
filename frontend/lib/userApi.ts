@@ -17,6 +17,7 @@
 
 import { ApiError } from "@/lib/api";
 import { apiBase } from "@/lib/apiBase";
+import { DEFAULT_TIMEOUT_MS } from "@/lib/constants";
 import { Suggestion, SuggestionCreatePayload, UserTokenResponse } from "@/types/route";
 
 const USER_TOKEN_KEY = "ktm-transit:user-token";
@@ -90,8 +91,6 @@ export function onUserTokenExpired(callback: () => void): void {
 }
 
 let _onTokenExpired: (() => void) | null = null;
-
-const DEFAULT_TIMEOUT_MS = 10_000;
 
 async function userRequest<T>(
   method: "GET" | "POST",

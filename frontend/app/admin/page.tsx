@@ -17,6 +17,69 @@ const TABS: { id: AdminTab; label: string }[] = [
   { id: "route-stops", label: "Route stops" },
 ];
 
+interface AdminWorkspaceProps {
+  token: string;
+  onTokenInvalid: () => void;
+}
+
+/**
+ * Authenticated half of /admin. Lives in its own component so useStops()
+ * only mounts once a token exists -- no point fetching the whole stop list
+ * (and hitting the API) for the login screen. Tab state is local because it
+ * only matters once inside the workspace.
+ */
+function AdminWorkspace({ token, onTokenInvalid }: AdminWorkspaceProps) {
+  const [tab, setTab] = useState<AdminTab>("stops");
+  const { stops, loading: stopsLoading, error: stopsError } = useStops();
+
+  return (
+    <div className="mt-6 flex flex-col gap-4">
+      {stopsError && (
+        <InlineAlert variant="error">
+          Couldn&apos;t load the stop list from the server. Stop/routes forms need it for search.
+        </InlineAlert>
+      )}
+
+      <div role="tablist" aria-label="Admin sections" className="flex rounded-lg bg-surface-sunken p-1 text-sm">
+        {TABS.map(({ id, label }) => (
+          <button
+            key={id}
+            role="tab"
+            aria-selected={tab === id}
+            onClick={() => setTab(id)}
+            className={`flex-1 rounded-md px-3 py-1.5 transition-colors ${
+              tab === id ? "bg-white text-ink shadow-sm" : "text-ink-secondary hover:text-ink"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "stops" && <CreateStopForm token={token} onForbidden={onTokenInvalid} />}
+
+      {tab === "routes" && (
+        <CreateRouteForm
+          token={token}
+          stops={stops}
+          stopsLoading={stopsLoading}
+          onForbidden={onTokenInvalid}
+          onCreated={() => setTab("route-stops")}
+        />
+      )}
+
+      {tab === "route-stops" && (
+        <RouteStopEditor
+          token={token}
+          stops={stops}
+          stopsLoading={stopsLoading}
+          onForbidden={onTokenInvalid}
+        />
+      )}
+    </div>
+  );
+}
+
 /**
  * /admin -- data-entry UI for the backend's admin API. No token is ever
  * sent at link/preload time (nothing here runs on the server); the page
@@ -28,8 +91,6 @@ export default function AdminPage() {
     const stored = getAdminToken();
     return stored === null ? null : stored; // distinguishes "no token" (login) from 401 logout
   });
-  const [tab, setTab] = useState<AdminTab>("stops");
-  const { stops, loading: stopsLoading, error: stopsError } = useStops();
 
   function handleLogin(newToken: string) {
     setAdminToken(newToken);
@@ -66,14 +127,6 @@ export default function AdminPage() {
         )}
       </div>
 
-      {stopsError && (
-        <div className="mt-4">
-          <InlineAlert variant="error">
-            Couldn&apos;t load the stop list from the server. Stop/routes forms need it for search.
-          </InlineAlert>
-        </div>
-      )}
-
       {!token ? (
         <div className="mt-6 flex flex-col items-start gap-2">
           <AdminLogin onLogin={handleLogin} />
@@ -82,44 +135,7 @@ export default function AdminPage() {
           </p>
         </div>
       ) : (
-        <div className="mt-6 flex flex-col gap-4">
-          <div role="tablist" aria-label="Admin sections" className="flex rounded-lg bg-surface-sunken p-1 text-sm">
-            {TABS.map(({ id, label }) => (
-              <button
-                key={id}
-                role="tab"
-                aria-selected={tab === id}
-                onClick={() => setTab(id)}
-                className={`flex-1 rounded-md px-3 py-1.5 transition-colors ${
-                  tab === id ? "bg-white text-ink shadow-sm" : "text-ink-secondary hover:text-ink"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {tab === "stops" && <CreateStopForm token={token} onForbidden={handleTokenInvalid} />}
-
-          {tab === "routes" && (
-            <CreateRouteForm
-              token={token}
-              stops={stops}
-              stopsLoading={stopsLoading}
-              onForbidden={handleTokenInvalid}
-              onCreated={() => setTab("route-stops")}
-            />
-          )}
-
-          {tab === "route-stops" && (
-            <RouteStopEditor
-              token={token}
-              stops={stops}
-              stopsLoading={stopsLoading}
-              onForbidden={handleTokenInvalid}
-            />
-          )}
-        </div>
+        <AdminWorkspace token={token} onTokenInvalid={handleTokenInvalid} />
       )}
     </main>
   );

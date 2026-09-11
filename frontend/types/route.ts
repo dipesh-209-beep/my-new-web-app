@@ -82,6 +82,10 @@ export type RouteSearchResult =
 // the map does nothing (the default, idle state).
 export type StopPickTarget = "origin" | "destination" | null;
 
+// Progress stage for a route search, driving the result panel's loading
+// copy ("Finding the best routes…" → "Calculating alternative routes…").
+export type LoadingStage = "idle" | "searching" | "calculating_alternatives" | "done";
+
 export interface LatLng {
   lat: number;
   lng: number;

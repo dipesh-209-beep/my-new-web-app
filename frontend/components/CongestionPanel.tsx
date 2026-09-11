@@ -108,19 +108,19 @@ export default function CongestionPanel({
             )}
           </div>
 
-          <div className="flex items-center gap-4 text-xs text-ink-secondary">
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: CONGESTION_COLORS.free_flow }} />
-              Low
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: CONGESTION_COLORS.moderate }} />
-              Moderate
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: CONGESTION_COLORS.heavy }} />
-              Heavy
-            </span>
+          <div className="flex flex-col gap-1">
+            <div
+              aria-hidden
+              className="h-2 w-full rounded-full"
+              style={{
+                background: `linear-gradient(to right, ${CONGESTION_COLORS.free_flow}, ${CONGESTION_COLORS.moderate}, ${CONGESTION_COLORS.heavy})`,
+              }}
+            />
+            <div className="flex justify-between text-xs text-ink-secondary">
+              <span>Low</span>
+              <span>Moderate</span>
+              <span>Heavy</span>
+            </div>
           </div>
 
           <p className="font-mono text-xs text-ink-secondary">
