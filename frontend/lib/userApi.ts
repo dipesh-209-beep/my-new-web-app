@@ -16,6 +16,7 @@
  */
 
 import { ApiError } from "@/lib/api";
+import { apiBase } from "@/lib/apiBase";
 import { Suggestion, SuggestionCreatePayload, UserTokenResponse } from "@/types/route";
 
 const USER_TOKEN_KEY = "ktm-transit:user-token";
@@ -77,15 +78,20 @@ export function clearUserSession(): void {
   clearUsername();
 }
 
-const DEFAULT_TIMEOUT_MS = 10_000;
-
-/** Same base-URL resolution as lib/api.ts (env override, else current host). */
-function apiBase(): string {
-  const envBase = process.env.NEXT_PUBLIC_API_BASE_URL;
-  if (envBase) return envBase;
-  if (typeof window !== "undefined") return `http://${window.location.hostname}:8000`;
-  return "http://localhost:8000";
+/**
+ * Registers a callback fired whenever an authenticated request comes back
+ * 401 (expired/revoked JWT). The UserAuthContext wires this to its `logout`
+ * so the UI drops the stale session immediately instead of showing the
+ * user as signed-in until the next manual action. Mirrors lib/adminApi's
+ * per-form `onForbidden` handling, but automatically for every call here.
+ */
+export function onUserTokenExpired(callback: () => void): void {
+  _onTokenExpired = callback;
 }
+
+let _onTokenExpired: (() => void) | null = null;
+
+const DEFAULT_TIMEOUT_MS = 10_000;
 
 async function userRequest<T>(
   method: "GET" | "POST",
@@ -115,6 +121,17 @@ async function userRequest<T>(
     throw new ApiError("Couldn't reach the server. Check your connection.", "network");
   } finally {
     clearTimeout(timeout);
+  }
+
+  // Expired/revoked session: wipe the stored token and tell the context to
+  // update, then surface a 401 just like the caller expects. Detection is
+  // limited to requests that actually carried a token -- unauthenticated
+  // endpoints (login/register) legitimately 401 without any session to
+  // clear.
+  if (res.status === 401 && token) {
+    clearUserSession();
+    _onTokenExpired?.();
+    throw new ApiError("Session expired. Please sign in again.", "http", 401);
   }
 
   if (!res.ok) {

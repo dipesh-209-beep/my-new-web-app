@@ -328,12 +328,23 @@ def get_congestion_stats(
             T.to_stop_id.label("to_stop_id"),
             func.min(T.avg_duration_s).label("free_flow_duration_s"),
         )
+        # Limit the fallback to rows that actually need it. Every row with
+        # a stored anchor resolves via the COALESCE below without touching
+        # this subquery's GROUP BY at all -- before this WHERE clause the
+        # min() ran across the entire table on every /congestion read,
+        # which is what migration e5f6a7b8c9d0's covering index on
+        # (route_id, from_stop_id, to_stop_id) also backs.
+        .where(T.free_flow_duration_s.is_(None))
         .group_by(T.route_id, T.from_stop_id, T.to_stop_id)
         .subquery()
     )
     stmt = (
         select(T, func.coalesce(T.free_flow_duration_s, fallback_baseline.c.free_flow_duration_s))
-        .join(
+        # LEFT JOIN, not INNER: the fallback subquery only contains rows
+        # missing a stored anchor, so a seeded row must still resolve its
+        # own free_flow_duration_s through COALESCE -- an inner join would
+        # drop every row that has one.
+        .outerjoin(
             fallback_baseline,
             (T.route_id == fallback_baseline.c.route_id)
             & (T.from_stop_id == fallback_baseline.c.from_stop_id)

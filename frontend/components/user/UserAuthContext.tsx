@@ -5,6 +5,7 @@ import {
   clearUserSession,
   getUsername,
   getUserToken,
+  onUserTokenExpired,
   setUsername,
   setUserToken,
 } from "@/lib/userApi";
@@ -59,6 +60,14 @@ export function UserAuthProvider({ children }: { children: ReactNode }) {
     setToken(null);
     setUserName(null);
   }, []);
+
+  // Any authenticated userApi call that comes back 401 (expired/revoked
+  // JWT) triggers the same logout the user would get from clicking "Sign
+  // out" -- otherwise the session lingers in localStorage and the NavBar
+  // keeps showing "signed in" while every suggestion submission fails.
+  useEffect(() => {
+    onUserTokenExpired(logout);
+  }, [logout]);
 
   const value = useMemo(
     () => ({ token, username, hydrated, login, logout }),

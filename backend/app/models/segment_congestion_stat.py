@@ -99,6 +99,15 @@ class SegmentCongestionStat(Base):
         # (day_of_week, hour_bucket)", so that pair is the lead index --
         # not route_id/from_stop_id, which only matter for the upsert.
         Index("idx_congestion_day_hour", "day_of_week", "hour_bucket"),
+        # Backs the get_congestion_stats fallback subquery's GROUP BY for
+        # rows still missing free_flow_duration_s (see queries.py). Added
+        # by migration e5f6a7b8c9d0 alongside a NULL-free flow backfill.
+        Index(
+            "ix_segment_congestion_stats_segment",
+            "route_id",
+            "from_stop_id",
+            "to_stop_id",
+        ),
     )
 
     route = relationship("Route")

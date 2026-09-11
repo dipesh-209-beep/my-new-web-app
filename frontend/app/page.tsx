@@ -130,6 +130,14 @@ const congestion = useCongestion();
   const appliedDeepLinkRef = useRef(false);
   useEffect(() => {
     if (appliedDeepLinkRef.current) return;
+    // Deep-link stop labels disambiguate against the full stop list
+    // (buildStopLabel appends "(district)" for duplicated names), and
+    // SearchForm's resolveStop matches on those exact labels -- so an
+    // empty `stops` array yields a bare name that silently fails
+    // validation for any duplicated stop. Wait for the stops fetch to
+    // finish before applying params, then apply exactly once (the ref
+    // guard below).
+    if (stopsLoading) return;
     const originId = searchParams.get("origin");
     const destinationId = searchParams.get("destination");
     const routeId = searchParams.get("route");
@@ -154,7 +162,7 @@ const congestion = useCongestion();
       routeBrowser.showRouteById(routeId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [searchParams, stopsLoading, stops]);
 
   function handleStopPick(stop: Stop) {
     // Same disambiguation as the geolocation flow -- a bare stop_name

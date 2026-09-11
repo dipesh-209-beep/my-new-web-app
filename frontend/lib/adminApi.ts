@@ -19,6 +19,7 @@
  */
 
 import { ApiError } from "@/lib/api";
+import { apiBase } from "@/lib/apiBase";
 import {
   AdminTokenResponse,
   RouteOut,
@@ -112,14 +113,6 @@ async function adminRequest<T>(
   } catch {
     throw new ApiError("Received an invalid response from the server.", "parse");
   }
-}
-
-/** Same base-URL resolution as lib/api.ts (env override, else current host). */
-function apiBase(): string {
-  const envBase = process.env.NEXT_PUBLIC_API_BASE_URL;
-  if (envBase) return envBase;
-  if (typeof window !== "undefined") return `http://${window.location.hostname}:8000`;
-  return "http://localhost:8000";
 }
 
 // ---------------------------------------------------------------------------
