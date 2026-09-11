@@ -1,6 +1,6 @@
 # Kathmandu Bus Route Finder
 
-A web-based public transport navigation system for the Kathmandu Valley. Riders enter an origin and destination stop and get a direct or single-transfer bus route — with road-following geometry, walking connections, and historical traffic-congestion overlays — rendered on an interactive map.
+A web-based public transport navigation system for the Kathmandu Valley. Riders enter an origin and destination stop and get a direct or multi-transfer bus route — with road-following geometry, walking connections, and historical traffic-congestion overlays — rendered on an interactive map.
 
 BE Minor Project — Department of Electronics & Computer Engineering, IOE Pulchowk Campus.
 
@@ -40,7 +40,7 @@ flowchart LR
     BE --> OSRM[OSRM driving + foot instances]
 ```
 
-The frontend calls the FastAPI backend over REST. The backend builds an in-memory NetworkX graph from the `stops`/`routes`/`route_stops` tables to find direct or single-transfer paths, then optionally enriches each ride leg with road-following geometry from OSRM before returning the result. Ride legs are recorded in the background afterwards to build up the historical congestion dataset. The graph is cached in memory per worker process and rebuilt lazily: a `graph_meta` table holds a version counter that every admin write bumps, and every request cheaply checks it against what the current process last built from -- so cache invalidation works correctly even across multiple worker processes/replicas, not just the one that happened to handle a given admin write.
+The frontend calls the FastAPI backend over REST. The backend builds an in-memory NetworkX graph from the `stops`/`routes`/`route_stops` tables to find direct or multi-transfer paths (with optional `via` waypoints and a `max_transfers` cap), then optionally enriches each ride leg with road-following geometry from OSRM before returning the result. Ride legs are recorded in the background afterwards to build up the historical congestion dataset. The graph is cached in memory per worker process and rebuilt lazily: a `graph_meta` table holds a version counter that every admin write bumps, and every request cheaply checks it against what the current process last built from -- so cache invalidation works correctly even across multiple worker processes/replicas, not just the one that happened to handle a given admin write.
 
 ## Tech Stack
 
@@ -189,7 +189,7 @@ Interactive OpenAPI/Swagger docs are available at `http://localhost:8000/docs` o
 | GET | `/routes` | List routes | — |
 | GET | `/routes/{route_id}` | Route detail | — |
 | GET | `/routes/{route_id}/stops` | Ordered stops on a route | — |
-| GET | `/route-finder` | Find a route between an origin and destination `stop_id` (direct, else single-transfer; `avoid_congestion`/`include_alternatives` query params) | — |
+| GET | `/route-finder` | Find a route between an origin and destination `stop_id` (direct, else multi-transfer up to `max_transfers`, with optional `via` waypoints; `avoid_congestion`/`include_alternatives` query params) | — |
 | GET | `/walking-route` | Foot-profile route between two coordinates (e.g. to the nearest stop) | — |
 | GET | `/fare` | Distance-banded fare lookup | — |
 | GET | `/congestion` | Historical congestion by day-of-week / hour-bucket (defaults to now, Nepal time) | — |
@@ -210,7 +210,7 @@ Interactive OpenAPI/Swagger docs are available at `http://localhost:8000/docs` o
 For a given origin/destination `stop_id` pair, `backend/app/routing/pathfinder.py`:
 
 1. **Direct route search** — scans every active route for one that contains both stops (checking all occurrences, so loop routes work correctly), and, if the route is marked bidirectional, both directions of travel. If more than one direct route qualifies, the shortest by distance wins. A direct route always wins over a multi-route path.
-2. **Transfer search (fallback)** — if no direct route exists, falls back to a NetworkX Dijkstra shortest-path search over a graph where each ride node is `(stop_id, route_id, sequence_no)` (so repeated stops on loop routes stay distinct), with `board`/`alight`/`ride` edges per route and `walk` edges between different physical stops within `INTERCHANGE_DISTANCE` (100 m) of each other. Boarding a route costs a fixed `TRANSFER_PENALTY` (3000, in the same distance units as edge weights) so Dijkstra prefers fewer transfers over marginal distance savings.
+2. **Transfer search (fallback)** — if no direct route exists, falls back to a NetworkX Dijkstra shortest-path search over a graph where each ride node is `(stop_id, route_id, sequence_no)` (so repeated stops on loop routes stay distinct), with `board`/`alight`/`ride` edges per route and `walk` edges between different physical stops within `INTERCHANGE_DISTANCE` (200 m) of each other. Boarding a route costs a fixed `TRANSFER_PENALTY` (3000, in the same distance units as edge weights) so Dijkstra prefers fewer transfers over marginal distance savings.
 3. **Geometry** — each ride leg's stop sequence is sent to OSRM as waypoints (thinned to a minimum 80 m spacing to avoid OSRM zig-zagging between nearly-adjacent stops) to get road-following polylines; walking transfer legs are rendered as straight lines by the frontend.
 4. **Congestion recording** — after the response is sent, each ride leg with real OSRM geometry is recorded as a sample into `segment_congestion_stats`, bucketed by day-of-week and 3-hour time bucket (Nepal time), feeding the `/congestion` endpoint.
 
@@ -283,7 +283,7 @@ The frontend exposes a browser-based data-entry UI at `/admin` (link in the nav 
 
 ## Future Improvements
 
-Not implemented — potential future work:
+Potential future work:
 
 - Real-time bus location tracking
 - Live traffic-aware routing (beyond the current historical congestion overlay)
@@ -291,9 +291,9 @@ Not implemented — potential future work:
 - Expanded dataset coverage
 - Route reliability metrics
 
-PWA support (installable manifest + app icons, offline-capable app shell,
+Note: PWA support (installable manifest + app icons, offline-capable app shell,
 stale-while-revalidate caching for `/stops` `/routes` `/congestion`) and
-mobile responsiveness have both since been implemented — see
+mobile responsiveness are already implemented, not future work — see
 `frontend/public/sw.js` and `frontend/app/manifest.ts`.
 
 ## Team

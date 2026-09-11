@@ -311,7 +311,7 @@ def reload_graph_cache(db: Session = Depends(get_db)) -> dict:
 
     Call this after adding stops/routes/route_stops -- the graph is
     cached (see app/routing/graph_builder.py) so writes don't show up in
-    /api/route/find until this runs.
+    /route-finder until this runs.
     """
     graph = get_cached_graph(db, refresh=True)
     return {"nodes": graph.number_of_nodes(), "edges": graph.number_of_edges()}

@@ -8,9 +8,16 @@ TRANSFER_PENALTY: int = 3000
 # its recorded congestion_ratio. A ride edge's weight becomes
 #     distance_m * (1 + CONGESTION_LAMBDA * max(congestion_ratio - 1, 0))
 # so free-flow edges (ratio ~= 1) are untouched and only genuinely
-# congested edges get inflated. Starting value, tune by hand against a
-# few known-congested corridors (Koteshwor, Kalanki, Thapathali) before
-# trusting it in production.
+# congested edges get inflated.
+#
+# Validation status: still a hand-picked starting value. The trade-off
+# vs TRANSFER_PENALTY (3000) is that a 2x-congested segment costs 1.75x
+# its distance, so with a high lambda a rider may prefer a longer direct
+# route over a shorter-but-congested transfer chain. Before trusting it
+# in production, validate with a sensitivity analysis: sweep
+# CONGESTION_LAMBDA across a few known O-D pairs / corridors (Koteshwor,
+# Kalanki, Thapathali) and check that chosen routes stay stable across the
+# sweep and match what a rider would actually pick.
 CONGESTION_LAMBDA: float = 0.75
 
 # Used ONLY to rank the "fastest_estimated" route-finder alternative --

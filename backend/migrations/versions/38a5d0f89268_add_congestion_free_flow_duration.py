@@ -8,7 +8,9 @@ to trigger. This anchors it instead to the OSRM duration recorded once at
 seed time (a genuine free-driving estimate), stored per segment rather
 than recomputed from potentially-congested historical data.
 
-Nullable + backfilled from the existing min()-based value so rows seeded
+Nullable + backfilled from each seeded row's avg_duration_s -- which for
+seeded rows *is* the original OSRM free-driving estimate recorded at seed
+time, not an average of potentially-congested buckets -- so rows seeded
 before this migration (or never re-seeded) still resolve via the
 COALESCE fallback in queries.get_congestion_stats, rather than needing
 every row rewritten immediately.
