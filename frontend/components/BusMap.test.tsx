@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import type { RouteLeg, RouteSearchResult, RouteStopEntry, Stop } from "@/types/route";
 import { leafletState } from "@/test/leaflet-mock";
+import { getCongestionColor } from "@/lib/congestionColor";
 
 vi.mock("leaflet", async () => {
   const { createLeafletMock } = await import("@/test/leaflet-mock");
@@ -421,7 +422,9 @@ describe("BusMap", () => {
       );
 
       expect(leafletState.polylines).toHaveLength(1);
-      expect(leafletState.polylines[0].options.color).toBe("#EF4444"); // heavy
+      // Derived from the real gradient fn rather than a hardcoded hex, so
+      // this can't go stale again if the gradient stops are retuned.
+      expect(leafletState.polylines[0].options.color).toBe(getCongestionColor(2));
     });
   });
 });

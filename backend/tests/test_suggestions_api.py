@@ -55,13 +55,20 @@ def client():
 def _cleanup_suggestions():
     """Only this file creates suggestions/votes, so it's safe (and far
     simpler than tracking individual rows) to wipe the tables around every
-    test. Doesn't touch users/stops/routes -- their fixtures own those."""
+    test. Doesn't touch users/stops/routes -- their fixtures own those.
+
+    Mirrors the `client` fixture's no-DB handling: if the test itself was
+    skipped for lack of a live database, there's nothing to clean up, so
+    swallow the same OperationalError here instead of erroring at teardown.
+    """
     yield
     session = SessionLocal()
     try:
         session.execute(text("DELETE FROM suggestion_votes"))
         session.execute(text("DELETE FROM route_suggestions"))
         session.commit()
+    except OperationalError:
+        pass
     finally:
         session.close()
 
