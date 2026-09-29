@@ -1,0 +1,107 @@
+# Production overlay.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   make up-prod          (same thing, plus a pre-flight check)
+#
+# Using explicit `-f` flags means Compose ignores the auto-loaded
+# docker-compose.override.yml entirely, so the dev bind mount, the dev
+# port publishing, and uvicorn --reload are all absent without anyone
+# having to remember to delete a file. docker-compose.yml is already the
+# hardened baseline; this file only adds what is specific to running this
+# for real: TLS, and the settings that must be true of a production
+# process rather than of a laptop.
+
+services:
+  proxy:
+    # Replaces the plain-HTTP config with the TLS one. `/etc/nginx/certs`
+    # is a host directory you populate (certbot's output, or your CA's);
+    # nginx will refuse to start if the files aren't there, which is
+    # intended -- a half-configured TLS edge should fail loudly rather
+    # than serve plain HTTP to a production hostname.
+    volumes:
+      - ./deploy/nginx.https.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/proxy_params.conf:/etc/nginx/proxy_params.conf:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+      - ./deploy/certbot:/var/www/certbot:ro
+    ports:
+      # 80 stays open on purpose, and only for the ACME http-01
+      # challenge plus the redirect to HTTPS. Not optional: without it,
+      # `certbot renew` cannot renew unattended, and the certificate
+      # silently expires.
+      - "80:80"
+      - "443:443"
+    tmpfs:
+      - /var/cache/nginx:rw,noexec,nosuid,size=64m
+      - /var/run:rw,noexec,nosuid,size=1m
+      - /tmp:rw,noexec,nosuid,size=32m
+
+  backend:
+    # Replaces the image's plain CMD. Two flags, one purpose: teach
+    # uvicorn that the peer address it sees is the compose network, and
+    # that X-Forwarded-For from `proxy` is therefore worth believing.
+    # Without --forwarded-allow-ips uvicorn ignores the header, and
+    # TRUST_PROXY_HEADERS=true below would make the app trust a header
+    # that never arrives -- every request would appear to come from the
+    # proxy, and the per-IP rate limit would be one global bucket.
+    #
+    # 172.16.0.0/12 is RFC1918 space, which covers this compose bridge
+    # (observed as 172.18.x). Prefer a narrower value -- a single /32 --
+    # if the proxy has a fixed address, since this range also matches any
+    # other container on the same bridge. The safety property that matters
+    # is that the backend's own published ports stay closed, which is why
+    # this is only correct in the prod overlay.
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips=172.16.0.0/12
+    environment:
+      # This is the load-bearing line of the whole file. ENVIRONMENT is
+      # what makes backend/app/core/config.py run
+      # validate_production_settings() at startup, which refuses to boot
+      # on a weak JWT secret, a short/absent database password, wildcard
+      # CORS, an empty TRUSTED_HOSTS, the legacy shared admin key, or a
+      # missing shared rate-limit store. Set here rather than left to the
+      # operator's .env, because forgetting to set it disables every one
+      # of those refusals silently.
+      ENVIRONMENT: production
+      # Safe here, and only here: the base file publishes no backend port,
+      # so `proxy` is the sole path in and X-Forwarded-For cannot be
+      # forged by a client. This is the same precondition documented on
+      # TRUSTED_HOSTS/TRUST_PROXY_HEADERS in backend/app/core/config.py.
+      TRUST_PROXY_HEADERS: "true"
+      # Mirrors the flags in `command` above, for
+      # validate_production_settings() to read. That check is a substring
+      # test on this variable because it cannot inspect how uvicorn was
+      # actually launched; keeping the two in sync is the point. If you
+      # change one, change the other -- a mismatch means either the app
+      # trusts a header that is not being forwarded, or the process
+      # refuses to start.
+      UVICORN_ARGS: "--proxy-headers --forwarded-allow-ips=172.16.0.0/12"
+      # `:?` is the whole point of these two lines. Without it, an operator
+      # who forgot to set them gets a container that starts and then dies
+      # in validate_production_settings(), printing a list of complaints to
+      # a log nobody is watching yet. Compose substitutes the error into the
+      # command that failed, so the fix is named in the same breath as the
+      # failure. Development does not need either value -- it inherits the
+      # localhost CORS origins and empty trusted-host list from
+      # backend/.env, which is what a laptop wants.
+      #
+      # See .env.example for what production validation requires of each.
+      TRUSTED_HOSTS: "${PUBLIC_HOST:?set PUBLIC_HOST in .env to the hostname this deployment answers for}"
+      CORS_ORIGINS: "${PUBLIC_CORS_ORIGINS:?set PUBLIC_CORS_ORIGINS in .env to the exact https:// frontend origin}"
+    # Recreate the backend when its environment or command changes, so an
+    # edited .env actually takes effect instead of leaving a stale process
+    # running with the old values.
+    restart: unless-stopped
+
+  db:
+    # The application's own connection is the only thing that needs to
+    # reach this port, and it arrives over the compose network. Publish
+    # nothing.
+    expose:
+      - "5432"

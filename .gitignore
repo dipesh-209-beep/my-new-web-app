@@ -48,3 +48,13 @@ backup_*.sql
 *.sql.bak
 .rotated_admin_password.txt
 source_code_export.md
+
+# TLS material and ACME webroot. See deploy/certs/.gitkeep.
+deploy/certs/*
+deploy/certbot/*
+!deploy/certs/.gitkeep
+!deploy/certbot/.gitkeep
+
+# Database backups (scripts/backup.sh). Dumps can contain the whole
+# dataset and the admin_audit_log, so they are not version controlled.
+backups/
