@@ -132,7 +132,7 @@ export default function StopDetailPage() {
             </span>
           )}
           {stop.status !== "active" && (
-            <span className="rounded-full bg-accent-yellow/10 px-2 py-0.5 text-xs text-accent-yellow">
+            <span className="rounded-full bg-accent-yellow/10 px-2 py-0.5 text-xs text-accent-yellow-text">
               {stop.status}
             </span>
           )}

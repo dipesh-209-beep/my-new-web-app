@@ -197,7 +197,7 @@ export default function CreateStopForm({ token, onForbidden }: CreateStopFormPro
 
       {error && <InlineAlert variant="error">{error}</InlineAlert>}
       {createdStopId && (
-        <p className="rounded-md border border-accent-green/30 bg-accent-green/5 px-3 py-2 text-sm text-accent-green">
+        <p className="rounded-md border border-accent-green/30 bg-accent-green/5 px-3 py-2 text-sm text-accent-green-text">
           Created stop <span className="font-mono">{createdStopId}</span>
         </p>
       )}

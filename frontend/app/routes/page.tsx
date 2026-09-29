@@ -48,7 +48,7 @@ export default function RoutesPage() {
               href={`/routes/${encodeURIComponent(route.route_id)}`}
               className="flex items-center gap-3 px-4 py-3 hover:bg-surface"
             >
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-green/10 text-accent-green">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-green/10 text-accent-green-text">
                 <BusIcon size={15} />
               </span>
               <div className="min-w-0 flex-1">
@@ -63,7 +63,7 @@ export default function RoutesPage() {
                 </p>
               </div>
               {route.status !== "active" && (
-                <span className="shrink-0 rounded-full bg-accent-yellow/10 px-2 py-0.5 text-xs text-accent-yellow">
+                <span className="shrink-0 rounded-full bg-accent-yellow/10 px-2 py-0.5 text-xs text-accent-yellow-text">
                   {route.status}
                 </span>
               )}

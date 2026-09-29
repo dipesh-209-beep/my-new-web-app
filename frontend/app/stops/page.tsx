@@ -38,7 +38,7 @@ export default function StopsPage() {
       />
 
       {error && (
-        <InlineAlert variant="warning">Couldn&apos;t load the stop list from the server.</InlineAlert>
+        <InlineAlert variant="error">Couldn&apos;t load the stop list from the server.</InlineAlert>
       )}
 
       {loading && (
@@ -74,7 +74,7 @@ export default function StopsPage() {
                   </span>
                 )}
                 {stop.status !== "active" && (
-                  <span className="rounded-full bg-accent-yellow/10 px-2 py-0.5 text-xs text-accent-yellow">
+                  <span className="rounded-full bg-accent-yellow/10 px-2 py-0.5 text-xs text-accent-yellow-text">
                     {stop.status}
                   </span>
                 )}

@@ -230,7 +230,7 @@ export default function RouteResultPanel({
             <>
               <span className="text-3xl font-bold leading-none tracking-tight text-ink">{duration.value}</span>
               <span className="text-sm font-medium text-ink-secondary">{duration.unit}</span>
-              <span className="text-xs text-accent-yellow font-medium ml-1">(est.)</span>
+              <span className="text-xs text-accent-yellow-text font-medium ml-1">(est.)</span>
             </>
           ) : (
             <>

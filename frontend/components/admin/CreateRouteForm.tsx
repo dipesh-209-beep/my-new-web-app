@@ -205,7 +205,7 @@ export default function CreateRouteForm({
 
       {error && <InlineAlert variant="error">{error}</InlineAlert>}
       {createdRouteId && (
-        <p className="rounded-md border border-accent-green/30 bg-accent-green/5 px-3 py-2 text-sm text-accent-green">
+        <p className="rounded-md border border-accent-green/30 bg-accent-green/5 px-3 py-2 text-sm text-accent-green-text">
           Created route <span className="font-mono">{createdRouteId}</span> — attach its stops in
           the &quot;Route stops&quot; tab.
         </p>

@@ -297,13 +297,21 @@ export default function SuggestionBox({ targetType, targetId, currentStops }: Su
 
       {message && (
         <div className="mt-3">
-          <InlineAlert variant={message.kind === "success" ? "warning" : "error"}>{message.text}</InlineAlert>
+          {/* message.kind is already "success" | "error" -- map it straight
+              through. It used to be routed through "warning" for the success
+              case, which meant every successful vote and submission was
+              announced with role="alert" (assertive) and painted in the
+              warning palette. */}
+          <InlineAlert variant={message.kind}>{message.text}</InlineAlert>
         </div>
       )}
 
       {suggestionsError ? (
         <div className="mt-3">
-          <InlineAlert variant="warning" action={{ label: "Retry", onClick: reloadSuggestions }}>
+          {/* A failed load is an error, not a warning -- "warning" was only
+              ever chosen here because InlineAlert had no third state to put
+              a non-success message in. Now that it does, use the honest one. */}
+          <InlineAlert variant="error" action={{ label: "Retry", onClick: reloadSuggestions }}>
             {suggestionsError}
           </InlineAlert>
         </div>
@@ -338,7 +346,7 @@ export default function SuggestionBox({ targetType, targetId, currentStops }: Su
                   disabled={submitting || s.voted_by_me === true}
                   className={`shrink-0 rounded-md px-3 py-1 text-sm font-medium transition-colors ${
                     s.voted_by_me === true
-                      ? "border border-accent-green/40 bg-accent-green/10 text-accent-green"
+                      ? "border border-accent-green/40 bg-accent-green/10 text-accent-green-text"
                       : "border border-route-line text-ink-secondary hover:border-accent-green hover:text-accent-green"
                   } disabled:opacity-60`}
                 >

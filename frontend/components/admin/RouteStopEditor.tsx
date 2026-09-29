@@ -259,8 +259,8 @@ export default function RouteStopEditor({
           <span
             className={`rounded-full px-2.5 py-1 text-xs ${
               selectedRoute.status === "active"
-                ? "bg-accent-green/10 text-accent-green"
-                : "bg-accent-yellow/10 text-accent-yellow"
+                ? "bg-accent-green/10 text-accent-green-text"
+                : "bg-accent-yellow/10 text-accent-yellow-text"
             }`}
           >
             {selectedRoute.status}
@@ -349,7 +349,7 @@ export default function RouteStopEditor({
                       aria-label={`Remove "${label}"`}
                       disabled={busy}
                       onClick={() => handleRemove(entry)}
-                      className="rounded border border-accent-red/30 px-2 py-1 text-xs text-accent-red hover:bg-accent-red/5 disabled:opacity-30"
+                      className="rounded border border-accent-red/30 px-2 py-1 text-xs text-accent-red-text hover:bg-accent-red/5 disabled:opacity-30"
                     >
                       Remove
                     </button>
@@ -406,7 +406,7 @@ export default function RouteStopEditor({
 
       {error && <InlineAlert variant="error">{error}</InlineAlert>}
       {notice && (
-        <p className="rounded-md border border-accent-green/30 bg-accent-green/5 px-3 py-2 text-sm text-accent-green">
+        <p className="rounded-md border border-accent-green/30 bg-accent-green/5 px-3 py-2 text-sm text-accent-green-text">
           {notice}
         </p>
       )}

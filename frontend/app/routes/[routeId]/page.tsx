@@ -170,7 +170,7 @@ export default function RouteDetailPage() {
           <p className="text-sm text-ink-secondary">Operated by {route.operator.name}</p>
         )}
         {route.status !== "active" && (
-          <span className="mt-2 inline-block rounded-full bg-accent-yellow/10 px-2 py-0.5 text-xs text-accent-yellow">
+          <span className="mt-2 inline-block rounded-full bg-accent-yellow/10 px-2 py-0.5 text-xs text-accent-yellow-text">
             {route.status}
           </span>
         )}

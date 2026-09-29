@@ -1,6 +1,6 @@
 # Accessibility
 
-**Last reviewed: 2026-09-27**
+**Last reviewed: 2026-09-29**
 
 This is an honest assessment, not a conformance claim. **This application has
 not been audited against WCAG** and no conformance level (A, AA, or AAA) is
@@ -103,12 +103,24 @@ the plugin fixes the behaviour.
 
 ### 5. Not checked
 
-- **Colour contrast ratios.** No automated check, and the palette (marigold
-  focus ring, indigo/ink text, the five-stop congestion gradient) has not been
-  measured. The congestion ramp is a data visualisation and needs a
-  different check from body text — adjacent green/yellow/orange/red stops are
-  not required to contrast with each other, but the extremes are used as
-  text/background in places and should be measured.
+- **Colour contrast ratios.** Partially measured now, and partly fixed. The
+  text palette was measured against WCAG 1.4.3 (4.5:1 for normal text) and
+  1.4.11 (3:1 for non-text indicators); four failures were found and fixed:
+  the focus ring was `#E0A614` (2.18:1 on white, now `brand.dark` `#B9860B`
+  at 3.24:1), `ink.tertiary` was `#8D89A6` (3.35:1, now `#767194` at
+  4.61:1), and the green/yellow/red **status text** tokens failed on the
+  tinted backgrounds they sit on — as much as 2.66:1 — and now have
+  text-only variants in `accent.{green,yellow,red}-text` that clear 4.5:1
+  on both the `/5` and `/10` tints.
+
+  **What is still not measured:** the five-stop congestion ramp
+  (`lib/congestionColor.ts`) has not been checked at all. Adjacent
+  green/yellow/orange/red stops are not required to contrast with each
+  other, but the extremes are used as text/background in places and should
+  be measured. There is also no automated check — nothing in CI catches a
+  future palette regression — and the two remaining `#16A34A` links on
+  `/routes/[routeId]` ("← Back to all routes", on white) still sit at
+  3.30:1, as does the `hover:text-accent-green` on the breadcrumb link.
 - **Live regions** for asynchronous updates. Route search, geolocation and
   congestion fetches all resolve asynchronously; whether results are announced
   politely is unverified.

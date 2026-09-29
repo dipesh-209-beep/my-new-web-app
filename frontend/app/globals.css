@@ -16,9 +16,17 @@ body {
 /* One consistent focus ring app-wide instead of the browser default, which
    varies by element and is easy to lose track of against a light theme.
    Marigold here (not the functional blue) since focus is a brand/UI
-   signal, not a route-color signal. */
+   signal, not a route-color signal.
+
+   The shade is brand.dark (#B9860B), not brand.DEFAULT (#E0A614). The
+   lighter marigold is only 2.18:1 against the white page, which fails
+   WCAG 1.4.11 non-text contrast (3:1 required for a focus indicator);
+   brand.dark is 3.24:1 on the same white and is the same hue, so the
+   brand read is unchanged. Note components/route/RouteResultPanel.tsx
+   overrides this on the alternative-route buttons with an accent-purple
+   ring (5.70:1) -- that override is fine and left alone. */
 :focus-visible {
-  outline: 2px solid #e0a614;
+  outline: 2px solid #b9860b;
   outline-offset: 2px;
   border-radius: 2px;
 }

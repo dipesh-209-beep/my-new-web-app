@@ -39,13 +39,13 @@ export class ErrorBoundary extends Component<Props, State> {
           role="alert"
           className="flex flex-col gap-4 rounded-xl border border-accent-red/30 bg-accent-red/5 p-6 text-center"
         >
-          <TransferIcon size={48} className="mx-auto text-accent-red" />
+          <TransferIcon size={48} className="mx-auto text-accent-red-text" />
           <div>
-            <h2 className="text-lg font-semibold text-accent-red">Something went wrong</h2>
-            <p className="mt-2 text-sm text-accent-red">
+            <h2 className="text-lg font-semibold text-accent-red-text">Something went wrong</h2>
+            <p className="mt-2 text-sm text-accent-red-text">
               {this.state.error?.message ?? "An unexpected error occurred"}
             </p>
-            <details className="mt-4 text-left text-xs text-accent-red">
+            <details className="mt-4 text-left text-xs text-accent-red-text">
               <summary className="cursor-pointer">Error details</summary>
               <pre className="mt-2 p-3 bg-accent-red/10 rounded overflow-auto max-h-40">
                 {this.state.error?.stack}
