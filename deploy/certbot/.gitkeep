@@ -1,0 +1,3 @@
+ACME http-01 webroot, used by `certbot renew`. Mounted at
+/var/www/certbot and served by the port-80 server block in
+deploy/nginx.https.conf. Gitignored.

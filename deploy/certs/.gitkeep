@@ -1,0 +1,12 @@
+Place TLS material here (gitignored contents).
+
+docker-compose.prod.yml mounts this directory read-only at
+/etc/nginx/certs, and deploy/nginx.https.conf expects:
+
+    fullchain.pem   leaf + intermediate(s)
+    privkey.pem     private key, chmod 600
+
+Both are produced by certbot (see `make certs` and
+docs/deployment.md). They are gitignored: a private key in version
+control is a compromised key, and removing it from history afterwards
+does not undo the fact that it was published.
