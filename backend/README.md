@@ -48,14 +48,15 @@ cd ..
 docker compose up -d db
 cd backend
 
-# 2. Create your local env file
-cp .env.example .env
-# Defaults in .env.example match docker-compose.yml, so no edits needed
-# for local dev. If you change DB credentials in docker-compose.yml,
-# update .env to match.
-# ADMIN_API_KEY and JWT_SECRET_KEY have no defaults in the app itself --
-# generate real values for local dev:
-#   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+# 2. Create your local env file -- run `make env` from the repo root, do NOT
+#    `cp .env.example .env`. It generates real random values for
+#    ADMIN_API_KEY and JWT_SECRET_KEY, sets mode 600, and keeps the
+#    DATABASE_URL password in sync with the root .env's POSTGRES_PASSWORD.
+#    A copied template keeps its `change_me_in_production` placeholders, and
+#    the app refuses to start in production on a placeholder secret.
+#      cd .. && make env && cd backend
+#    To rotate a secret by hand:
+#      python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 
 # 3. Python environment
 python -m venv venv
@@ -92,22 +93,104 @@ uvicorn app.main:app --reload
 
 Backend runs at `http://localhost:8000` (interactive docs at `/docs`).
 
+## Authentication
+
+`app/core/security.py` resolves every request to a *principal*, and every
+guard checks that principal rather than a raw header. Three credential
+types:
+
+| Type | Header | For |
+|---|---|---|
+| Admin JWT | `Authorization: Bearer <token>` | Humans. From `POST /admin/login`. |
+| Service credential | `Authorization: SvcKey <key_id>.<secret>` | Unattended callers (ETL, scripts). |
+| Legacy shared key | `X-Admin-Api-Key: <key>` | Legacy local scripts only. |
+
+**The legacy shared key is off by default.** It is consulted only when
+`ALLOW_LEGACY_SHARED_ADMIN_KEY=true`, and `validate_production_settings()`
+refuses to start a production process that enables it — it grants the full
+permission set to anyone holding it, cannot be scoped to one caller, expires
+nothing, and shows up in the audit log only as "a holder of the shared key".
+`ADMIN_API_KEY` must still be a real, non-placeholder value even while the
+path is disabled, so the flag cannot be flipped into a working deployment
+later without also fixing a placeholder secret.
+
+**Service credentials** are minted by `POST /admin/service-credentials`
+(human admin only) and the plaintext secret is returned exactly once. Only a
+SHA-256 hash is stored. Each carries a subset of `stops:write`,
+`routes:write`, `route_stops:write`, `suggestions:review`, can have an
+expiry, records `last_used_at`, and is individually revocable
+(`DELETE /admin/service-credentials/{key_id}`, idempotent). A service
+credential may not create, list or revoke credentials — a leaked scoped key
+cannot escalate itself.
+
+Admin login is rate-limited **twice**: by `limit_req` in
+`deploy/nginx.conf` and by `app/core/rate_limit.py`. Both are needed — nginx
+bounds the request rate before it reaches Python, and the app limit is the
+only thing in place for direct backend access — but they are not the same
+limit, and assuming they are will produce confusing 429s.
+
+The two layers are **not** equivalent, and the effective limit depends on the
+path:
+
+| Path | Enforced limit |
+|---|---|
+| Through nginx | **3 attempts immediately, then one per 6 seconds.** nginx's token bucket refills 1 per 6s (`rate=10r/m`) and holds a `burst=2` allowance, so a client that fires requests back to back is cut off on its 4th. |
+| Direct to the backend | **10 requests per minute** (`app/core/rate_limit.py`). |
+
+Through the proxy the nginx bucket is strictly the tighter of the two, so the
+application's 10/minute counter is effectively never reached. That is a safe
+default — it is the *stricter* of the two, and it cannot be loosened by
+misconfiguring the app — but it has two consequences worth knowing before
+changing `burst`:
+
+- A legitimate admin who mistypes a password twice and submits a third time
+  quickly will be shown a 429 for six seconds. Annoying, not broken.
+- The `rate=10r/m` figure is the *sustained* rate, not the burst tolerance.
+  Anyone reading it as "10 tries then locked out" is wrong about the proxy
+  path.
+
+Raising `burst` loosens a brute-force control, so it is deliberately left at
+`2`. If you change it, treat it as a security decision, not a tuning knob.
+
+With no shared Redis the application-side counter is per-worker, which is why
+production requires `REDIS_URL`.
+
 ## Admin API
 
 Data-entry endpoints in `app/api/admin.py` (`POST /stops`, `POST /routes`,
 `POST /routes/{route_id}/stops`, `DELETE /routes/{route_id}/stops/{sequence_no}`,
 `PATCH /routes/{route_id}/stops/order`, `PATCH /routes/{route_id}/status`,
-`POST /graph/reload`) are behind `require_admin`, which accepts **either**
-of two credentials:
+`POST /graph/reload`) are behind `require_admin`, and require a specific
+permission:
 
-- **`X-Admin-Api-Key` header** (`ADMIN_API_KEY` in `.env`) — one shared
-  secret, for scripted/ETL callers.
-- **JWT via `POST /admin/login`** — authenticates an `AdminUser` account
-  (seeded with `python3 -m scripts.seed_admin`, see Setup step 6) and
-  returns a bearer token, attaching that specific admin to the request
-  for future per-admin authorization/audit use. Rate-limited to 5
-  requests/minute per IP (see `app/core/rate_limit.py`) -- expect a 429
-  if you're hammering this endpoint repeatedly while testing.
+| Permission | Grants |
+|---|---|
+| `stops:write` | `POST /stops` |
+| `routes:write` | `POST /routes` |
+| `route_stops:write` | add / remove / reorder a route's stops |
+| `suggestions:review` | review and apply public suggestions |
+| `routes:status` | `PATCH /routes/{route_id}/status` — **admin only** |
+| `graph:reload` | `POST /graph/reload` — **admin only** |
+
+### Auditing
+
+Every successful mutation writes an `admin_audit_log` row **in the same
+transaction as the change** (`app/core/admin_audit.py`), so an audit record
+cannot claim something that was later rolled back. Authentication failures
+and authorization denials are recorded too, on a separate best-effort
+connection so that auditing a rejected request cannot itself fail it.
+
+Credential secrets are redacted before an audit row is written. The
+`last_used_at` update on a service credential runs in its own transaction and
+logs rather than raises on failure, so a slow or full database cannot turn a
+successful request into an error.
+
+Two limitations to keep in mind: the log is application-level append-only,
+not tamper-proof against direct database writes; and a public vote being
+*automatically* applied to a suggestion is a `SystemActor` change that is
+deliberately not written to the audit log — only the manual review decision
+is.
+
 
 `stop_id`/`route_id` for newly created rows are server-generated, not
 caller-supplied: stops get the next sequential `S####` value, routes get
@@ -203,8 +286,22 @@ Diagnostics and regression coverage:
 ## Running tests
 
 ```bash
-pytest -v
+# From the repo root -- the supported path.
+make test
+
+# Or directly. This works with no environment overrides: backend/.env
+# already points at localhost with a password `make env` keeps in sync
+# with the root .env.
+cd backend && ./venv/bin/python -m pytest -v
 ```
+
+Use `./venv/bin/python`, not a bare `python3` or `pytest`: the system
+interpreter has none of the dependencies, and a bare `pytest` can pick up a
+different environment than the one you installed into. `make test-backend`
+additionally refuses to run against `ktm_bus_route_finder` — the database
+holding the real dataset — and uses the disposable `ktm_bus_sectest` instead,
+because the integration tests create and drop rows. Override with
+`TEST_DATABASE_URL` only deliberately.
 
 Some tests in `tests/` (e.g. `test_stops.py`) require a live database and will skip cleanly if one isn't reachable — make sure `docker compose up -d db` has been run first and migrations are applied, or those tests will just no-op.
 
@@ -218,7 +315,7 @@ stop-placement edge cases -- closed-loop / ring-road routes (Baneshwor stop
 tie breaks), snap-radius-constrained OSRM failures, and monotonic-cursor
 regressions -- so the fallback heuristics can't silently regress.
 
-`tests/test_admin_auth_api.py`, `tests/test_fare_api.py`, and `tests/test_admin_crud_api.py` cover the admin-auth login flow (success, wrong password, unknown username, timing-safe error parity, and the 5/minute rate limit actually tripping), `GET /fare` band matching (inclusive-min/exclusive-max boundaries, 404 with no covering band), and the admin data-entry endpoints (`POST /stops`, `POST /routes`, `POST /routes/{id}/stops`, `DELETE /routes/{id}/stops/{seq}`, `PATCH /routes/{id}/stops/order` — auth enforcement, 404s on unknown references, the 409 on duplicate `sequence_no`, resequencing stays contiguous, reorder accepts any `sequence_no` permutation, and `graph_meta.version` bumping). All three create and tear down their own fixtures, so they don't depend on the shipped dataset like `test_stops.py` does.
+`tests/test_admin_auth_api.py`, `tests/test_fare_api.py`, and `tests/test_admin_crud_api.py` cover the admin-auth login flow (success, wrong password, unknown username, timing-safe error parity, and the 10/minute rate limit actually tripping), `GET /fare` band matching (inclusive-min/exclusive-max boundaries, 404 with no covering band), and the admin data-entry endpoints (`POST /stops`, `POST /routes`, `POST /routes/{id}/stops`, `DELETE /routes/{id}/stops/{seq}`, `PATCH /routes/{id}/stops/order` — auth enforcement, 404s on unknown references, the 409 on duplicate `sequence_no`, resequencing stays contiguous, reorder accepts any `sequence_no` permutation, and `graph_meta.version` bumping). All three create and tear down their own fixtures, so they don't depend on the shipped dataset like `test_stops.py` does.
 
 `tests/test_stops_api.py`, `tests/test_route_finder_api.py`, and
 `tests/test_route_geometry_api.py` are DB-backed integration tests for

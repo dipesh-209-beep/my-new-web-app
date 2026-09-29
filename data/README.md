@@ -1,6 +1,13 @@
 # Data
 (schema, ingestion, cleaning, spatial queries, data access layer)
 
+> **Licensing:** the data here is mostly OpenStreetMap-derived and is
+> therefore **ODbL**, not the MIT that covers this project's code. The
+> obligations, the unverified items, and what a derived database obliges you
+> to do are in **[`LICENSING.md`](LICENSING.md)**. Per-file provenance is in
+> [`raw/README.md`](raw/README.md). Read at least the summary before
+> redistributing the dataset or hosting it publicly.
+
 ```
 data/
 ├── raw/          Original exports
@@ -101,9 +108,9 @@ data/
 | Table              | Row count |
 |--------------------|-----------|
 | `routes`           | 113       |
-| `stops`             | 376       |
+| `stops`             | 396       |
 | `operators`         | 29        |
-| `route_stops`       | 1,849     |
+| `route_stops`       | 1,901     |
 | `route_operators`   | 106       |
 | `fare_rules`        | 5         |
 

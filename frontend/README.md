@@ -43,6 +43,9 @@ npm test          # single run, used in CI
 npm run test:watch
 ```
 
+`npm run lint` also runs the `jsx-a11y` accessibility rules as errors — see
+[Accessibility](#accessibility).
+
 ## What's here
 
 ```
@@ -131,6 +134,18 @@ the app shell and stale-while-revalidates `/stops`, `/routes`, and
 network-only so a stale cached response can't show a wrong route. See
 `public/sw.js` for the full rationale, and `app/offline/page.tsx` for
 what an uncached navigation shows while offline.
+
+## Accessibility
+
+`npm run lint` enforces `jsx-a11y` rules **as errors**, not warnings — the
+autocomplete is a correct ARIA combobox, form controls are labelled with real
+markup, decorative icons are `aria-hidden`, there is a skip link as the first
+tab stop, and `prefers-reduced-motion` is honoured.
+
+This is **not** a WCAG conformance claim and no level is claimed. The known
+gaps — chiefly that Leaflet is not keyboard-operable, and that the congestion
+gradient has no legend — plus the manual checks still to do, are documented
+in [`ACCESSIBILITY.md`](ACCESSIBILITY.md). Read it before adding UI.
 
 ## Notes
 
