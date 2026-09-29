@@ -26,8 +26,10 @@ interface UseRouteBrowserResult {
   direction: RouteDirection;
   /** Switches direction for the currently visible route and reloads its
    * stops/geometry for that direction (cache-aware, race-guarded). A
-   * no-op if no route is currently visible. */
-  setDirection: (d: RouteDirection) => void;
+   * no-op if no route is currently visible. Resolves once the reload
+   * settles; rejects never -- a failed load clears visibleRouteId
+   * instead. Safe to call without awaiting, as the buttons do. */
+  setDirection: (d: RouteDirection) => Promise<void>;
   toggleVisible: (route: RouteSummary) => Promise<void>;
   /** Show a specific route's stops by ID without requiring it to be in
    * the currently loaded/paged list -- used for deep links like
@@ -205,9 +207,14 @@ export function useRouteBrowser(): UseRouteBrowserResult {
     // Reset direction to forward when switching routes
     setDirectionState("forward");
     loadGeometry(route.route_id, "forward");
-    await loadStops(route.route_id, "forward");
-    // supplementary feature -- a failed fetch here just leaves the stop
-    // list empty rather than erroring, same as before this was extracted.
+    const { ok } = await loadStops(route.route_id, "forward");
+    if (!ok) {
+      // Same undo as showRouteById: a route whose stops never loaded has
+      // nothing to show, and leaving it selected strands the panel on
+      // "Loading…" forever -- app/page.tsx gates that label on the stop
+      // list being non-empty, and a failed fetch leaves it empty.
+      setVisibleRouteId(null);
+    }
   }
 
   async function showRouteById(routeId: string) {
@@ -230,11 +237,15 @@ export function useRouteBrowser(): UseRouteBrowserResult {
   // Forward/Return UI state and left the map/timeline showing the other
   // direction's stops and geometry until something else (a re-toggle)
   // happened to refresh them.
-  function changeDirection(dir: RouteDirection) {
+  async function changeDirection(dir: RouteDirection) {
     setDirectionState(dir);
     if (!visibleRouteId) return;
     loadGeometry(visibleRouteId, dir);
-    loadStops(visibleRouteId, dir);
+    // Same undo as showRouteById/toggleVisible -- a direction flip that
+    // fails to load leaves the stop list empty, which reads as a permanent
+    // "Loading…", so drop the route instead.
+    const { ok } = await loadStops(visibleRouteId, dir);
+    if (!ok) setVisibleRouteId(null);
   }
 
   return {

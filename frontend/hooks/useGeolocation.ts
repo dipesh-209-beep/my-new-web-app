@@ -99,7 +99,6 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
         if (requestIdRef.current !== 0) setLocating(false);
       },
       (err) => {
-        if (requestIdRef.current === 0) return;
         let message: string;
         switch (err.code) {
           case err.PERMISSION_DENIED:
