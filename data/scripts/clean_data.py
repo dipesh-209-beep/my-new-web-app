@@ -467,6 +467,17 @@ def dedup_routes(
     if "is_bidirectional" not in routes.columns:
         routes["is_bidirectional"] = False
 
+    # osrm_distance_km is a runtime-enrichment column, not a source column:
+    # it is added by migration 9d3f1a7c2b4e and written later by the OSRM
+    # geometry pass (app/routing/osrm_client.py), never by the raw
+    # pipeline. import_data.py's COPY column list includes it, so the
+    # cleaned CSV has to carry the column or the import aborts with
+    # "missing data for column osrm_distance_km". Emitted as all-NULL
+    # rather than 0.0, because "no OSRM measurement yet" and "measured
+    # 0 km" are different facts and the nullable column says so.
+    if "osrm_distance_km" not in routes.columns:
+        routes["osrm_distance_km"] = pd.NA
+
     ordered = (
         route_stops
         .sort_values("sequence_no")

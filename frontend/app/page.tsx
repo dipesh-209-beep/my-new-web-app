@@ -178,7 +178,10 @@ const congestion = useCongestion();
   }
 
   return (
-    <main className="relative flex h-full w-full flex-col md:flex-row">
+    <main
+      id="main-content"
+      className="relative flex h-full w-full flex-col md:flex-row"
+    >
       {/* Mobile: full-screen map under the navbar, with the planner floating
           as a bottom sheet on top. Desktop: the classic two-column layout
           (planner column left, map fills the rest) -- see the suggested

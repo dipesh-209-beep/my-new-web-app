@@ -102,6 +102,46 @@ SANITY_CHECKS = [
 ]
 
 
+# Admin-created rows draw their ids from these sequences
+# (backend/app/db/id_generator.py). A fresh database runs migration
+# a1b2c3d4e5f6, which seeds them from whatever data existed at migration
+# time -- which, in the documented order (migrate, then import), is
+# nothing. COPY then loads S0001..S0396 with explicit primary keys and
+# does not move the sequence, so the next POST /stops draws S0001 and
+# dies on a primary-key collision. Re-syncing here is what makes
+# "migrate, import, then use the admin API" work in that order.
+#
+# The ids are text, so the numeric part is extracted with substring, and
+# the regex filter keeps a non-conforming id (an admin-created 'M000123'
+# route, or a malformed value) from aborting the cast.
+SEQUENCE_RESYNCS = [
+    ("stop_id_seq", "stops", "stop_id", "'^S[0-9]+$'"),
+    # routes is the interesting one: R-numbered ids come from OSM and are
+    # loaded by COPY, while admin-created routes use an M###### prefix on
+    # the *same* sequence (next_route_id), so the sequence has to clear the
+    # R-numbered maximum. The M-numbered rows were themselves drawn from
+    # this sequence, so they need no separate handling.
+    ("route_id_seq", "routes", "route_id", "'^R[0-9]+$'"),
+]
+
+
+def resync_id_sequences(cur) -> None:
+    """Advance each id sequence past the ids just loaded by COPY.
+
+    `is_called=true`, so the next nextval() returns max+1 rather than
+    max. An empty table leaves the sequence at 1, which is the state a
+    fresh database starts in.
+    """
+    for sequence, table, column, id_pattern in SEQUENCE_RESYNCS:
+        cur.execute(
+            f"SELECT COALESCE(MAX(substring({column} from 2)::int), 0) "
+            f"FROM {table} WHERE {column} ~ {id_pattern}"
+        )
+        max_n = cur.fetchone()[0]
+        cur.execute(f"SELECT setval('{sequence}', %s, true)", (max(max_n, 1),))
+        print(f"sequence {sequence}: next id will be {max(max_n, 1) + 1}")
+
+
 def resolve_database_url(cli_value: str | None) -> str:
     if cli_value:
         return cli_value
@@ -155,6 +195,8 @@ def main() -> None:
                         cur.copy_expert(copy_sql, f)
                     cur.execute(f"SELECT count(*) FROM {table}")
                     print(f"{table}: {cur.fetchone()[0]} rows ({csv_name})")
+
+                resync_id_sequences(cur)
 
                 print("\nsanity checks (every count should be 0):")
                 failed = False

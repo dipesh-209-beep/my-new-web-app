@@ -113,3 +113,31 @@ body {
 .leaflet-tooltip-right:before {
   border-top-color: #1b1a2e;
 }
+
+/* Respect a user's reduced-motion preference.
+   Nothing in this stylesheet animates unconditionally, but the app has
+   smooth sheet snapping and Leaflet's own zoom/pan easing, and those are
+   exactly the kind of large-viewport movement that triggers vestibular
+   symptoms. Overriding them at the end of the cascade means individual
+   components do not each have to remember to opt out.
+
+   Transitions are set to 0.01ms rather than 0 so that elements relying on
+   `transitionend` (Leaflet's fade, some sheet code) still fire their
+   handlers. Removing the transition entirely would leave anything waiting
+   on that event hanging forever. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Leaflet eases zoom/pan through its own transform transitions. */
+  .leaflet-fade-anim .leaflet-tile,
+  .leaflet-zoom-anim .leaflet-zoom-animated {
+    transition: none !important;
+  }
+}

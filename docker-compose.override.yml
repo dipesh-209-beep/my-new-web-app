@@ -1,12 +1,53 @@
 # Local-development overlay. Docker Compose auto-loads this file whenever it
 # exists, so `make up` / `docker compose up` (the day-to-day dev workflow)
-# get a hot-reloading backend.
+# get a hot-reloading backend AND the published ports a laptop needs.
+#
+# Everything in here is a deliberate *weakening* of docker-compose.yml, and
+# every item is here precisely so that the base file does not have to be
+# unsafe by default:
+#
+#   * published ports for db/redis/backend/osrm/osrm-foot
+#   * the ./backend bind mount, so editing code doesn't need a rebuild
+#   * uvicorn --reload
 #
 # The backend Dockerfile itself defaults to a STABLE uvicorn (no --reload).
 # Development overlays the reload flag here instead of baking it into the
 # image: running the image directly, or deploying with the override excluded
-# (`docker compose -f docker-compose.yml up -d`, or a prod overlay), gives a
-# normal, non-restarting process -- no reload churn from file writes.
+# (`docker compose -f docker-compose.yml up -d`, or with
+# docker-compose.prod.yml), gives a normal, non-restarting process -- no
+# reload churn from file writes.
+#
+# A deployment must NOT load this file. `docker compose -f a -f b` ignores
+# auto-loaded overrides entirely, so the commands in docker-compose.prod.yml
+# and the Makefile's `up-prod` target are safe even with this file present.
 services:
   backend:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      # localhost only, not "0.0.0.0:8000". Binding the whole interface
+      # publishes the unauthenticated dev API to the local network -- and
+      # on a laptop tethered to a hotspot, to everyone on the hotspot.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./backend:/app
+    # A bind-mounted source tree plus --reload means every file write under
+    # backend/ restarts the worker, and tmpfs /tmp is still wanted so
+    # `--reload`'s stat polling doesn't have to write through to the host.
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  osrm:
+    ports:
+      - "127.0.0.1:5000:5000"
+
+  osrm-foot:
+    ports:
+      - "127.0.0.1:5001:5000"

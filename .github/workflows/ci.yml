@@ -92,3 +92,90 @@ jobs:
           else
             echo "Frontend not yet scaffolded — skipping."
           fi
+
+  # ---------------------------------------------------------------------
+  # Secret scanning
+  #
+  # The repository holds a working admin JWT signing key, a database
+  # password and a Redis password at any moment during development -- all
+  # in gitignored files, and all of them harmless in CI because CI has no
+  # real deployment. What must never happen is one of them being committed.
+  #
+  # This job scans the *tracked* tree (a clean checkout, so it cannot see
+  # .env or backups/ even if they were somehow present on a runner) plus
+  # the full history, because a secret that was committed and later deleted
+  # is still a live credential and is the case most scanners miss.
+  #
+  # gitleaks is used rather than hand-rolled regexes: it maintains the rule
+  # set, and its allowlist mechanism makes an intentional exception a
+  # reviewable, greppable decision instead of a commented-out check.
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # fetch-depth 0 so the history scan has something to scan. Costs a
+          # little time on a large repo; this one is small.
+          fetch-depth: 0
+      - name: Scan the working tree and full history for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # Requires a GitHub token with security-events write on
+          # repositories where that is available. Without it gitleaks falls
+          # back to plain failure-on-findings, which is the behaviour we
+          # want by default: a finding fails the build either way.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Fail the job rather than only annotating, so a leaked key cannot
+          # be merged quietly.
+          fail-on-secrets-found: true
+          # Self-hosted or forked PRs get less token scope; scanning locally
+          # and reporting to the log is the correct behaviour there anyway.
+          report-format: sarif
+          report-path: gitleaks.sarif
+      - name: Confirm the env files are not tracked
+        run: |
+          # Belt and braces: gitleaks looks for secret *patterns*, and a
+          # committed .env that happened to contain only weak or
+          # placeholders would not match any of them. These two paths must
+          # never appear in the index.
+          for f in .env backend/.env; do
+            if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+              echo "::error file=$f::tracked env file contains real secrets; remove it from git"
+              exit 1
+            fi
+          done
+          # ...and the example templates must still be tracked, or the
+          # onboarding instructions point at nothing.
+          for f in .env.example backend/.env.example; do
+            git ls-files --error-unmatch "$f" >/dev/null 2>&1 || {
+              echo "::error file=$f::example template is not tracked"
+              exit 1
+            }
+          done
+      - name: Confirm TLS material and backups cannot be committed
+        run: |
+          # A private key matches no secret-scanner pattern reliably enough to
+          # rely on alone, and a pg_dump contains the whole dataset. Both are
+          # ignored today; this asserts it, because losing a .gitignore rule
+          # is silent -- nothing fails until someone runs `git add .` on a
+          # machine that happens to hold a real certificate.
+          set -e
+          for f in deploy/certs/privkey.pem deploy/certs/fullchain.pem \
+                   deploy/certs/live/example.com/privkey.pem \
+                   deploy/certbot/.well-known-acme-challenge/x \
+                   backups/dump.dump .env backend/.env; do
+            if ! git check-ignore -q "$f"; then
+              echo "::error file=$f::is NOT gitignored but holds secrets; add a .gitignore rule"
+              exit 1
+            fi
+          done
+          # The placeholders must remain addable, or the directories would
+          # not survive a fresh clone and `make certs` would write into a
+          # path the bind mount does not have.
+          for f in deploy/certs/.gitkeep deploy/certbot/.gitkeep; do
+            if git check-ignore -q "$f"; then
+              echo "::error file=$f::placeholder is gitignored; the directory will not survive a clone"
+              exit 1
+            fi
+          done
