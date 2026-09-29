@@ -12,7 +12,7 @@ from app.core.config import get_settings, validate_production_settings
 from app.core.rate_limit import limiter
 from app.core.request_context import request_context_middleware
 from app.db.session import SessionLocal
-from app.routing import graph_builder
+from app.routing import congestion_zones, graph_builder
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -51,6 +51,22 @@ async def lifespan(app: FastAPI):
         logger.exception("Failed to build routing graph at startup")
     finally:
         db.close()
+
+    # Load the geographic congestion zones at startup too, for the same
+    # reason as the graph: it is a file read that should either work or be
+    # reported now, not silently degrade on a user's first search.
+    #
+    # A missing file is a warning, not a startup failure -- the organic
+    # segment_congestion_stats signal still applies, and refusing to serve
+    # routes because one static CSV is absent would be a worse outcome
+    # than degraded congestion weighting. But it must never be silent:
+    # this exact degradation (the file simply not being in the image) went
+    # unnoticed for the lifetime of the containerised setup, because
+    # load_zones() returned an empty list and every ratio came back 1.0.
+    # The positive log line matters just as much -- "0 zones" is
+    # indistinguishable from "file loaded but empty" unless stated.
+    zones = congestion_zones.load_zones()
+    logger.info("Congestion zones loaded: %d", len(zones))
 
     yield
 

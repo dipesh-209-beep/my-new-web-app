@@ -23,13 +23,26 @@ observed ride durations per route) can't express that -- a zone can.
 """
 
 import csv
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from app.core.config import get_settings
 from app.routing.graph_builder import haversine_distance_m
 
-ZONES_PATH = Path(__file__).resolve().parents[3] / "data" / "congestion_zones.csv"
+logger = logging.getLogger(__name__)
+
+# Resolved through Settings rather than walked out of __file__ with a
+# fixed parents[N]. See CONGESTION_ZONES_PATH in app/core/config.py: the
+# default is right for a host run but the image cannot contain this file
+# (its build context is ./backend, which cannot reach data/ at the repo
+# root, and backend/.dockerignore excludes data/ regardless), so Compose
+# bind-mounts the CSV in and points this at the mount.
+#
+# Kept as a module-level name because tests monkeypatch it -- that is
+# deliberate, not an oversight; see tests/test_congestion_zones.py.
+ZONES_PATH = Path(get_settings().CONGESTION_ZONES_PATH)
 
 
 @dataclass(frozen=True)
@@ -66,13 +79,26 @@ _zones_cache: list[CongestionZone] | None = None
 
 def load_zones() -> list[CongestionZone]:
     """Loads data/congestion_zones.csv once per process. Safe to call
-    repeatedly -- cached after the first call."""
+    repeatedly -- cached after the first call.
+
+    A missing file degrades to "no zones" (every ratio 1.0, i.e. the
+    geographic half of the congestion model is a no-op and only the
+    organic segment_congestion_stats signal contributes) rather than
+    raising, so a fresh checkout that has not generated the file yet can
+    still serve routes. That degradation is exactly what hid this file
+    being absent from the container image, so the missing branch now
+    logs a warning naming the resolved path.
+    """
     global _zones_cache
     if _zones_cache is not None:
         return _zones_cache
 
     zones = []
-    if ZONES_PATH.exists():
+    # is_file(), not exists(): a misconfigured CONGESTION_ZONES_PATH can
+    # point at a directory (Path("") collapses to "."), and exists() would
+    # wave that through to open(), which then raises IsADirectoryError out
+    # of a function whose entire contract is to degrade rather than raise.
+    if ZONES_PATH.is_file():
         with open(ZONES_PATH, encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 score = float(row["score"])
@@ -86,6 +112,31 @@ def load_zones() -> list[CongestionZone]:
                         ratio=score_to_ratio(score),
                     )
                 )
+    elif ZONES_PATH.exists():
+        # Exists, but is not a readable file.
+        logger.warning(
+            "Congestion zones path %s exists but is not a file -- the "
+            "geographic congestion signal is disabled.",
+            ZONES_PATH,
+        )
+    else:
+        logger.warning(
+            "Congestion zones CSV not found at %s -- the geographic "
+            "congestion signal is disabled and only organic "
+            "segment_congestion_stats will affect routing weights. In "
+            "Docker this file must be bind-mounted into the backend "
+            "container and CONGESTION_ZONES_PATH set to the mount point; "
+            "on a host run it lives at the repo-root data/ directory. "
+            "The absence is cached for this process, so restarting is "
+            "required after adding the file.",
+            ZONES_PATH,
+        )
+    if not zones and ZONES_PATH.is_file():
+        # Distinguish "file absent" (warned above) from "file present but
+        # yielded nothing" -- the second usually means a truncated or
+        # header-only CSV, and silently loading zero zones from it is the
+        # same failure mode with a different cause.
+        logger.warning("Congestion zones CSV at %s contained no usable rows.", ZONES_PATH)
     _zones_cache = zones
     return zones
 

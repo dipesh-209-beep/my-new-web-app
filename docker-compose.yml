@@ -176,10 +176,29 @@ services:
       # failure mode is "rate limit keys on the proxy's address", not
       # "anyone can forge a fresh bucket per request".
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
+      # The geographic congestion-zone CSV is a *file* the app reads at
+      # runtime (app/routing/congestion_zones.py), not database data, and
+      # the image cannot contain it: the build context is ./backend, which
+      # cannot reach data/ at the repo root, and backend/.dockerignore
+      # excludes data/ regardless. So it is bind-mounted in (see `volumes:`
+      # below) and pointed at here -- the same pattern the osrm services
+      # use for their pre-built .osrm files. Without this the whole
+      # geographic half of the congestion model silently no-ops in every
+      # containerised deployment; load_zones() now logs a warning if the
+      # path is wrong, so a misconfiguration is visible rather than a
+      # feature that is mysteriously missing.
+      CONGESTION_ZONES_PATH: /app/data/congestion_zones.csv
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
     expose:
       - "8000"
+    volumes:
+      # Single file, not the whole data/ directory: this is the only file
+      # the app reads from data/ at runtime. Read-only, so a compromised
+      # process cannot rewrite the congestion model it routes on, and the
+      # host copy stays the single source of truth (it is tracked in git,
+      # so a fresh clone has it).
+      - ./data/congestion_zones.csv:/app/data/congestion_zones.csv:ro
     # No `ports:` and no bind mount. The image's baked-in code is what
     # runs, so a production host cannot change the app by editing a file.
     # (Development re-adds both in the override.)

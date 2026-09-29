@@ -244,6 +244,36 @@ class Settings(BaseSettings):
     # push a change through alone.
     AUTO_APPLY_VOTE_THRESHOLD: int = 26
 
+    # Path to the geographic congestion-zone CSV
+    # (app/routing/congestion_zones.py). This is a *file*, not database
+    # data, so it cannot come from the DB the way the organic
+    # segment_congestion_stats signal does.
+    #
+    # The default is the repo-root data/ directory, correct for a host
+    # run (uvicorn from backend/). It is WRONG inside the container: the
+    # image's build context is ./backend, which cannot reach data/ at the
+    # repo root, and backend/.dockerignore excludes data/ anyway. The
+    # container therefore needs data/congestion_zones.csv bind-mounted
+    # in (docker-compose.yml) and this variable pointed at the mount
+    # point -- the same pattern the osrm services use for their .osrm
+    # files. Compose sets it; a bare `docker run` of the image without it
+    # loads no zones, which load_zones() logs a warning about rather than
+    # failing silently.
+    #
+    # The original code walked up a fixed number of parent directories from
+    # congestion_zones.py, which resolved to a path that happened to exist
+    # on the host and to nothing at all in the image -- so the entire
+    # geographic half of the congestion model silently returned a ratio of
+    # 1.0 in every containerised deployment. See load_zones()'s warning
+    # branch and the test that pins the default to a real file.
+    #
+    # Blank is treated as unset (see the validator below), because an empty
+    # value in a .env would otherwise win over this default and resolve to
+    # Path("") == ".", a directory that exists but is not a file.
+    CONGESTION_ZONES_PATH: str = str(
+        Path(__file__).resolve().parents[3] / "data" / "congestion_zones.csv"
+    )
+
     # Congestion aggregates (app/api/congestion.py, db/queries.py) are
     # bucketed by (day_of_week, 3-hour hour_bucket), so the table is
     # inherently bounded -- there is no raw per-request log to grow.
@@ -265,6 +295,23 @@ class Settings(BaseSettings):
                 f"ENVIRONMENT must be one of {VALID_ENVIRONMENTS}, got {value!r}."
             )
         return normalised
+
+    @field_validator("CONGESTION_ZONES_PATH", mode="before")
+    @classmethod
+    def _blank_zones_path_falls_back_to_default(cls, value: object) -> object:
+        """Treat a blank CONGESTION_ZONES_PATH as unset rather than as a path.
+
+        `CONGESTION_ZONES_PATH=` in a .env is the natural way to write "I have
+        no opinion, use the default" -- and backend/.env.example is copied
+        verbatim into backend/.env by scripts/gen_backend_env.py, so a
+        commented-in blank line there would reach every developer. Left
+        alone, pydantic takes "" as an explicit value, Path("") becomes ".",
+        and load_zones() is handed a directory."""
+        if isinstance(value, str) and not value.strip():
+            return str(
+                Path(__file__).resolve().parents[3] / "data" / "congestion_zones.csv"
+            )
+        return value
 
     @property
     def is_production(self) -> bool:
