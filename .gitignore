@@ -58,3 +58,4 @@ deploy/certbot/*
 # Database backups (scripts/backup.sh). Dumps can contain the whole
 # dataset and the admin_audit_log, so they are not version controlled.
 backups/
+backend/data/
