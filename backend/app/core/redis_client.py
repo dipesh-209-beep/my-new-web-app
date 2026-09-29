@@ -19,7 +19,6 @@ doesn't hide connection errors, since "REDIS_URL is set but wrong" is a
 config bug worth surfacing, whereas "Redis blipped mid-request" is a
 runtime condition callers should degrade gracefully from.
 """
-import os
 from typing import Optional
 
 try:
@@ -47,7 +46,14 @@ def get_redis() -> Optional["redis.Redis"]:
         return _client
     _attempted = True
 
-    url = os.getenv("REDIS_URL")
+    # Through Settings, not os.getenv. pydantic loads backend/.env into the
+    # Settings object without putting it in os.environ, so a REDIS_URL
+    # written in backend/.env is invisible to os.getenv -- the app would
+    # quietly run with no shared cache and a per-worker rate limiter.
+    # See the REDIS_URL comment in app/core/config.py.
+    from app.core.config import get_settings
+
+    url = get_settings().REDIS_URL
     if not url or redis is None:
         return None
 

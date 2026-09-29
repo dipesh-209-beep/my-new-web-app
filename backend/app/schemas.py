@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
@@ -454,3 +455,112 @@ class SuggestionOut(BaseModel):
 class SuggestionAction(BaseModel):
     """Body for the admin review endpoint PATCH /admin/suggestions/{id}."""
     action: Literal["approve", "reject"]
+
+
+# ---------------------------------------------------------------------------
+# Service credentials (app/models/service_credential.py) and the admin
+# audit log. See app/api/service_credentials.py for the endpoints and
+# docs/security.md for the policy these encode.
+# ---------------------------------------------------------------------------
+
+
+class ServiceCredentialCreate(BaseModel):
+    """Request body for POST /admin/service-credentials.
+
+    `scopes` is an explicit list of permissions, validated against the
+    known permission set so a typo is a 422 rather than a credential
+    that silently can do nothing (or, worse, something unintended
+    later if a permission name is ever introduced). An empty list is
+    rejected: a credential with no purpose shouldn't exist.
+    """
+
+    name: str = Field(min_length=1, max_length=100)
+    scopes: list[str] = Field(min_length=1, max_length=10)
+    # Optional ISO-8601 expiry. Absent means "does not expire", which is
+    # a deliberate choice an operator has to make, not an accident.
+    expires_at: Optional[datetime] = None
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, value: list[str]) -> list[str]:
+        from app.core.security import ALL_PERMISSIONS
+
+        unknown = sorted(set(value) - ALL_PERMISSIONS)
+        if unknown:
+            raise ValueError(
+                f"unknown scope(s) {unknown}. Valid scopes: {sorted(ALL_PERMISSIONS)}."
+            )
+        # De-duplicate while preserving the operator's ordering, so
+        # creating the same credential twice doesn't produce a
+        # cosmetically different scope list.
+        seen: list[str] = []
+        for scope in value:
+            if scope not in seen:
+                seen.append(scope)
+        return seen
+
+
+class ServiceCredentialOut(BaseModel):
+    """A service credential as returned by the API.
+
+    Deliberately has no `key_hash` and no `key`: a listing endpoint is
+    the last place that should be one leak away from a usable secret.
+    `key` is present only on ServiceCredentialCreated (below), the one
+    response that carries the raw key, exactly once.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    key_id: str
+    name: str
+    scopes: list[str]
+    created_at: str
+    expires_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+    last_used_at: Optional[str] = None
+    # Convenience: whether this credential would currently authenticate.
+    active: bool = True
+
+
+class ServiceCredentialCreated(ServiceCredentialOut):
+    """Response to POST /admin/service-credentials.
+
+    `key` is the full "SvcKey <key_id>.<secret>" value. It is returned
+    by this one endpoint and is not recoverable afterwards -- the
+    database stores only a SHA-256 of the secret half. An operator who
+    loses it must create a new credential and revoke this one.
+    """
+
+    key: str
+
+
+class AdminAuditLogOut(BaseModel):
+    """One row from admin_audit_log, for the read-only audit endpoint.
+
+    `detail` is already scrubbed by app/core/admin_audit.py, so nothing
+    here needs redaction; the endpoint deliberately does not expose
+    `key_hash`-style internals because there are none in this table.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    actor_type: str
+    actor_id: Optional[str] = None
+    action: str
+    resource_type: str
+    resource_id: Optional[str] = None
+    success: bool
+    timestamp: str
+    request_id: Optional[str] = None
+    client_ip: Optional[str] = None
+    detail: Optional[dict] = None
+
+
+class AdminUserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    admin_id: int
+    username: str
+    role: str
+    created_at: str

@@ -6,6 +6,13 @@ DB is reachable.
 
 Fully self-contained: every stop/route this file creates is deleted in a
 fixture teardown, so it never depends on (or pollutes) the shipped dataset.
+
+Authentication: the shared `X-Admin-Api-Key` is disabled by default, so
+these tests use a scoped service credential carrying the editor permission
+set (the `admin_headers` fixture in tests/conftest.py). That is the same
+credential an ETL script would be given, and it means the whole file also
+exercises scope enforcement end to end -- every successful call here is a
+credential proving its scopes actually grant what it claims.
 """
 import uuid
 
@@ -15,12 +22,16 @@ from sqlalchemy.exc import OperationalError
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.core.config import Settings
+from app.core.security import PERM_STOPS_WRITE
 from app.db.session import SessionLocal
 from app.models import Route, RouteStop, Stop
 
-ADMIN_API_KEY = Settings().admin_api_key
-BAD_ADMIN_API_KEY = "definitely-not-the-real-key"
+# Kept only to assert the shared key is now inert. The real value is read
+# from settings so a test can never accidentally pass because it hardcoded
+# a stale key.
+from app.core.config import Settings
+
+LEGACY_SHARED_KEY = Settings().admin_api_key
 
 
 @pytest.fixture
@@ -35,12 +46,8 @@ def client():
     return TestClient(app)
 
 
-def _admin_headers():
-    return {"X-Admin-Api-Key": ADMIN_API_KEY}
-
-
 @pytest.fixture
-def two_stops(client):
+def two_stops(client, admin_headers):
     """Two throwaway stops via the real create_stop endpoint (also covers
     next_stop_id's S#### generation), deleted afterward."""
     created_ids = []
@@ -52,7 +59,7 @@ def two_stops(client):
                 "lat": 27.7,
                 "lng": 85.3,
             },
-            headers=_admin_headers(),
+            headers=admin_headers,
         )
         assert resp.status_code == 201, resp.text
         created_ids.append(resp.json()["stop_id"])
@@ -72,24 +79,93 @@ def two_stops(client):
 # --- POST /stops -----------------------------------------------------------
 
 
-def test_create_stop_requires_admin_key(client):
+def test_create_stop_requires_credentials(client):
     resp = client.post("/stops", json={"stop_name": "No Auth Stop", "lat": 27.7, "lng": 85.3})
-    assert resp.status_code in (401, 403, 422)
+    assert resp.status_code == 401
+    # A 401 must say what to do, or an integrator with only the docs to go
+    # on has no way to discover the supported schemes.
+    assert "SvcKey" in resp.json()["detail"]
 
 
-def test_create_stop_rejects_wrong_admin_key(client):
+def test_create_stop_rejects_legacy_shared_key(client):
+    """The shared X-Admin-Api-Key is disabled by default.
+
+    Previously this header alone was a full-access bearer token, so a
+    leaked .env or a key pasted into a CI log was equivalent to being an
+    admin. It now grants nothing unless ALLOW_LEGACY_SHARED_ADMIN_KEY is
+    deliberately turned on, and this test pins that default.
+    """
     resp = client.post(
         "/stops",
-        json={"stop_name": "Wrong Key Stop", "lat": 27.7, "lng": 85.3},
-        headers={"X-Admin-Api-Key": BAD_ADMIN_API_KEY},
+        json={"stop_name": "Legacy Key Stop", "lat": 27.7, "lng": 85.3},
+        headers={"X-Admin-Api-Key": LEGACY_SHARED_KEY},
     )
     assert resp.status_code == 401
 
 
-def test_create_stop_succeeds_and_assigns_sequential_id(client):
+def test_create_stop_rejects_malformed_service_key(client):
+    """A `SvcKey` header with no usable body is an auth failure, not
+    something to fall through and reinterpret as another scheme."""
+    resp = client.post(
+        "/stops",
+        json={"stop_name": "Malformed Key Stop", "lat": 27.7, "lng": 85.3},
+        headers={"Authorization": "SvcKey not-a-valid-key"},
+    )
+    assert resp.status_code == 401
+
+
+def test_create_stop_rejects_unknown_service_key(client, service_key_factory):
+    """A well-formed SvcKey naming a key that doesn't exist is refused."""
+    resp = client.post(
+        "/stops",
+        json={"stop_name": "Unknown Key Stop", "lat": 27.7, "lng": 85.3},
+        headers={"Authorization": service_key_factory(["stops:write"]).replace(".", ".wrong-secret")},
+    )
+    assert resp.status_code == 401
+
+
+def test_create_stop_refused_for_narrowly_scoped_credential(client, service_key_headers):
+    """Authenticated, but the credential wasn't scoped for this.
+
+    This is the 403 case, and the important property is that the refusal
+    happens *before* any row is written -- a 403 here must leave no stop
+    behind for the caller to discover later.
+    """
+    resp = client.post(
+        "/stops",
+        json={"stop_name": f"Out of Scope {uuid.uuid4().hex[:6]}", "lat": 27.7, "lng": 85.3},
+        headers=service_key_headers(["routes:write"]),
+    )
+    assert resp.status_code == 403
+    assert PERM_STOPS_WRITE in resp.json()["detail"]
+
+
+def test_create_stop_refused_for_editor_role_on_admin_only_permission(
+    client, editor_headers
+):
+    """The human-role path enforces the same permission vocabulary as the
+    service-credential path. An editor holds stops:write, so this passes;
+    see tests/test_admin_roles.py for the editor-refused cases."""
+    resp = client.post(
+        "/stops",
+        json={"stop_name": f"Editor Stop {uuid.uuid4().hex[:6]}", "lat": 27.7, "lng": 85.3},
+        headers=editor_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    session = SessionLocal()
+    try:
+        row = session.get(Stop, resp.json()["stop_id"])
+        if row is not None:
+            session.delete(row)
+            session.commit()
+    finally:
+        session.close()
+
+
+def test_create_stop_succeeds_and_assigns_sequential_id(client, admin_headers):
     name = f"Test Stop {uuid.uuid4().hex[:6]}"
     resp = client.post(
-        "/stops", json={"stop_name": name, "lat": 27.71, "lng": 85.32}, headers=_admin_headers()
+        "/stops", json={"stop_name": name, "lat": 27.71, "lng": 85.32}, headers=admin_headers
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
@@ -107,18 +183,18 @@ def test_create_stop_succeeds_and_assigns_sequential_id(client):
         session.close()
 
 
-def test_create_stop_rejects_out_of_range_latitude(client):
+def test_create_stop_rejects_out_of_range_latitude(client, admin_headers):
     resp = client.post(
         "/stops",
         json={"stop_name": "Bad Lat Stop", "lat": 999, "lng": 85.3},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 422
 
 
-def test_create_stop_rejects_empty_name(client):
+def test_create_stop_rejects_empty_name(client, admin_headers):
     resp = client.post(
-        "/stops", json={"stop_name": "   ", "lat": 27.7, "lng": 85.3}, headers=_admin_headers()
+        "/stops", json={"stop_name": "   ", "lat": 27.7, "lng": 85.3}, headers=admin_headers
     )
     assert resp.status_code == 422
 
@@ -126,7 +202,7 @@ def test_create_stop_rejects_empty_name(client):
 # --- POST /routes -----------------------------------------------------------
 
 
-def test_create_route_requires_admin_key(client, two_stops):
+def test_create_route_requires_credentials(client, two_stops):
     start, end = two_stops
     resp = client.post(
         "/routes",
@@ -138,10 +214,10 @@ def test_create_route_requires_admin_key(client, two_stops):
             "total_stops": 2,
         },
     )
-    assert resp.status_code in (401, 403, 422)
+    assert resp.status_code == 401
 
 
-def test_create_route_succeeds_with_valid_stops(client, two_stops):
+def test_create_route_succeeds_with_valid_stops(client, two_stops, admin_headers):
     start, end = two_stops
     name = f"Test Route {uuid.uuid4().hex[:6]}"
     resp = client.post(
@@ -153,7 +229,7 @@ def test_create_route_succeeds_with_valid_stops(client, two_stops):
             "end_stop_id": end,
             "total_stops": 2,
         },
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
@@ -167,7 +243,7 @@ def test_create_route_succeeds_with_valid_stops(client, two_stops):
     session.close()
 
 
-def test_create_route_404s_for_unknown_start_stop(client, two_stops):
+def test_create_route_404s_for_unknown_start_stop(client, two_stops, admin_headers):
     _, end = two_stops
     resp = client.post(
         "/routes",
@@ -178,12 +254,12 @@ def test_create_route_404s_for_unknown_start_stop(client, two_stops):
             "end_stop_id": end,
             "total_stops": 2,
         },
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 404
 
 
-def test_create_route_404s_for_unknown_end_stop(client, two_stops):
+def test_create_route_404s_for_unknown_end_stop(client, two_stops, admin_headers):
     start, _ = two_stops
     resp = client.post(
         "/routes",
@@ -194,7 +270,7 @@ def test_create_route_404s_for_unknown_end_stop(client, two_stops):
             "end_stop_id": "S_DOES_NOT_EXIST",
             "total_stops": 2,
         },
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 404
 
@@ -203,7 +279,7 @@ def test_create_route_404s_for_unknown_end_stop(client, two_stops):
 
 
 @pytest.fixture
-def route_with_no_stops(client, two_stops):
+def route_with_no_stops(client, two_stops, admin_headers):
     start, end = two_stops
     resp = client.post(
         "/routes",
@@ -214,7 +290,7 @@ def route_with_no_stops(client, two_stops):
             "end_stop_id": end,
             "total_stops": 0,
         },
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 201, resp.text
     route_id = resp.json()["route_id"]
@@ -226,7 +302,7 @@ def route_with_no_stops(client, two_stops):
     session.close()
 
 
-def test_add_route_stop_succeeds_and_bumps_graph_version(client, route_with_no_stops):
+def test_add_route_stop_succeeds_and_bumps_graph_version(client, route_with_no_stops, admin_headers):
     route_id, stop_id = route_with_no_stops
 
     session = SessionLocal()
@@ -236,7 +312,7 @@ def test_add_route_stop_succeeds_and_bumps_graph_version(client, route_with_no_s
     resp = client.post(
         f"/routes/{route_id}/stops",
         json={"stop_id": stop_id, "sequence_no": 1},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 201, resp.text
     assert resp.json() == {"route_id": route_id, "stop_id": stop_id, "sequence_no": 1}
@@ -251,39 +327,39 @@ def test_add_route_stop_succeeds_and_bumps_graph_version(client, route_with_no_s
     assert version_after > version_before, "add_route_stop must bump graph_meta.version so cached graphs refresh"
 
 
-def test_add_route_stop_404s_for_unknown_route(client, two_stops):
+def test_add_route_stop_404s_for_unknown_route(client, two_stops, admin_headers):
     start, _ = two_stops
     resp = client.post(
         "/routes/R_DOES_NOT_EXIST/stops",
         json={"stop_id": start, "sequence_no": 1},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 404
 
 
-def test_add_route_stop_404s_for_unknown_stop(client, route_with_no_stops):
+def test_add_route_stop_404s_for_unknown_stop(client, route_with_no_stops, admin_headers):
     route_id, _ = route_with_no_stops
     resp = client.post(
         f"/routes/{route_id}/stops",
         json={"stop_id": "S_DOES_NOT_EXIST", "sequence_no": 1},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 404
 
 
-def test_add_route_stop_409s_on_duplicate_sequence_no(client, route_with_no_stops):
+def test_add_route_stop_409s_on_duplicate_sequence_no(client, route_with_no_stops, admin_headers):
     route_id, stop_id = route_with_no_stops
     first = client.post(
         f"/routes/{route_id}/stops",
         json={"stop_id": stop_id, "sequence_no": 1},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert first.status_code == 201
 
     dup = client.post(
         f"/routes/{route_id}/stops",
         json={"stop_id": stop_id, "sequence_no": 1},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert dup.status_code == 409
 
@@ -292,13 +368,13 @@ def test_add_route_stop_409s_on_duplicate_sequence_no(client, route_with_no_stop
 
 
 @pytest.fixture
-def route_with_three_stops(client):
+def route_with_three_stops(client, admin_headers):
     """A route with 3 sequentially-linked stops (seq 1..3), deleted (including
     its route_stops) afterward. Yields (route_id, [stop_id, stop_id, stop_id])."""
     resp = client.post(
         "/stops",
         json={"stop_name": f"Seq Stop {uuid.uuid4().hex[:6]}", "lat": 27.7, "lng": 85.3},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 201
     stop_ids = [resp.json()["stop_id"]]
@@ -306,7 +382,7 @@ def route_with_three_stops(client):
         resp = client.post(
             "/stops",
             json={"stop_name": f"Seq Stop {uuid.uuid4().hex[:6]}", "lat": 27.71, "lng": 85.31},
-            headers=_admin_headers(),
+            headers=admin_headers,
         )
         assert resp.status_code == 201
         stop_ids.append(resp.json()["stop_id"])
@@ -320,7 +396,7 @@ def route_with_three_stops(client):
             "end_stop_id": stop_ids[2],
             "total_stops": 0,
         },
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 201
     route_id = resp.json()["route_id"]
@@ -328,7 +404,7 @@ def route_with_three_stops(client):
         resp = client.post(
             f"/routes/{route_id}/stops",
             json={"stop_id": sid, "sequence_no": seq},
-            headers=_admin_headers(),
+            headers=admin_headers,
         )
         assert resp.status_code == 201, resp.text
 
@@ -341,9 +417,9 @@ def route_with_three_stops(client):
     session.close()
 
 
-def test_remove_route_stop_succeeds_and_resequences(client, route_with_three_stops):
+def test_remove_route_stop_succeeds_and_resequences(client, route_with_three_stops, admin_headers):
     route_id, _ = route_with_three_stops
-    resp = client.delete(f"/routes/{route_id}/stops/2", headers=_admin_headers())
+    resp = client.delete(f"/routes/{route_id}/stops/2", headers=admin_headers)
     assert resp.status_code == 204, resp.text
 
     session = SessionLocal()
@@ -359,12 +435,12 @@ def test_remove_route_stop_succeeds_and_resequences(client, route_with_three_sto
     assert total == 2
 
 
-def test_remove_route_stop_bumps_graph_version(client, route_with_three_stops):
+def test_remove_route_stop_bumps_graph_version(client, route_with_three_stops, admin_headers):
     route_id, _ = route_with_three_stops
     session = SessionLocal()
     version_before = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
     session.close()
-    resp = client.delete(f"/routes/{route_id}/stops/1", headers=_admin_headers())
+    resp = client.delete(f"/routes/{route_id}/stops/1", headers=admin_headers)
     assert resp.status_code == 204
     session = SessionLocal()
     version_after = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
@@ -372,33 +448,33 @@ def test_remove_route_stop_bumps_graph_version(client, route_with_three_stops):
     assert version_after > version_before
 
 
-def test_remove_route_stop_404s_for_unknown_route(client, route_with_three_stops):
-    resp = client.delete("/routes/R_DOES_NOT_EXIST/stops/1", headers=_admin_headers())
+def test_remove_route_stop_404s_for_unknown_route(client, route_with_three_stops, admin_headers):
+    resp = client.delete("/routes/R_DOES_NOT_EXIST/stops/1", headers=admin_headers)
     assert resp.status_code == 404
 
 
-def test_remove_route_stop_404s_for_unknown_sequence(client, route_with_three_stops):
+def test_remove_route_stop_404s_for_unknown_sequence(client, route_with_three_stops, admin_headers):
     route_id, _ = route_with_three_stops
-    resp = client.delete(f"/routes/{route_id}/stops/99", headers=_admin_headers())
+    resp = client.delete(f"/routes/{route_id}/stops/99", headers=admin_headers)
     assert resp.status_code == 404
 
 
-def test_remove_route_stop_requires_admin_key(client, route_with_three_stops):
+def test_remove_route_stop_requires_credentials(client, route_with_three_stops):
     route_id, _ = route_with_three_stops
     resp = client.delete(f"/routes/{route_id}/stops/1")
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 401
 
 
 # --- PATCH /routes/{route_id}/stops/order ------------------------------------
 
 
-def test_reorder_route_stops_succeeds(client, route_with_three_stops):
+def test_reorder_route_stops_succeeds(client, route_with_three_stops, admin_headers):
     route_id, stop_ids = route_with_three_stops
     # New order: old seq 3 -> 1, old seq 1 -> 2, old seq 2 -> 3.
     resp = client.patch(
         f"/routes/{route_id}/stops/order",
         json={"sequence": [3, 1, 2]},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -418,33 +494,33 @@ def test_reorder_route_stops_succeeds(client, route_with_three_stops):
     ]
 
 
-def test_reorder_route_stops_rejects_non_permutation(client, route_with_three_stops):
+def test_reorder_route_stops_rejects_non_permutation(client, route_with_three_stops, admin_headers):
     route_id, _ = route_with_three_stops
     for bad_seq in ([1, 1, 1], [1, 2, 3, 4], [2]):
         resp = client.patch(
             f"/routes/{route_id}/stops/order",
             json={"sequence": bad_seq},
-            headers=_admin_headers(),
+            headers=admin_headers,
         )
         assert resp.status_code == 400, resp.text
 
 
-def test_reorder_route_stops_404s_for_unknown_route(client, route_with_three_stops):
+def test_reorder_route_stops_404s_for_unknown_route(client, route_with_three_stops, admin_headers):
     resp = client.patch(
         "/routes/R_DOES_NOT_EXIST/stops/order",
         json={"sequence": [1]},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 404
 
 
-def test_reorder_route_stops_requires_admin_key(client, route_with_three_stops):
+def test_reorder_route_stops_requires_credentials(client, route_with_three_stops):
     route_id, _ = route_with_three_stops
     resp = client.patch(f"/routes/{route_id}/stops/order", json={"sequence": [1, 2, 3]})
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 401
 
 
-def test_reorder_route_stops_bumps_graph_version(client, route_with_three_stops):
+def test_reorder_route_stops_bumps_graph_version(client, route_with_three_stops, admin_headers):
     route_id, _ = route_with_three_stops
     session = SessionLocal()
     version_before = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
@@ -452,7 +528,7 @@ def test_reorder_route_stops_bumps_graph_version(client, route_with_three_stops)
     resp = client.patch(
         f"/routes/{route_id}/stops/order",
         json={"sequence": [3, 2, 1]},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 200
     session = SessionLocal()
@@ -464,13 +540,13 @@ def test_reorder_route_stops_bumps_graph_version(client, route_with_three_stops)
 # --- PATCH /stops/{stop_id} (stop_name) --------------------------------------
 
 
-def test_update_stop_name_succeeds(client, two_stops):
+def test_update_stop_name_succeeds(client, two_stops, admin_headers):
     stop_id, _ = two_stops
     new_name = f"Renamed Stop {uuid.uuid4().hex[:6]}"
     resp = client.patch(
         f"/stops/{stop_id}",
         json={"stop_name": new_name},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["stop_name"] == new_name
@@ -483,32 +559,32 @@ def test_update_stop_name_succeeds(client, two_stops):
         session.close()
 
 
-def test_update_stop_name_404s_for_unknown_stop(client):
+def test_update_stop_name_404s_for_unknown_stop(client, admin_headers):
     resp = client.patch(
         "/stops/S_DOES_NOT_EXIST",
         json={"stop_name": "Nope"},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 404
 
 
-def test_update_stop_name_requires_admin_key(client, two_stops):
+def test_update_stop_name_requires_credentials(client, two_stops):
     stop_id, _ = two_stops
     resp = client.patch(f"/stops/{stop_id}", json={"stop_name": "No Auth Rename"})
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 401
 
 
-def test_update_stop_name_rejects_blank(client, two_stops):
+def test_update_stop_name_rejects_blank(client, two_stops, admin_headers):
     stop_id, _ = two_stops
     resp = client.patch(
         f"/stops/{stop_id}",
         json={"stop_name": "   "},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 422
 
 
-def test_update_stop_name_does_not_bump_graph_version(client, two_stops):
+def test_update_stop_name_does_not_bump_graph_version(client, two_stops, admin_headers):
     """A name-only change must not force a routing-graph rebuild -- the
     graph is keyed by stop_id and route-finder names come from the DB."""
     stop_id, _ = two_stops
@@ -518,7 +594,7 @@ def test_update_stop_name_does_not_bump_graph_version(client, two_stops):
     resp = client.patch(
         f"/stops/{stop_id}",
         json={"stop_name": f"Renamed Stop {uuid.uuid4().hex[:6]}"},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 200
     session = SessionLocal()
@@ -531,7 +607,7 @@ def test_update_stop_name_does_not_bump_graph_version(client, two_stops):
 
 
 @pytest.fixture
-def one_route(client, two_stops):
+def one_route(client, two_stops, admin_headers):
     start, end = two_stops
     resp = client.post(
         "/routes",
@@ -542,7 +618,7 @@ def one_route(client, two_stops):
             "end_stop_id": end,
             "total_stops": 2,
         },
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 201, resp.text
     route_id = resp.json()["route_id"]
@@ -553,13 +629,13 @@ def one_route(client, two_stops):
     session.close()
 
 
-def test_update_route_name_succeeds(client, one_route):
+def test_update_route_name_succeeds(client, one_route, admin_headers):
     route_id = one_route
     new_name = f"Renamed Route {uuid.uuid4().hex[:6]}"
     resp = client.patch(
         f"/routes/{route_id}",
         json={"route_name": new_name},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["route_name"] == new_name
@@ -572,32 +648,32 @@ def test_update_route_name_succeeds(client, one_route):
         session.close()
 
 
-def test_update_route_name_404s_for_unknown_route(client):
+def test_update_route_name_404s_for_unknown_route(client, admin_headers):
     resp = client.patch(
         "/routes/R_DOES_NOT_EXIST",
         json={"route_name": "Nope"},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 404
 
 
-def test_update_route_name_requires_admin_key(client, one_route):
+def test_update_route_name_requires_credentials(client, one_route):
     route_id = one_route
     resp = client.patch(f"/routes/{route_id}", json={"route_name": "No Auth Rename"})
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 401
 
 
-def test_update_route_name_rejects_blank(client, one_route):
+def test_update_route_name_rejects_blank(client, one_route, admin_headers):
     route_id = one_route
     resp = client.patch(
         f"/routes/{route_id}",
         json={"route_name": "   "},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 422
 
 
-def test_update_route_name_does_not_bump_graph_version(client, one_route):
+def test_update_route_name_does_not_bump_graph_version(client, one_route, admin_headers):
     route_id = one_route
     session = SessionLocal()
     version_before = session.execute(text("SELECT version FROM graph_meta WHERE id = 1")).scalar_one()
@@ -605,7 +681,7 @@ def test_update_route_name_does_not_bump_graph_version(client, one_route):
     resp = client.patch(
         f"/routes/{route_id}",
         json={"route_name": f"Renamed Route {uuid.uuid4().hex[:6]}"},
-        headers=_admin_headers(),
+        headers=admin_headers,
     )
     assert resp.status_code == 200
     session = SessionLocal()

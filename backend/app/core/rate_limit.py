@@ -4,52 +4,77 @@ Kept separate from main.py so route modules (e.g. app/api/admin_auth.py)
 can import `limiter` to decorate individual endpoints without creating a
 circular import with the FastAPI app itself.
 
-Storage backend: in-memory by default (slowapi/limits' "memory://"),
-same as before this module supported anything else. If REDIS_URL
-is set, the limiter counts requests in Redis instead, which is what
-actually makes "N/minute" mean N per minute across every worker process
-or replica -- with in-memory storage, each worker keeps its own count, so
-"5/minute" on 3 workers is really 15/minute in aggregate. See
-app/api/admin_auth.py's login rate limit, which this specifically matters
-for.
+Storage backend
+---------------
+Redis when `RATE_LIMIT_REDIS_URL` (or `REDIS_URL`) is set, otherwise
+slowapi/limits' in-memory "memory://".
 
-Uses REDIS_URL (same as response_cache) when available. A separate
-RATE_LIMIT_REDIS_URL can override if needed. If Redis is configured but
-unreachable, the limiter will fail -- this is intentional for a login
-endpoint where failing closed (denying requests) is safer than failing
-open.
+That in-memory fallback is fine for local development and pytest, and it
+is *deliberately not* the production configuration: with in-memory
+storage each worker process keeps its own count, so "5/minute" across 3
+workers is really 15/minute in aggregate, and across N replicas it is
+5xN -- a per-instance limit presented as a global one.
+validate_production_settings() (app/core/config.py) therefore refuses to
+start an ENVIRONMENT=production process that has no shared rate-limit
+store configured, so this cannot silently degrade in production.
+
+If Redis is configured but unreachable, limits' storage raises rather
+than falling back: for a login endpoint, failing closed (denying
+requests) is safer than failing open. That is deliberate, and it is why
+the redis service has a healthcheck and the backend depends on it.
+
+Client IP for the key
+---------------------
+Delegated to app.core.request_context.get_client_ip, which reads
+X-Forwarded-For only when TRUST_PROXY_HEADERS is on. Trusting those
+headers unconditionally -- the previous behaviour -- meant any client
+that could reach the backend directly could send a fresh
+X-Forwarded-For on every request and never hit its own limit.
 """
-import os
 
 from fastapi import Request
 from slowapi import Limiter
+from starlette.config import Config
+
+from .config import get_settings
+from .request_context import get_client_ip
 
 
 def _get_client_ip(request: Request) -> str:
-    """Extract client IP, respecting proxy headers when present.
-
-    Behind a reverse proxy (nginx, load balancer, CDN), the real client
-    IP is forwarded via X-Forwarded-For or X-Real-IP.  We use the first
-    (leftmost) value in X-Forwarded-For, falling back to X-Real-IP, then
-    to the direct peer address.  This prevents all requests from sharing
-    the same rate-limit bucket when the app sits behind a proxy.
-    """
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip.strip()
-    if request.client:
-        return request.client.host
-    return "unknown"
+    """Limiter key function: one bucket per real client, and only
+    proxy-aware when the deployment says the proxy is trustworthy."""
+    return get_client_ip(request)
 
 
-# Prefer REDIS_URL (shared with response cache), allow override via
-# RATE_LIMIT_REDIS_URL for explicit control.
-_rate_limit_redis_url = os.getenv("RATE_LIMIT_REDIS_URL") or os.getenv("REDIS_URL")
+# Read through Settings rather than os.getenv so there is exactly one
+# place that knows how a rate-limit store is chosen. RATE_LIMIT_REDIS_URL
+# wins over REDIS_URL (see Settings.rate_limit_redis_url).
+_rate_limit_redis_url = get_settings().rate_limit_redis_url
 
 limiter = Limiter(
     key_func=_get_client_ip,
     storage_uri=_rate_limit_redis_url or "memory://",
 )
+
+# slowapi builds a starlette Config that auto-detects a ".env" in the
+# current working directory and reads it. Two reasons to replace that
+# object with one that never touches the filesystem:
+#
+#  1. It duplicates configuration. Everything slowapi could read from
+#     .env is already in os.environ by way of pydantic Settings, and
+#     having a second, differently-sourced path to the same variables is
+#     how a value ends up honoured in one place and ignored in another --
+#     the same class of bug as the os.getenv("REDIS_URL") mistake fixed in
+#     config.py.
+#
+#  2. It was a hard startup failure in Docker. backend/.env is mode 0600
+#     and the backend service runs with `cap_drop: ALL`, which removes
+#     CAP_DAC_OVERRIDE, so the container's root process cannot read a file
+#     owned by the host user. slowapi's read raised PermissionError while
+#     this module was still being imported, taking the service down at
+#     health check and returning 504 through nginx for the entire stack.
+#
+# Config(env_file=None) still reads os.environ -- it just does not go
+# looking for a dotenv file, which is the behaviour the container and a
+# host run both want.
+limiter.app_config = Config(env_file=None)

@@ -1,27 +1,51 @@
 """Write endpoints for populating the network (data entry / ETL use).
 
-Every route here requires valid admin credentials (shared
-X-Admin-Api-Key header, or a per-admin bearer JWT from POST
-/admin/login) plus a role check on the JWT path -- see
-app/core/security.py's require_admin / require_role for the mechanism,
-and require_role's docstring there for the editor/admin role split.
-Each route below is gated to the narrowest role that still covers its
-actual blast radius:
+Every route here requires authentication (a per-admin bearer JWT from
+POST /admin/login, or a scoped service credential via
+`Authorization: SvcKey ...` -- see app/core/security.py) *and* an
+explicit permission check, wired in through
+`require_permissions(...)` as a route dependency. The single shared
+X-Admin-Api-Key header no longer grants anything: it is disabled by
+default and rejected outright in production (see
+ALLOW_LEGACY_SHARED_ADMIN_KEY in app/core/config.py); the supported way
+for automation is a scoped, revocable service credential created via
+POST /admin/service-credentials.
 
-  editor: create_stop, create_route, add_route_stop, remove_route_stop,
-    reorder_route_stops -- additive/structural dataset changes, easy to
-    undo if wrong (re-insert the row / restore the order).
-  admin:  update_route_status, reload_graph_cache -- these can
-    immediately change what /route-finder returns to real users.
+Each route is gated to the narrowest permission set that still covers
+its actual blast radius:
+
+  stops:write          POST/PATCH /stops
+  routes:write         POST/PATCH /routes
+  route_stops:write    POST/DELETE/PATCH .../stops[...], .../stops/order
+  routes:status        PATCH /routes/{id}/status
+  graph:reload         POST /graph/reload
+
+Those sets are what an `editor` AdminUser gets; an `admin` gets all of
+them (app/core/security.py::ROLE_PERMISSIONS). A service credential
+gets exactly the scopes it was minted with, so a data-import key cannot
+flip a route's status or reload the graph.
+
+Every mutation below also writes a row to admin_audit_log in the *same*
+transaction as the data change (app/core/admin_audit.py::record_audit),
+so the two commit or roll back together.
 """
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from app.core.admin_audit import record_audit
 from app.core.response_cache import invalidate as invalidate_cache
-from app.core.security import require_role, ROLE_ADMIN, ROLE_EDITOR
+from app.core.security import (
+    PERM_GRAPH_RELOAD,
+    PERM_ROUTES_STATUS,
+    PERM_ROUTES_WRITE,
+    PERM_ROUTE_STOPS_WRITE,
+    PERM_STOPS_WRITE,
+    Principal,
+    require_permissions,
+)
 from app.db.id_generator import next_route_id, next_stop_id
 from app.db.queries import apply_stop_sequence_change, bump_graph_version, sync_route_total_stops
 from app.db.session import get_db
@@ -45,11 +69,19 @@ from app.schemas import (
 
 router = APIRouter()
 
-# editor and admin can both do routine data entry; admin can additionally
-# do anything editor can, so it's listed on every gate below rather than
-# implying a role hierarchy the code would otherwise have to compute.
-_EDIT = Depends(require_role(ROLE_EDITOR, ROLE_ADMIN))
-_ADMIN_ONLY = Depends(require_role(ROLE_ADMIN))
+# No module-level gate constants here on purpose. A route's
+# `dependencies=[...]` list and its parameter dependencies are separate
+# FastAPI dependency instances, so putting a coarse check in the list
+# *and* a narrow one on the parameter makes the route require the union
+# of the two -- a credential scoped to just `stops:write` would be
+# refused by POST /stops for also lacking `routes:write`. Each route
+# therefore declares exactly one gate, as its `principal` parameter:
+#
+#     principal: Principal = Depends(require_permissions(PERM_STOPS_WRITE))
+#
+# which is both the authorization check and the handle the handler needs
+# to attribute its audit row. The role-to-permission mapping lives in
+# app/core/security.py (EDITOR_PERMISSIONS / ADMIN_ONLY_PERMISSIONS).
 
 # Re-keyed cache namespaces that a route_stops write can change (see the
 # individual endpoints for why each one matters):
@@ -64,10 +96,47 @@ _ADMIN_ONLY = Depends(require_role(ROLE_ADMIN))
 _ROUTE_STOP_CACHE_KEYS = ("routes", "route_detail", "route_stops", "route_geometry", "stops")
 
 
-@router.post("/stops", response_model=StopOut, status_code=status.HTTP_201_CREATED, dependencies=[_EDIT])
-def create_stop(payload: StopCreate, db: Session = Depends(get_db)) -> StopOut:
+def _audit(
+    db: Session,
+    request: Request,
+    principal: Principal,
+    *,
+    action: str,
+    resource_type: str,
+    resource_id: str | None,
+    detail: dict | None = None,
+) -> None:
+    """Stage an audit row for a successful mutation.
+
+    Staged (not committed) on purpose: the caller commits it together
+    with the data change a few lines later, so the two can't disagree.
+    """
+    record_audit(
+        db,
+        principal=principal,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        success=True,
+        request_id=getattr(request.state, "request_id", None),
+        client_ip=getattr(request.state, "client_ip", None),
+        detail=detail,
+    )
+
+
+@router.post("/stops", response_model=StopOut, status_code=status.HTTP_201_CREATED)
+def create_stop(
+    payload: StopCreate,
+    request: Request,
+    principal: Principal = Depends(require_permissions(PERM_STOPS_WRITE)),
+    db: Session = Depends(get_db),
+) -> StopOut:
+    # next_stop_id draws from a PostgreSQL sequence, so the id is known
+    # before the INSERT and the audit row can name the resource without
+    # a flush.
+    stop_id = next_stop_id(db)
     row = StopORM(
-        stop_id=next_stop_id(db),
+        stop_id=stop_id,
         stop_name=payload.stop_name,
         aliases=payload.aliases,
         lat=payload.lat,
@@ -87,14 +156,29 @@ def create_stop(payload: StopCreate, db: Session = Depends(get_db)) -> StopOut:
     # do not set it here.
     db.add(row)
     bump_graph_version(db)
+    _audit(
+        db,
+        request,
+        principal,
+        action="stop.create",
+        resource_type="stop",
+        resource_id=stop_id,
+        detail={"stop_name": payload.stop_name, "district": payload.district},
+    )
     db.commit()
     db.refresh(row)
     invalidate_cache("stops")
     return StopOut.model_validate(row)
 
 
-@router.patch("/stops/{stop_id}", response_model=StopOut, dependencies=[_EDIT])
-def update_stop_name(stop_id: str, payload: StopNameUpdate, db: Session = Depends(get_db)) -> StopOut:
+@router.patch("/stops/{stop_id}", response_model=StopOut)
+def update_stop_name(
+    stop_id: str,
+    payload: StopNameUpdate,
+    request: Request,
+    principal: Principal = Depends(require_permissions(PERM_STOPS_WRITE)),
+    db: Session = Depends(get_db),
+) -> StopOut:
     """Direct (editorial) stop-name correction -- the admin path for what
     public users can suggest via POST /suggestions (stop_name_change).
     Only touches stop_name; nothing else about the stop changes.
@@ -108,7 +192,17 @@ def update_stop_name(stop_id: str, payload: StopNameUpdate, db: Session = Depend
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Stop {stop_id} not found.")
 
+    previous_name = row.stop_name
     row.stop_name = payload.stop_name
+    _audit(
+        db,
+        request,
+        principal,
+        action="stop.update",
+        resource_type="stop",
+        resource_id=stop_id,
+        detail={"fields": ["stop_name"], "previous_stop_name": previous_name},
+    )
     db.commit()
     db.refresh(row)
     invalidate_cache("stops")
@@ -116,15 +210,21 @@ def update_stop_name(stop_id: str, payload: StopNameUpdate, db: Session = Depend
     return StopOut.model_validate(row)
 
 
-@router.post("/routes", response_model=RouteOut, status_code=status.HTTP_201_CREATED, dependencies=[_EDIT])
-def create_route(payload: RouteCreate, db: Session = Depends(get_db)) -> RouteOut:
+@router.post("/routes", response_model=RouteOut, status_code=status.HTTP_201_CREATED)
+def create_route(
+    payload: RouteCreate,
+    request: Request,
+    principal: Principal = Depends(require_permissions(PERM_ROUTES_WRITE)),
+    db: Session = Depends(get_db),
+) -> RouteOut:
     if db.get(StopORM, payload.start_stop_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Stop {payload.start_stop_id} not found.")
     if db.get(StopORM, payload.end_stop_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Stop {payload.end_stop_id} not found.")
 
+    route_id = next_route_id(db)
     row = RouteORM(
-        route_id=next_route_id(db),
+        route_id=route_id,
         route_name=payload.route_name,
         short_name=payload.short_name,
         vehicle_type=payload.vehicle_type,
@@ -140,14 +240,29 @@ def create_route(payload: RouteCreate, db: Session = Depends(get_db)) -> RouteOu
     )
     db.add(row)
     bump_graph_version(db)
+    _audit(
+        db,
+        request,
+        principal,
+        action="route.create",
+        resource_type="route",
+        resource_id=row.route_id,
+        detail={"route_name": payload.route_name, "vehicle_type": payload.vehicle_type},
+    )
     db.commit()
     db.refresh(row)
     invalidate_cache("routes")
     return RouteOut.model_validate(row)
 
 
-@router.patch("/routes/{route_id}", response_model=RouteOut, dependencies=[_EDIT])
-def update_route_name(route_id: str, payload: RouteNameUpdate, db: Session = Depends(get_db)) -> RouteOut:
+@router.patch("/routes/{route_id}", response_model=RouteOut)
+def update_route_name(
+    route_id: str,
+    payload: RouteNameUpdate,
+    request: Request,
+    principal: Principal = Depends(require_permissions(PERM_ROUTES_WRITE)),
+    db: Session = Depends(get_db),
+) -> RouteOut:
     """Direct (editorial) route-name correction -- the admin path for what
     public users can suggest via POST /suggestions (route_name_change).
     Only touches route_name; nothing else about the route changes.
@@ -161,7 +276,17 @@ def update_route_name(route_id: str, payload: RouteNameUpdate, db: Session = Dep
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Route {route_id} not found.")
 
+    previous_name = row.route_name
     row.route_name = payload.route_name
+    _audit(
+        db,
+        request,
+        principal,
+        action="route.update",
+        resource_type="route",
+        resource_id=route_id,
+        detail={"fields": ["route_name"], "previous_route_name": previous_name},
+    )
     db.commit()
     db.refresh(row)
     invalidate_cache("routes")
@@ -169,8 +294,14 @@ def update_route_name(route_id: str, payload: RouteNameUpdate, db: Session = Dep
     return RouteOut.model_validate(row)
 
 
-@router.post("/routes/{route_id}/stops", status_code=status.HTTP_201_CREATED, dependencies=[_EDIT])
-def add_route_stop(route_id: str, payload: RouteStopCreate, db: Session = Depends(get_db)) -> RouteStopRef:
+@router.post("/routes/{route_id}/stops", status_code=status.HTTP_201_CREATED)
+def add_route_stop(
+    route_id: str,
+    payload: RouteStopCreate,
+    request: Request,
+    principal: Principal = Depends(require_permissions(PERM_ROUTE_STOPS_WRITE)),
+    db: Session = Depends(get_db),
+) -> RouteStopRef:
     if db.get(RouteORM, route_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Route {route_id} not found.")
     if db.get(StopORM, payload.stop_id) is None:
@@ -198,6 +329,15 @@ def add_route_stop(route_id: str, payload: RouteStopCreate, db: Session = Depend
     try:
         bump_graph_version(db)
         sync_route_total_stops(db, route_id)
+        _audit(
+            db,
+            request,
+            principal,
+            action="route_stop.create",
+            resource_type="route_stop",
+            resource_id=f"{route_id}:{payload.sequence_no}",
+            detail={"stop_id": payload.stop_id, "sequence_no": payload.sequence_no},
+        )
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -212,8 +352,14 @@ def add_route_stop(route_id: str, payload: RouteStopCreate, db: Session = Depend
     return RouteStopRef(route_id=route_id, stop_id=payload.stop_id, sequence_no=payload.sequence_no)
 
 
-@router.delete("/routes/{route_id}/stops/{sequence_no}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_EDIT])
-def remove_route_stop(route_id: str, sequence_no: int, db: Session = Depends(get_db)) -> None:
+@router.delete("/routes/{route_id}/stops/{sequence_no}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_route_stop(
+    route_id: str,
+    sequence_no: int,
+    request: Request,
+    principal: Principal = Depends(require_permissions(PERM_ROUTE_STOPS_WRITE)),
+    db: Session = Depends(get_db),
+) -> None:
     """Remove one stop from a route and re-sequence the remaining entries
     so sequence_no stays contiguous (1..N). Only touches route_stops --
     the physical stop row is untouched."""
@@ -227,6 +373,7 @@ def remove_route_stop(route_id: str, sequence_no: int, db: Session = Depends(get
             detail=f"Route {route_id} has no stop at sequence_no {sequence_no}.",
         )
 
+    removed_stop_id = row.stop_id
     db.delete(row)
     # Flush the DELETE before resequencing: otherwise SQLAlchemy's queued
     # delete would run *after* the UPDATE below and match a different row
@@ -244,14 +391,29 @@ def remove_route_stop(route_id: str, sequence_no: int, db: Session = Depends(get
     )
     bump_graph_version(db)
     sync_route_total_stops(db, route_id)
+    _audit(
+        db,
+        request,
+        principal,
+        action="route_stop.delete",
+        resource_type="route_stop",
+        resource_id=f"{route_id}:{sequence_no}",
+        detail={"stop_id": removed_stop_id, "sequence_no": sequence_no, "resequenced": True},
+    )
     db.commit()
 
     for key in _ROUTE_STOP_CACHE_KEYS:
         invalidate_cache(key)
 
 
-@router.patch("/routes/{route_id}/stops/order", response_model=list[RouteStopRef], dependencies=[_EDIT])
-def reorder_route_stops(route_id: str, payload: RouteStopReorder, db: Session = Depends(get_db)) -> list[RouteStopRef]:
+@router.patch("/routes/{route_id}/stops/order", response_model=list[RouteStopRef])
+def reorder_route_stops(
+    route_id: str,
+    payload: RouteStopReorder,
+    request: Request,
+    principal: Principal = Depends(require_permissions(PERM_ROUTE_STOPS_WRITE)),
+    db: Session = Depends(get_db),
+) -> list[RouteStopRef]:
     """Reorder a route's stops in one call. The payload is the route's
     *current* sequence_no values arranged in the desired new order (a
     permutation of 1..N) -- see RouteStopReorder in app/schemas.py for
@@ -270,6 +432,15 @@ def reorder_route_stops(route_id: str, payload: RouteStopReorder, db: Session = 
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    _audit(
+        db,
+        request,
+        principal,
+        action="route_stop.reorder",
+        resource_type="route",
+        resource_id=route_id,
+        detail={"stop_count": len(rows), "new_sequence": list(payload.sequence)},
+    )
     db.commit()
 
     rows = sorted(rows, key=lambda row: row.sequence_no)
@@ -281,14 +452,31 @@ def reorder_route_stops(route_id: str, payload: RouteStopReorder, db: Session = 
         for row in rows
     ]
 
-@router.patch("/routes/{route_id}/status", response_model=RouteOut, dependencies=[_ADMIN_ONLY])
-def update_route_status(route_id: str, payload: RouteStatusUpdate, db: Session = Depends(get_db)) -> RouteOut:
+
+@router.patch("/routes/{route_id}/status", response_model=RouteOut)
+def update_route_status(
+    route_id: str,
+    payload: RouteStatusUpdate,
+    request: Request,
+    principal: Principal = Depends(require_permissions(PERM_ROUTES_STATUS)),
+    db: Session = Depends(get_db),
+) -> RouteOut:
     row = db.get(RouteORM, route_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Route {route_id} not found.")
 
+    previous_status = row.status
     row.status = payload.status
     bump_graph_version(db)
+    _audit(
+        db,
+        request,
+        principal,
+        action="route.status.update",
+        resource_type="route",
+        resource_id=route_id,
+        detail={"from": previous_status, "to": payload.status},
+    )
     db.commit()
     db.refresh(row)
 
@@ -305,13 +493,33 @@ def update_route_status(route_id: str, payload: RouteStatusUpdate, db: Session =
 
     return RouteOut.model_validate(row)
 
-@router.post("/graph/reload", status_code=status.HTTP_200_OK, dependencies=[_ADMIN_ONLY])
-def reload_graph_cache(db: Session = Depends(get_db)) -> dict:
+
+@router.post("/graph/reload", status_code=status.HTTP_200_OK)
+def reload_graph_cache(
+    request: Request,
+    principal: Principal = Depends(require_permissions(PERM_GRAPH_RELOAD)),
+    db: Session = Depends(get_db),
+) -> dict:
     """Rebuild the in-memory routing graph from the current DB state.
 
     Call this after adding stops/routes/route_stops -- the graph is
-    cached (see app/routing/graph_builder.py) so writes don't show up in
-    /route-finder until this runs.
+    cached (see app/routing/graph_builder.py) so writes don't show up
+    in /route-finder until this runs.
     """
     graph = get_cached_graph(db, refresh=True)
+    # Committed on its own: a graph rebuild changes no rows in the
+    # database, so there's no mutation to be atomic with, and the audit
+    # row should survive even if the caller disconnects mid-response.
+    record_audit(
+        db,
+        principal=principal,
+        action="graph.reload",
+        resource_type="graph",
+        resource_id=None,
+        success=True,
+        request_id=getattr(request.state, "request_id", None),
+        client_ip=getattr(request.state, "client_ip", None),
+        detail={"nodes": graph.number_of_nodes(), "edges": graph.number_of_edges()},
+    )
+    db.commit()
     return {"nodes": graph.number_of_nodes(), "edges": graph.number_of_edges()}

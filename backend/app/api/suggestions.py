@@ -30,15 +30,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.admin_audit import record_audit
 from app.core.config import get_settings
 from app.core.rate_limit import limiter
 from app.core.response_cache import invalidate as invalidate_cache
 from app.core.security import (
-    ROLE_ADMIN,
-    ROLE_EDITOR,
+    PERM_SUGGESTIONS_REVIEW,
+    Principal,
     get_current_user,
     get_current_user_optional,
-    require_role,
+    require_permissions,
 )
 from app.db.session import get_db
 from app.models import AdminUser, Route, RouteSuggestion, Stop, SuggestionVote, User
@@ -47,10 +48,16 @@ from app.services.suggestions import TargetMissingError, apply_suggestion
 
 router = APIRouter(tags=["suggestions"])
 
-# Same gate as admin.py's _EDIT (editor and admin both review suggestions;
-# other data-entry routes are gated narrowly there, review of a
-# crowd-sourced change is the same class of routine fix as create_stop).
-_EDIT = Depends(require_role(ROLE_EDITOR, ROLE_ADMIN))
+# Reviewing a crowd-sourced suggestion is the same class of routine data
+# fix as create_stop, so it carries the same single permission rather than
+# a role check: editor and admin both hold it, and a service credential
+# can be scoped to it if a moderation bot ever needs it. Note this is the
+# one admin path that is *not* admin-only -- rejecting a bad suggestion
+# is not something that should require the elevated role.
+# Expressed as a dependency factory, not a module-level Depends() object,
+# so each route can ask for it in its own signature. See the equivalent
+# note in app/api/admin.py for why there is no `dependencies=[...]` list
+# alongside it.
 
 # Namespaces a stop_sequence_change write touches (see admin.py for the
 # per-namespace rationale -- this mirrors its _ROUTE_STOP_CACHE_KEYS).
@@ -215,13 +222,24 @@ def list_suggestions(
     return [_suggestion_out(s, db, votes_user_id=votes_user_id) for s in rows]
 
 
-@router.get("/admin/suggestions", response_model=list[SuggestionOut], dependencies=[_EDIT])
+@router.get("/admin/suggestions", response_model=list[SuggestionOut])
 def admin_list_suggestions(
     suffix_status: str = Query("pending", alias="status"),
+    principal: Principal = Depends(require_permissions(PERM_SUGGESTIONS_REVIEW)),
     db: Session = Depends(get_db),
 ) -> list[SuggestionOut]:
     """Admin review queue, filterable by status ('pending' | 'approved' |
-    'rejected' | 'auto_applied')."""
+    'rejected' | 'auto_applied').
+
+    The gate is the `principal` parameter rather than a
+    `dependencies=[...]` list on the decorator: a decorator-level entry
+    and a parameter dependency are separate FastAPI dependency instances,
+    so using both made the route demand the union of the two, and using
+    only the decorator hid the check from the function signature --
+    which is exactly how this endpoint briefly ended up with no gate at
+    all. Keeping it in the signature means it cannot be dropped by
+    accident, and it fails closed at import if the symbol is renamed.
+    """
     allowed = {"pending", "approved", "rejected", "auto_applied"}
     if suffix_status not in allowed:
         raise HTTPException(status_code=422, detail=f"status must be one of {sorted(allowed)}.")
@@ -233,16 +251,24 @@ def admin_list_suggestions(
     return [_suggestion_out(s, db) for s in rows]
 
 
-@router.patch("/admin/suggestions/{suggestion_id}", response_model=SuggestionOut, dependencies=[_EDIT])
+@router.patch("/admin/suggestions/{suggestion_id}", response_model=SuggestionOut)
 def review_suggestion(
     suggestion_id: int,
     payload: SuggestionAction,
-    _admin: AdminUser | None = Depends(require_role(ROLE_EDITOR, ROLE_ADMIN)),
+    request: Request,
+    principal: Principal = Depends(require_permissions(PERM_SUGGESTIONS_REVIEW)),
     db: Session = Depends(get_db),
 ) -> SuggestionOut:
     """Approve (apply now, bypassing further votes) or reject a pending
     suggestion. Only 'pending' suggestions can be reviewed -- once a
-    suggestion auto-applies or is reviewed, further review is a 409."""
+    suggestion auto-applies or is reviewed, further review is a 409.
+
+    The permission gate is the `principal` parameter, which is both the
+    authorization check and what the handler needs in order to attribute
+    the review. FastAPI resolves the dependency before the handler body
+    runs, so a caller without suggestions:review is refused before any
+    row is read.
+    """
     suggestion = db.get(RouteSuggestion, suggestion_id)
     if suggestion is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Suggestion {suggestion_id} not found.")
@@ -252,8 +278,13 @@ def review_suggestion(
             detail=f"Suggestion is no longer pending (currently '{suggestion.status}').",
         )
 
-    suggestion.reviewed_by = _admin.admin_id if _admin is not None else None
+    # reviewed_by is a FK to admin_users, so a service credential (which
+    # has no admin account behind it) leaves it NULL. The audit row still
+    # records the credential's key_id, so the review is attributable even
+    # though this column can't be.
+    suggestion.reviewed_by = principal.admin_id
     suggestion.reviewed_at = datetime.now(timezone.utc)
+    previous_status = suggestion.status
 
     applied = False
     if payload.action == "approve":
@@ -267,6 +298,28 @@ def review_suggestion(
     else:
         suggestion.status = "rejected"
 
+    # Staged before the commit, so the status flip, the applied data
+    # change, and the record of who decided it are one atomic unit. A
+    # rollback for any reason above takes the audit row with it, which
+    # is correct: nothing was decided.
+    record_audit(
+        db,
+        principal=principal,
+        action=f"suggestion.{payload.action}",
+        resource_type="route_suggestion",
+        resource_id=str(suggestion.suggestion_id),
+        success=True,
+        request_id=getattr(request.state, "request_id", None),
+        client_ip=getattr(request.state, "client_ip", None),
+        detail={
+            "from": previous_status,
+            "to": suggestion.status,
+            "target_type": suggestion.target_type,
+            "target_id": suggestion.target_id,
+            "suggestion_type": suggestion.suggestion_type,
+            "applied": applied,
+        },
+    )
     db.commit()
     if applied:
         _invalidate_after_apply(suggestion)

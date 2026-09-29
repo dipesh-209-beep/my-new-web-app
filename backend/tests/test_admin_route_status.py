@@ -13,10 +13,8 @@ from sqlalchemy.exc import OperationalError
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.core.config import Settings
 from app.db.session import SessionLocal
 
-ADMIN_API_KEY = Settings().admin_api_key
 TEST_ROUTE_ID = "R2295986"
 ORIGIN_STOP = "S0018"
 ADJACENT_STOP = "S0069"
@@ -34,40 +32,55 @@ def client():
     return TestClient(app)
 
 
-def _set_status(client, route_id, new_status):
+def _set_status(client, route_id, new_status, headers):
     return client.patch(
         f"/routes/{route_id}/status",
         json={"status": new_status},
-        headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+        headers=headers,
     )
 
 
-def test_status_update_requires_admin_key(client):
-    # No X-Admin-Api-Key header sent. If require_admin_key declares the
-    # header via Header(...) with no default, FastAPI's own request
-    # validation rejects this with 422 before require_admin_key's function
-    # body ever runs (so the explicit 401 in that function is only reached
-    # once a header is present but wrong -- see the "unknown route" test
-    # below for that case). Either 401/403 (explicit rejection) or 422
-    # (missing-header validation) counts as "the request was not let
-    # through" for our purposes.
+def test_status_update_requires_credentials(client):
+    # No credential at all. The gate is a dependency, so this is a clean
+    # 401 -- not the 422 that the old `Header(...)` declaration produced
+    # when the header was simply absent.
     resp = client.patch(f"/routes/{TEST_ROUTE_ID}/status", json={"status": "active"})
-    assert resp.status_code in (401, 403, 422), (
-        f"Expected request to be rejected without an admin key, got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 401, resp.text
+
+
+def test_status_update_forbidden_for_editor(client, editor_headers):
+    """routes:status is admin-only. An editor is authenticated and still
+    refused, and the refusal must come before the route lookup -- an
+    editor shouldn't be able to probe which route_ids exist."""
+    resp = _set_status(client, TEST_ROUTE_ID, "active", editor_headers)
+    assert resp.status_code == 403
+    assert "routes:status" in resp.json()["detail"]
+
+
+def test_status_update_forbidden_for_credential_without_scope(
+    client, service_key_headers
+):
+    """A credential scoped for ordinary data entry still cannot flip a
+    route's status. This is the whole point of scopes: the old shared key
+    could do this, and so could any credential that inherited its
+    permissions."""
+    resp = _set_status(
+        client, TEST_ROUTE_ID, "active", service_key_headers(["routes:write"])
     )
+    assert resp.status_code == 403
 
 
-def test_status_update_rejects_unknown_route(client):
-    resp = _set_status(client, "R_DOES_NOT_EXIST", "active")
+def test_status_update_rejects_unknown_route(client, admin_headers):
+    resp = _set_status(client, "R_DOES_NOT_EXIST", "active", admin_headers)
     assert resp.status_code == 404
 
 
-def test_status_update_rejects_invalid_status_value(client):
-    resp = _set_status(client, TEST_ROUTE_ID, "not_a_real_status")
+def test_status_update_rejects_invalid_status_value(client, admin_headers):
+    resp = _set_status(client, TEST_ROUTE_ID, "not_a_real_status", admin_headers)
     assert resp.status_code == 422
 
 
-def test_status_flip_auto_invalidates_graph(client):
+def test_status_flip_auto_invalidates_graph(client, admin_headers):
     """
     Setting a route to pending_release must immediately remove it (and
     any stop only reachable via it) from the live routing graph, with no
@@ -75,7 +88,7 @@ def test_status_flip_auto_invalidates_graph(client):
     must restore routability. Always restores 'active' afterward.
     """
     try:
-        resp = _set_status(client, TEST_ROUTE_ID, "pending_release")
+        resp = _set_status(client, TEST_ROUTE_ID, "pending_release", admin_headers)
         assert resp.status_code == 200
         assert resp.json()["status"] == "pending_release"
 
@@ -86,7 +99,7 @@ def test_status_flip_auto_invalidates_graph(client):
             f"{ORIGIN_STOP} should be unroutable while {TEST_ROUTE_ID} is pending_release"
         )
 
-        resp = _set_status(client, TEST_ROUTE_ID, "active")
+        resp = _set_status(client, TEST_ROUTE_ID, "active", admin_headers)
         assert resp.status_code == 200
         assert resp.json()["status"] == "active"
 
@@ -98,4 +111,4 @@ def test_status_flip_auto_invalidates_graph(client):
         )
     finally:
         # Always leave the route active, regardless of assertion outcome above.
-        _set_status(client, TEST_ROUTE_ID, "active")
+        _set_status(client, TEST_ROUTE_ID, "active", admin_headers)

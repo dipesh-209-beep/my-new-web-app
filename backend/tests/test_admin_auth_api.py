@@ -11,6 +11,7 @@ import uuid
 
 import jwt
 import pytest
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from fastapi.testclient import TestClient
 
@@ -26,7 +27,7 @@ TEST_PASSWORD = "correct-horse-battery-staple"
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
-    """The 5/minute limit on POST /admin/login is keyed by remote address,
+    """The 10/minute limit on POST /admin/login is keyed by remote address,
     and TestClient requests all share the same address -- without this,
     earlier tests in this file would eat into the rate-limit test's
     budget (or vice versa). Reset slowapi's in-memory bucket around every
@@ -179,16 +180,103 @@ def test_garbage_bearer_token_rejected_by_admin_write_endpoint(client):
     assert resp.status_code == 401
 
 
-def test_login_rate_limited_after_five_attempts_per_minute(client, admin_user):
-    """@limiter.limit("5/minute") on POST /admin/login. slowapi keys by
-    remote address; TestClient requests all share the same address, so six
-    rapid requests should trip the limit on the sixth."""
+def test_login_rate_limited_after_ten_attempts_per_minute(client, admin_user):
+    """@limiter.limit("10/minute") on POST /admin/login. slowapi keys by
+    remote address; TestClient requests all share the same address, so
+    eleven rapid requests should trip the limit on the eleventh.
+
+    Raised from 5 to 10 deliberately. The old limit was tight enough to be
+    an operational hazard: a handful of admins behind one NAT address (a
+    shared office, a university VPN) share a single bucket, so a few
+    fat-fingered password entries could lock every one of them out of the
+    data-entry UI for the rest of the window. Ten still caps an online
+    attack at a few hundred guesses an hour per address, since each
+    attempt pays a full bcrypt verification, and it remains a *rate*
+    limit rather than a lockout: nothing is disabled permanently.
+    """
     statuses = []
-    for _ in range(6):
+    for _ in range(11):
         resp = client.post(
             "/admin/login", json={"username": admin_user, "password": "not-the-password"}
         )
         statuses.append(resp.status_code)
 
-    assert statuses[:5] == [401] * 5, f"Expected first 5 attempts to be plain 401s, got {statuses[:5]}"
-    assert statuses[5] == 429, f"Expected the 6th attempt within the same minute to be rate-limited, got {statuses[5]}"
+    assert statuses[:10] == [401] * 10, f"Expected first 10 attempts to be plain 401s, got {statuses[:10]}"
+    assert statuses[10] == 429, f"Expected the 11th attempt within the same minute to be rate-limited, got {statuses[10]}"
+
+
+def test_successful_login_is_audited(client, admin_user, audit_rows):
+    """A successful login is as much of an audit event as a failed one --
+    it is the only way to establish that a given account was used at a
+    given time from a given address."""
+    before_success = len(audit_rows("admin.login.success"))
+    before_failure = len(audit_rows("admin.login.failure"))
+    resp = client.post("/admin/login", json={"username": admin_user, "password": TEST_PASSWORD})
+    assert resp.status_code == 200, resp.text
+
+    successes = audit_rows("admin.login.success")
+    assert len(successes) == before_success + 1
+    row = successes[-1]
+    assert row.success is True
+    assert row.actor_type == "admin_user"
+    assert row.actor_id == admin_user
+    assert row.detail["role"] in ("admin", "editor")
+    # The password is never a candidate for the audit row at all.
+    assert TEST_PASSWORD not in str(row.detail)
+    # ...and neither is the token that was just issued.
+    assert resp.json()["access_token"] not in str(row.detail)
+
+
+def test_failed_login_is_audited_without_the_password(client, admin_user, audit_rows):
+    before = len(audit_rows("admin.login.failure"))
+    resp = client.post(
+        "/admin/login", json={"username": admin_user, "password": "wrong-password"}
+    )
+    assert resp.status_code == 401
+
+    rows = audit_rows("admin.login.failure")
+    assert len(rows) == before + 1
+    row = rows[-1]
+    assert row.success is False
+    # The attempted username is an identifier an operator needs; the
+    # submitted password is not recorded anywhere.
+    assert row.resource_id == admin_user
+    assert "wrong-password" not in str(row.detail)
+    assert row.detail["reason"] == "invalid_credentials"
+
+
+def test_unknown_username_is_indistinguishable_from_wrong_password(client, audit_rows):
+    """A distinct reply for "no such user" would let anyone enumerate
+    valid admin usernames, which is the first step of a credential
+    attack. Both paths must produce the same status and the same body."""
+    known = client.post("/admin/login", json={"username": "no-such-admin-xyz", "password": "x"})
+    unknown = client.post("/admin/login", json={"username": "no-such-admin-xyz", "password": "y"})
+    assert known.status_code == unknown.status_code == 401
+    assert known.json() == unknown.json()
+
+
+def test_login_audit_does_not_break_the_401(client, admin_user):
+    """A failure to write the audit row must not change the outcome the
+    caller was already going to get. Turning an auth failure into a 500
+    because of an audit-table problem would be a worse outcome, not a
+    safer one, so this asserts the 401 survives even with the audit table
+    made unwritable."""
+    session = SessionLocal()
+    try:
+        session.execute(text("ALTER TABLE admin_audit_log RENAME TO admin_audit_log_hidden"))
+        session.commit()
+    finally:
+        session.close()
+
+    try:
+        resp = client.post(
+            "/admin/login", json={"username": admin_user, "password": "not-the-password"}
+        )
+        assert resp.status_code == 401
+    finally:
+        session = SessionLocal()
+        try:
+            session.execute(text("ALTER TABLE admin_audit_log_hidden RENAME TO admin_audit_log"))
+            session.commit()
+        finally:
+            session.close()

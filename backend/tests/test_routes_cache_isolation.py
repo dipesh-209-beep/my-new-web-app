@@ -103,19 +103,20 @@ class TestRoutesCacheIsolation:
 class TestRoutesCacheWithRedis:
     """Test that cached responses work correctly with Redis (Bug 2 fix).
 
-    These tests require a live Redis at redis://localhost:6379/0.
+    These tests require a live Redis; see the `redis_url` fixture in
+        conftest.py.
     """
 
     @pytest.fixture(autouse=True)
-    def _require_redis(self, monkeypatch):
-        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    def _require_redis(self, monkeypatch, redis_url):
+        monkeypatch.setenv("REDIS_URL", redis_url)
         from app.core import redis_client
         redis_client._reset_for_tests()
         client = get_redis()
         try:
             client.ping()
         except redis_module.RedisError:
-            pytest.skip("No live Redis available at redis://localhost:6379/0")
+            pytest.skip(f"No live Redis available at {redis_url}")
         invalidate_all()
         yield
         invalidate_all()
@@ -169,15 +170,15 @@ class TestStopsCacheWithRedis:
     """Test that read_stop cached response works with Redis (defensive fix)."""
 
     @pytest.fixture(autouse=True)
-    def _require_redis(self, monkeypatch):
-        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    def _require_redis(self, monkeypatch, redis_url):
+        monkeypatch.setenv("REDIS_URL", redis_url)
         from app.core import redis_client
         redis_client._reset_for_tests()
         client = get_redis()
         try:
             client.ping()
         except redis_module.RedisError:
-            pytest.skip("No live Redis available at redis://localhost:6379/0")
+            pytest.skip(f"No live Redis available at {redis_url}")
         invalidate_all()
         yield
         invalidate_all()

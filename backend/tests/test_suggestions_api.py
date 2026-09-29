@@ -17,16 +17,11 @@ from sqlalchemy.exc import OperationalError
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 from app.core.rate_limit import limiter
 from app.db.session import SessionLocal
 
 TEST_PASSWORD = "correct-horse-battery-staple"
-# Read via the cached get_settings() rather than a fresh Settings() -- some
-# test modules os.environ.setdefault("ADMIN_API_KEY", "test-admin-key") at
-# import time, which would otherwise desync this constant from the key the
-# endpoints compare against at request time.
-ADMIN_API_KEY = get_settings().admin_api_key
 
 
 @pytest.fixture(autouse=True)
@@ -94,12 +89,12 @@ def two_users(client):
 
 
 @pytest.fixture
-def one_stop(client):
+def one_stop(client, review_headers, data_headers):
     """A throwaway stop via the real admin create endpoint, deleted after."""
     resp = client.post(
         "/stops",
         json={"stop_name": f"Suggestion Stop {uuid.uuid4().hex[:6]}", "lat": 27.7, "lng": 85.3},
-        headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+        headers=data_headers,
     )
     assert resp.status_code == 201, resp.text
     stop_id = resp.json()["stop_id"]
@@ -113,21 +108,21 @@ def one_stop(client):
 
 
 @pytest.fixture
-def one_route(client, one_stop):
+def one_route(client, one_stop, review_headers, data_headers):
     """A throwaway route with 3 linked stops, deleted (incl. route_stops)
     after. Yields (route_id, stop_ids)."""
     stop_ids = [one_stop]
     resp = client.post(
         "/stops",
         json={"stop_name": f"Suggestion Stop {uuid.uuid4().hex[:6]}", "lat": 27.71, "lng": 85.31},
-        headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+        headers=data_headers,
     )
     assert resp.status_code == 201, resp.text
     stop_ids.append(resp.json()["stop_id"])
     resp = client.post(
         "/stops",
         json={"stop_name": f"Suggestion Stop {uuid.uuid4().hex[:6]}", "lat": 27.72, "lng": 85.32},
-        headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+        headers=data_headers,
     )
     assert resp.status_code == 201, resp.text
     stop_ids.append(resp.json()["stop_id"])
@@ -141,7 +136,7 @@ def one_route(client, one_stop):
             "end_stop_id": stop_ids[2],
             "total_stops": 0,
         },
-        headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+        headers=data_headers,
     )
     assert resp.status_code == 201, resp.text
     route_id = resp.json()["route_id"]
@@ -149,7 +144,7 @@ def one_route(client, one_stop):
         resp = client.post(
             f"/routes/{route_id}/stops",
             json={"stop_id": sid, "sequence_no": seq},
-            headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+            headers=data_headers,
         )
         assert resp.status_code == 201, resp.text
 
@@ -182,9 +177,20 @@ def _stop_name_change(stop_id: str, name: str) -> dict:
 
 def test_submit_requires_user_auth(client, one_stop):
     """get_current_user uses HTTPBearer() (auto_error) so a missing
-    Authorization header is rejected by the bearer scheme itself -- 403."""
+    Authorization header is rejected by the bearer scheme itself, before
+    the handler runs.
+
+    The status was 403 with starlette 0.37 (FastAPI 0.111) and is 401 with
+    starlette >=1.0, which is what fixed PYSEC-2026-161 and made
+    HTTPBearer emit a proper `WWW-Authenticate: Bearer` challenge for a
+    *missing* credential. 401 is the semantically correct answer for "you
+    didn't authenticate" (403 is "you authenticated and aren't allowed
+    to"), so the newer behaviour is kept and asserted here rather than
+    pinned back to the older one.
+    """
     resp = client.post("/suggestions", json=_stop_name_change(one_stop, "Whatever"))
-    assert resp.status_code == 403
+    assert resp.status_code == 401
+    assert resp.headers.get("www-authenticate") == "Bearer"
 
 
 def test_submit_new_suggestion(client, two_users, one_stop):
@@ -292,21 +298,33 @@ def test_list_suggestions_marks_voted_by_me_with_auth(client, two_users, one_sto
 # --- GET /admin/suggestions -------------------------------------------------
 
 
-def test_admin_list_requires_admin_credentials(client, two_users, one_stop):
+def test_admin_list_requires_admin_credentials(
+    client, two_users, one_stop, review_headers, service_key_headers
+):
     payload = _stop_name_change(one_stop, f"Admin List {uuid.uuid4().hex[:4]}")
     assert client.post("/suggestions", json=payload, headers=_auth(two_users[0])).status_code == 201
     resp = client.get("/admin/suggestions")
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 401
 
-    resp = client.get("/admin/suggestions", headers={"X-Admin-Api-Key": ADMIN_API_KEY})
+    # Authenticated and able to edit the dataset, but not scoped to review:
+    # refused. `suggestions:review` is its own permission rather than a
+    # side effect of write access, so a data-import key -- which
+    # suggestions are supposed to be reconciled against -- need not be
+    # able to work the moderation queue. (The `data_headers` fixture
+    # carries the *whole* editor set, which does include review, so this
+    # case needs a deliberately narrower credential.)
+    stops_only = service_key_headers(["stops:write"])
+    assert client.get("/admin/suggestions", headers=stops_only).status_code == 403
+
+    resp = client.get("/admin/suggestions", headers=review_headers)
     assert resp.status_code == 200
     assert len(resp.json()) == 1
 
 
-def test_admin_list_filters_by_status(client, two_users, one_stop):
+def test_admin_list_filters_by_status(client, two_users, one_stop, review_headers, data_headers):
     resp = client.get(
         "/admin/suggestions?status=bogus",
-        headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+        headers=review_headers,
     )
     assert resp.status_code == 422
 
@@ -314,20 +332,24 @@ def test_admin_list_filters_by_status(client, two_users, one_stop):
 # --- PATCH /admin/suggestions/{id} ------------------------------------------
 
 
-def test_admin_approve_applies_stop_name_change(client, two_users, one_stop):
+def test_admin_approve_applies_stop_name_change(client, two_users, one_stop, review_headers, data_headers):
     new_name = f"Approved Name {uuid.uuid4().hex[:4]}"
     payload = _stop_name_change(one_stop, new_name)
     created = client.post("/suggestions", json=payload, headers=_auth(two_users[0])).json()
     resp = client.patch(
         f"/admin/suggestions/{created['suggestion_id']}",
         json={"action": "approve"},
-        headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+        headers=review_headers,
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "approved"
-    # The shared X-Admin-Api-Key carries no per-admin identity (see
-    # require_admin in security.py), so reviewed_by stays NULL on that path.
+    # reviewed_by is a FK to admin_users, so a *service credential*
+    # reviewing the suggestion leaves it NULL: a credential has no human
+    # account behind it. The review is still attributable -- the
+    # admin_audit_log row for it names the credential's key_id. A
+    # human reviewer's username does land in this column, which
+    # test_admin_review_with_login_token_records_reviewer covers.
     assert body["reviewed_by"] is None
     assert body["vote_count"] == 1
 
@@ -341,14 +363,14 @@ def test_admin_approve_applies_stop_name_change(client, two_users, one_stop):
         session.close()
 
 
-def test_admin_reject_leaves_data_unchanged(client, two_users, one_stop):
+def test_admin_reject_leaves_data_unchanged(client, two_users, one_stop, review_headers, data_headers):
     original_name = client.get(f"/stops/{one_stop}").json()["stop_name"]
     payload = _stop_name_change(one_stop, "Rejected Name")
     created = client.post("/suggestions", json=payload, headers=_auth(two_users[0])).json()
     resp = client.patch(
         f"/admin/suggestions/{created['suggestion_id']}",
         json={"action": "reject"},
-        headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+        headers=review_headers,
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "rejected"
@@ -363,27 +385,27 @@ def test_admin_reject_leaves_data_unchanged(client, two_users, one_stop):
         session.close()
 
 
-def test_admin_review_rejects_non_pending_suggestion(client, two_users, one_stop):
+def test_admin_review_rejects_non_pending_suggestion(client, two_users, one_stop, review_headers, data_headers):
     payload = _stop_name_change(one_stop, "Already Done")
     created = client.post("/suggestions", json=payload, headers=_auth(two_users[0])).json()
     assert client.patch(
         f"/admin/suggestions/{created['suggestion_id']}",
         json={"action": "approve"},
-        headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+        headers=review_headers,
     ).status_code == 200
     resp = client.patch(
         f"/admin/suggestions/{created['suggestion_id']}",
         json={"action": "reject"},
-        headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+        headers=review_headers,
     )
     assert resp.status_code == 409
 
 
-def test_admin_review_404s_for_unknown_suggestion(client):
+def test_admin_review_404s_for_unknown_suggestion(client, review_headers, data_headers):
     resp = client.patch(
         "/admin/suggestions/42424242",
         json={"action": "approve"},
-        headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+        headers=review_headers,
     )
     assert resp.status_code == 404
 
