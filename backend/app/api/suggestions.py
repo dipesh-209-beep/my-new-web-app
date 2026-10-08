@@ -27,7 +27,8 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.admin_audit import record_audit
@@ -164,8 +165,28 @@ def create_suggestion(
         ):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="You already voted for this suggestion.")
 
-        db.add(SuggestionVote(suggestion_id=existing.suggestion_id, user_id=user.user_id))
-        existing.vote_count += 1
+        try:
+            db.add(SuggestionVote(suggestion_id=existing.suggestion_id, user_id=user.user_id))
+            # Flush now so the partial unique index on (suggestion_id,
+            # user_id) surfaces a same-user double submission *here* as a
+            # conflict, not as a 500 IntegrityError at commit -- two
+            # concurrent identical votes can both pass the SELECT above.
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="You already voted for this suggestion.",
+            ) from exc
+        # Atomic increment in SQL, not `existing.vote_count += 1`: the
+        # read-modify-write loses updates when two users vote the same
+        # suggestion around the same instant (both read N, both write N+1).
+        db.execute(
+            update(RouteSuggestion)
+            .where(RouteSuggestion.suggestion_id == existing.suggestion_id)
+            .values(vote_count=RouteSuggestion.vote_count + 1)
+        )
+        db.refresh(existing)
         suggestion = existing
         response.status_code = status.HTTP_200_OK
     else:
@@ -179,10 +200,17 @@ def create_suggestion(
             status="pending",
             vote_count=1,
         )
-        db.add(suggestion)
-        db.flush()  # get suggestion_id for the author's implicit vote row
-        db.add(SuggestionVote(suggestion_id=suggestion.suggestion_id, user_id=user.user_id))
-        response.status_code = status.HTTP_201_CREATED
+        try:
+            db.add(suggestion)
+            db.flush()  # get suggestion_id for the author's implicit vote row
+            db.add(SuggestionVote(suggestion_id=suggestion.suggestion_id, user_id=user.user_id))
+            response.status_code = status.HTTP_201_CREATED
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This suggestion already exists or was submitted concurrently.",
+            ) from exc
 
     applied = False
     threshold = get_settings().AUTO_APPLY_VOTE_THRESHOLD

@@ -23,6 +23,26 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      # The response-cache and cache-isolation suites exercise the shared
+      # Redis tier (and the cache tests error -- not skip -- when no
+      # REDIS_URL is configured: get_settings() is cached at import, so a
+      # no-Redis CI env used to turn those tests into AttributeErrors).
+      # Production refuses to start without a shared Redis, so CI matching
+      # that shape is the test environment, not an extra. Mirrors
+      # docker-compose.yml's redis service, password and requirepass
+      # included, so a passing CI proves the authenticated-URL path.
+      redis:
+        image: redis:7-alpine
+        env:
+          REDIS_PASSWORD: ci-test-redis-pass
+        ports:
+          - 6379:6379
+        command: ["redis-server", "--requirepass", "ci-test-redis-pass"]
+        options: >-
+          --health-cmd "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: backend
@@ -30,12 +50,29 @@ jobs:
       ADMIN_API_KEY: ci-test-admin-key
       JWT_SECRET_KEY: ci-test-jwt-secret
       DATABASE_URL: postgresql://ktm_bus:ktm_bus_dev@localhost:5432/ktm_bus_route_finder
+      # The backend service above. read by get_settings() at import, so
+      # the cache tests line up against a real authenticated connection.
+      REDIS_URL: redis://:ci-test-redis-pass@localhost:6379/0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Dependency audit (Python)
+        # Scan installed dependencies in the actual CI environment.
+        # Dev-only advisories may be ignored with justification in future,
+        # but start by running the audit and letting the team decide policy;
+        # failing hard here would block PRs for non-runtime findings.
+        run: |
+          pip install pip-audit
+          pip-audit --ignore-vuln PYSEC-2026-1845 \
+                    --ignore-vuln PYSEC-2026-1795 \
+                    --ignore-vuln PYSEC-2026-1796 \
+                    --ignore-vuln PYSEC-2026-196 \
+                    --ignore-vuln PYSEC-2026-2875 \
+                    --ignore-vuln PYSEC-2026-2876 \
+                    --ignore-vuln PYSEC-2026-3721
       - run: alembic upgrade head
       - name: Load sample dataset (data/processed/*_clean.csv)
         # Several tests assert against real stop/route IDs from the
@@ -82,16 +119,14 @@ jobs:
           # Node >=22.14 or >=24 -- this used to be pinned to 20, which
           # predates that jsdom bump.
           node-version: "22"
-      - name: Install, lint, test, and build
-        run: |
-          if [ -f package.json ]; then
-            npm install
-            npm run lint
-            npm test
-            npm run build
-          else
-            echo "Frontend not yet scaffolded — skipping."
-          fi
+      - name: Install dependencies
+        run: npm install
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run build
 
   # ---------------------------------------------------------------------
   # Secret scanning
