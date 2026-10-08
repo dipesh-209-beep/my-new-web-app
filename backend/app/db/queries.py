@@ -34,6 +34,10 @@ def nearest_stops(
     point = cast(ST_SetSRID(ST_MakePoint(lng, lat), 4326), Geography)
     stmt = (
         select(Stop)
+        # Same status filtering as list_stops: a stop that has not been
+        # released (pending_release) or has been decommissioned must not
+        # surface in "nearby stops" -- the main listing hides it.
+        .where(Stop.status == "active")
         .where(ST_DWithin(Stop.geom, point, radius_m))
         .order_by(ST_Distance(Stop.geom, point))
         .limit(limit)

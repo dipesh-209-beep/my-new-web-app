@@ -32,7 +32,13 @@ class OperatorOut(BaseModel):
 
 
 class RouteOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    # populate_by_name: the field accepts its own name ("operator") as well
+    # as the validation_alias ("operator_ref"). GET /routes caches a
+    # RouteListOut whose items carry the nested "operator" key (the
+    # top-level rename in response_cache._json_dumps only applies to a bare
+    # RouteOut), and re-validating that stored JSON on a Redis cache hit
+    # would otherwise silently drop operator to None.
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     route_id: str
     route_name: str

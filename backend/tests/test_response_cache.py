@@ -6,12 +6,14 @@ The Redis-specific tests require a real Redis reachable at REDIS_URL (or
 localhost:6379 by default) -- skip cleanly if that's not available,
 same convention as this project's live-Postgres tests.
 """
+import json
+
 import pytest
 import redis as redis_module
 
 from app.core import redis_client
 from app.core.redis_client import get_redis
-from app.core.response_cache import cached_response, invalidate, invalidate_all
+from app.core.response_cache import _json_dumps, cached_response, invalidate, invalidate_all
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +66,46 @@ class TestWithoutRedis:
         invalidate("test_ns")
         expensive(x=1)
         assert call_count["n"] == 2
+
+
+class _RouteLike:
+    """Minimal stand-in for a Pydantic model with an operator field, matching
+    the RouteOut operator/operator_ref validation-alias shape."""
+
+    def __init__(self, route_id: str, operator: str):
+        self._route_id = route_id
+        self._operator = operator
+
+    def model_dump(self):
+        return {"route_id": self._route_id, "operator": self._operator}
+
+
+class TestJsonSerialization:
+    def test_bare_model_renames_top_level_operator(self):
+        dumped = _json_dumps(_RouteLike("R1", "op"))
+        assert json.loads(dumped) == {"route_id": "R1", "operator_ref": "op"}
+
+    def test_list_of_models_renames_operator_at_each_item(self):
+        dumped = _json_dumps([_RouteLike("R1", "a"), _RouteLike("R2", "b")])
+        assert json.loads(dumped) == [
+            {"route_id": "R1", "operator_ref": "a"},
+            {"route_id": "R2", "operator_ref": "b"},
+        ]
+
+    def test_list_of_non_route_models_serializes_to_plain_json(self):
+        # Regression for GET /routes/{id}/stops: its bare
+        # list[RouteStopOut[StopOut]] used to make json.dumps raise
+        # TypeError, which was silently swallowed and the namespace never
+        # reached Redis at all.
+        class _StopLike:
+            def __init__(self, stop_id):
+                self._stop_id = stop_id
+
+            def model_dump(self):
+                return {"stop_id": self._stop_id}
+
+        dumped = _json_dumps([_StopLike("S1"), _StopLike("S2")])
+        assert json.loads(dumped) == [{"stop_id": "S1"}, {"stop_id": "S2"}]
 
 
 class TestWithRedis:
@@ -128,6 +170,36 @@ class TestWithRedis:
 
         expensive(x=1)
         assert call_count["n"] == 1, "expected the Redis-side entry to serve this, not a recompute"
+
+    def test_healthy_redis_miss_recomputes_not_serves_stale_local_overlay(self):
+        """Cross-worker staleness regression: after ANOTHER worker's
+        invalidate() deletes the Redis key, this worker's still-fresh
+        in-memory overlay must NOT resurrect the stale copy. A healthy
+        Redis miss means recompute (and repopulate Redis) -- serving the
+        per-process overlay here is exactly the cross-worker staleness
+        the shared tier exists to prevent (worker A keeps returning a
+        value worker B already invalidated)."""
+        from app.core import response_cache
+
+        call_count = {"n": 0}
+        expensive = _make_counted_fn(call_count)
+        expensive(x=1)
+
+        client = get_redis()
+        keys = list(client.scan_iter(match="respcache:test_ns:*"))
+        assert len(keys) == 1
+
+        # Simulate the OTHER worker's invalidate(): shared Redis entry goes,
+        # this worker's in-memory overlay is still warm (it has no way of
+        # knowing about worker B).
+        client.delete(keys[0])
+        assert response_cache._store.get("test_ns"), "precondition: local overlay still warm"
+
+        expensive(x=1)
+        assert call_count["n"] == 2, "healthy-Redis miss must recompute, not serve the stale overlay"
+
+        keys = list(client.scan_iter(match="respcache:test_ns:*"))
+        assert len(keys) == 1, "the recompute must repopulate the shared Redis tier"
 
 
 class TestRedisConfiguredButUnreachable:

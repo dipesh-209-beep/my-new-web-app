@@ -212,6 +212,21 @@ class Settings(BaseSettings):
     # directly (no proxy in front, so the header is attacker-controlled).
     TRUST_PROXY_HEADERS: bool = False
 
+    # OSRM endpoint bases for road-geometry enrichment. Optional: the
+    # backend serves road_geometry: null without them.
+    #
+    # Settings fields (not os.getenv) on purpose -- see AGENTS.md gotcha
+    # #12: osrm_client.py used to read os.environ at import time, which
+    # silently ignored a value set in backend/.env (pydantic loads the
+    # file into Settings without copying it into os.environ). Reading
+    # through Settings honours both the container's process env (set by
+    # docker-compose.yml) and a host-dev backend/.env value, with the
+    # process env taking precedence.
+    osrm_base_url: str = "http://localhost:5000"
+    # Walking profile defaults to the driving URL when unset, mirroring
+    # the historical osrm_client.py fallback.
+    osrm_foot_base_url: str | None = None
+
     # Shared secret for the legacy X-Admin-Api-Key header. See
     # ALLOW_LEGACY_SHARED_ADMIN_KEY below -- this value is *only* ever
     # consulted when that flag is on. Still has no default so a missing

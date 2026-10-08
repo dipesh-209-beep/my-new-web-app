@@ -6,9 +6,17 @@ from typing import Optional
 
 import httpx
 
+from app.core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
-OSRM_BASE_URL = os.environ.get("OSRM_BASE_URL", "http://localhost:5000")
+# Read through Settings, not os.environ (see AGENTS.md gotcha #12): a
+# value set in backend/.env must be honoured on a host dev run, and the
+# container's process env (docker-compose.yml) takes precedence under
+# pydantic-settings. These module-level constants are read once at import,
+# matching the previous os.environ behaviour.
+_settings = get_settings()
+OSRM_BASE_URL = _settings.osrm_base_url
 
 # A single osrm-routed process only serves whichever profile its .osrm file
 # was extracted with (see backend/README.md: nepal-latest.osrm is extracted
@@ -16,7 +24,7 @@ OSRM_BASE_URL = os.environ.get("OSRM_BASE_URL", "http://localhost:5000")
 # extracted with foot.lua, so it gets its own base URL/port rather than
 # reusing OSRM_BASE_URL. Falls back to OSRM_BASE_URL if unset so this
 # doesn't break setups that haven't added the foot instance yet.
-OSRM_FOOT_BASE_URL = os.environ.get("OSRM_FOOT_BASE_URL", OSRM_BASE_URL)
+OSRM_FOOT_BASE_URL = _settings.osrm_foot_base_url or OSRM_BASE_URL
 
 _PROFILE_BASE_URLS = {
     "foot": OSRM_FOOT_BASE_URL,
@@ -266,7 +274,12 @@ def get_route_geometry(
             last_exc = exc
             last_response = exc.response
             if not _should_retry(exc, exc.response):
-                _circuit_breaker.record_failure(profile)
+                # A non-retryable status is a *client* problem (bad
+                # coordinates, malformed request, 4xx) or a hard 5xx. Either
+                # way it must not open the circuit breaker: recording these
+                # as failures would let a burst of bad requests trip the
+                # breaker and take down road geometry for *everyone*
+                # -- including requests that would have succeeded.
                 raise OSRMError(f"OSRM returned HTTP {exc.response.status_code}") from exc
             logger.warning("OSRM %s attempt %d failed (HTTP %d), retrying: %s", profile, attempt + 1, exc.response.status_code, exc)
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:

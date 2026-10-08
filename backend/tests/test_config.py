@@ -128,6 +128,34 @@ def test_no_redis_url_means_no_shared_store():
     assert settings.rate_limit_redis_url is None
 
 
+def test_osrm_base_urls_are_settings_fields_not_just_env_vars():
+    """OSRM_BASE_URL/OSRM_FOOT_BASE_URL used to be read with os.environ at
+    import time in osrm_client.py. pydantic loads backend/.env into the
+    Settings object only, so a host-dev value written in backend/.env was
+    silently ignored while the container (which forwards the process env
+    in docker-compose.yml) happened to work. They must be real Settings
+    fields so both paths resolve, with the foot profile falling back to
+    the driving one when unset."""
+    settings = make_settings(
+        osrm_base_url="http://router:5000",
+        osrm_foot_base_url="http://router-foot:5001",
+    )
+    assert settings.osrm_base_url == "http://router:5000"
+    assert settings.osrm_foot_base_url == "http://router-foot:5001"
+
+    settings = make_settings(osrm_base_url="http://router:5000")
+    assert settings.osrm_foot_base_url is None  # osrm_client falls back to osrm_base_url
+
+
+def test_osrm_base_urls_pick_up_uppercase_env_names(monkeypatch):
+    """The .env / docker-compose names are the uppercase OSRM_* -- the
+    pydantic-settings convention maps OSRM_BASE_URL to field osrm_base_url
+    (and from-file values must be read, not skipped)."""
+    monkeypatch.setenv("OSRM_BASE_URL", "http://router:5005")
+    settings = make_settings()
+    assert settings.osrm_base_url == "http://router:5005"
+
+
 def test_redis_client_reads_the_settings_field(monkeypatch):
     """app/core/redis_client.get_redis() must agree with the above. It is
     the other half of the same bug, and a Settings-only test would not

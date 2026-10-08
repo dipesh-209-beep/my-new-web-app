@@ -488,8 +488,11 @@ def update_route_status(
     # A status flip (e.g. active -> inactive) changes which routes
     # /route-finder considers, and route_geometry responses are keyed by
     # route_id -- an inactive route's last-cached geometry would otherwise
-    # keep being served as if it were still a valid option.
+    # keep being served as if it were still a valid option. route_detail
+    # must go too: GET /routes/{route_id} embeds status, and without this
+    # the detail response keeps serving the old status for the TTL window.
     invalidate_cache("route_geometry")
+    invalidate_cache("route_detail")
 
     return RouteOut.model_validate(row)
 

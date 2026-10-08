@@ -395,8 +395,12 @@ def find_route(
     # Build legs with pre-fetched stops (no DB access in _build_legs)
     legs = _build_legs(result.segments, route_names, stop_map)
 
-    # --- STEP 2: Session closes here (FastAPI dependency) ---
-    # --- STEP 3: OSRM calls outside DB session ---
+    # From here on the response is assembled without further DB access: the
+    # stop_map above is what _build_legs needs, and the OSRM/congestion work
+    # below must not re-enter the session. (The FastAPI get_db dependency is
+    # still open until the handler returns -- these comments were wrong when
+    # they claimed the session closes on this line -- but nothing after this
+    # line is allowed to use it.)
     _attach_road_geometry(legs)
     background_tasks.add_task(_record_leg_congestion, legs)
 

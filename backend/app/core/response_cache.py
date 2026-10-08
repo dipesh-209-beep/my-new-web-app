@@ -30,25 +30,43 @@ from typing import Any, Callable
 
 from app.core.redis_client import get_redis
 
-def _json_dumps(obj: Any) -> str:
-    """Serialize to JSON, handling Pydantic models via model_dump().
-    
-    For RouteOut and similar models with validation_alias/serialization_alias
-    mismatch on operator field, we need to convert operator -> operator_ref
-    for storage so that model_validate can correctly reconstruct the object.
+def _jsonable(obj: Any) -> Any:
+    """Recursively convert Pydantic models (and containers of them) to
+    plain JSON-able structures.
+
+    Handles three shapes the in-memory tier stores as raw objects:
+      * a bare model (e.g. RouteOut for GET /routes/{id})
+      * a list of models (e.g. GET /routes/{id}/stops returns a bare
+        list[RouteStopOut] -- previously json.dumps raised TypeError here
+        because it does not want model_dump called for it)
+      * a dict containing models (e.g. RouteListOut.model_dump() output)
+
+    For RouteOut and similar models with a validation_alias/serialization_alias
+    mismatch on the operator field, a *top-level* operator key is renamed to
+    operator_ref for storage so that model_validate can reconstruct the
+    object on a cache hit. Nested operator keys inside a container are left
+    alone: RouteOut accepts them via populate_by_name (see schemas.py).
     """
+    if isinstance(obj, dict):
+        return {key: _jsonable(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonable(value) for value in obj]
     if hasattr(obj, "model_dump"):
         data = obj.model_dump()
-        # Convert operator -> operator_ref for storage (validation alias)
         if "operator" in data and data["operator"] is not None:
             data["operator_ref"] = data.pop("operator")
-        return json.dumps(data)
+        return _jsonable(data)
     if hasattr(obj, "dict"):  # Pydantic v1
         data = obj.dict()
         if "operator" in data and data["operator"] is not None:
             data["operator_ref"] = data.pop("operator")
-        return json.dumps(data)
-    return json.dumps(obj)
+        return _jsonable(data)
+    return obj
+
+
+def _json_dumps(obj: Any) -> str:
+    """Serialize to JSON, handling Pydantic models via model_dump()."""
+    return json.dumps(_jsonable(obj))
 
 
 def _json_loads(data: str) -> Any:
@@ -98,12 +116,23 @@ def cached_response(namespace: str, ttl_seconds: float, key_params: tuple[str, .
             key = tuple(kwargs.get(name) for name in key_params)
 
             client = get_redis()
+            # Did Redis answer "this key does not exist" rather than error?
+            # A healthy-miss must NOT be satisfied by the per-process
+            # in-memory overlay: the overlay can only go stale *cross-worker*
+            # (another worker's invalidate() deleted the shared Redis key but
+            # this process still holds the old value), which is exactly the
+            # staleness the shared tier exists to prevent. The in-memory tier
+            # is reserved for the two cases where it cannot be stale --
+            # Redis unconfigured (dev/pytest) and Redis erroring (downgrade
+            # to per-worker caching).
+            redis_healthy_miss = False
             if client is not None:
                 redis_key = _redis_key(namespace, key)
                 try:
                     cached_str = client.get(redis_key)
                     if cached_str is not None:
                         return _json_loads(cached_str)
+                    redis_healthy_miss = True
                 except Exception:
                     # Redis configured but unreachable/erroring this call --
                     # fall through to the in-memory tier below rather than
@@ -114,9 +143,16 @@ def cached_response(namespace: str, ttl_seconds: float, key_params: tuple[str, .
             now = time.monotonic()
             cached = bucket.get(key)
             if cached is not None and cached[0] > now:
-                # LRU: move to end (most recently used)
-                bucket.move_to_end(key)
-                return cached[1]
+                if redis_healthy_miss:
+                    # Healthy Redis has no entry for this key. Serving the
+                    # local overlay here would resurrect a cross-worker-stale
+                    # copy after another worker invalidated the namespace, so
+                    # drop it and recompute instead.
+                    del bucket[key]
+                else:
+                    # LRU: move to end (most recently used)
+                    bucket.move_to_end(key)
+                    return cached[1]
             elif cached is not None:
                 # Expired entry
                 del bucket[key]
