@@ -163,7 +163,7 @@ Update them in the same change that makes them wrong:
 
 ## CI Pipeline (`.github/workflows/ci.yml`)
 
-Three parallel jobs on every PR:
+Four parallel jobs on every PR:
 1. **backend-tests**: PostGIS container → `alembic upgrade head` → `import_data.py` → `pytest`
 2. **data-pipeline-tests**: Python 3.12 → `pytest test_clean_data.py` → full pipeline validation
 3. **frontend-checks**: Node 22 → `npm install` → `npm run lint` → `npm test` → `npm run build`

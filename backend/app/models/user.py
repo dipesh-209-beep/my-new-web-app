@@ -4,11 +4,13 @@ SQLAlchemy ORM model for public (non-admin) user accounts.
 Users sign up via POST /auth/register to submit and vote on
 crowd-sourced route/stop suggestions (see app/api/auth.py and
 app/api/suggestions.py). Deliberately separate from AdminUser
-(app/models/admin_user.py): admins authenticate with the shared
-X-Admin-Api-Key or their own JWT (security.require_admin), while these
-accounts authenticate only with a user-scoped JWT
-(security.get_current_user). A user token must never satisfy
-require_admin -- see the "type" claim in app/core/security.py DCZ.
+(app/models/admin_user.py): admins authenticate by *principal* -- a
+scoped service credential (`Authorization: SvcKey id.secret`), or their
+own admin JWT, or only outside production the legacy shared
+X-Admin-Api-Key (security.require_admin) -- while these accounts
+authenticate only with a user-scoped JWT (security.get_current_user). A
+user token must never satisfy require_admin -- see the "type" claim in
+app/core/security.py DCZ.
 """
 
 from datetime import datetime

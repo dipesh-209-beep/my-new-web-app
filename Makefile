@@ -81,8 +81,12 @@ validate:
 	python $(DATA_SCRIPTS)/validate_clean.py --dir $(PROCESSED_DIR)
 
 ## Start Postgres/PostGIS only (needed before migrate/import).
+## --wait keeps the healthcheck gate honest: migrate/import/seed-admin run
+## `compose run --no-deps`, which drops compose's own readiness wiring
+## entirely, so a bare `up -d db` racing a fresh pgdata volume regularly
+## failed with "the database system is starting up".
 db-up:
-	$(COMPOSE) up -d db
+	$(COMPOSE) up -d --wait db
 
 ## Apply Alembic migrations inside the backend image -- no host venv needed.
 migrate: db-up

@@ -208,7 +208,7 @@ def build_graph(session: Session) -> nx.DiGraph:
     # approach that's linear in stop count as long as stops are spread
     # roughly evenly across the valley -- which they are, since transit
     # stops don't cluster into a single tiny area. Cell size (0.01 deg,
-    # ~1.1km at this latitude) is chosen so INTERCHANGE_DISTANCE (100m)
+    # ~1.1km at this latitude) is chosen so INTERCHANGE_DISTANCE (200m)
     # can never span more than one adjacent cell in either direction, so
     # checking the 3x3 neighborhood around a stop's own cell can't miss a
     # true interchange pair.

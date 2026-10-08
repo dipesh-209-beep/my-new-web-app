@@ -1,8 +1,10 @@
 """Verify the local .env files exist and hold real secrets.
 
-Used by `make backend-env-check`, which `make prod-check` depends on and
-which CI runs. Split out of the Makefile because a recipe runs each line in
-a separate shell, so a heredoc'd Python block there cannot work.
+Used by `make backend-env-check`, which `make prod-check` depends on.
+(An earlier draft claimed CI also runs this; the CI jobs build their own
+env in-process, so this script is a host/dev preflight only.) Split out of
+the Makefile because a recipe runs each line in a separate shell, so a
+heredoc'd Python block there cannot work.
 
 Exits non-zero and names every problem at once, rather than failing on the
 first one, so a single run tells the operator everything to fix.

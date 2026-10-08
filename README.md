@@ -149,7 +149,7 @@ cd backend && alembic upgrade head   # Alembic creates/updates the tables inside
 
 Use `alembic upgrade head` on a **new/empty** database. Don't blindly re-run it against a database that already has a migration history you're not sure about — check `alembic current` first, since re-applying isn't idempotent for a database whose state has diverged.
 
-The migration chain currently creates (in order): `stops`, `routes`, `route_stops` (initial schema) → replaced with the full schema (`operators`, `stops`, `routes`, `route_stops`, `route_operators`, `fare_rules`) → `admin_users` → `segment_congestion_stats` → `graph_meta` (single-row version counter for cross-process routing-graph cache invalidation). An auxiliary `route_return_leg_priority` QA table was created and later dropped.
+The migration chain currently creates (in order): the initial `stops`, `routes`, `route_stops` schema → replaced by the full schema (`operators`, `stops`, `routes`, `route_stops`, `route_operators`, `route_return_leg_priority`, `fare_rules`) → `admin_users` → `segment_congestion_stats` → drops `route_return_leg_priority` → `graph_meta` (single-row version counter for cross-process routing-graph cache invalidation) → `free_flow_duration_s` on congestion stats → `osrm_distance_km` on routes → `admin_users.created_at` type fix → admin role CHECK → id sequences + backfill → public user accounts (`users`, `route_suggestions`, `suggestion_votes`) → congestion backfill + segment index → `service_credentials` + `admin_audit_log` (head). The authoritative order is `alembic history` / the files in `backend/migrations/versions/`; there is exactly one linear chain, and before adding a new migration `alembic heads` must show the single head noted in AGENTS.md.
 
 ```bash
 cd backend
@@ -428,7 +428,7 @@ or systemd rather than by hand.
 
 Database backups are `make backup` (a `pg_dump -Fc` archive, verified after
 writing) and `make restore-backup FILE=...`, which refuses to overwrite a
-non-empty database unless you also pass `FORCE=1`, and which takes a safety
+non-empty database unless you also pass `FORCE_REPLACE=1`, and which takes a safety
 backup of the target first. Keep the dumps somewhere the host does not, and
 test a restore — an unverified backup is not a backup.
 
