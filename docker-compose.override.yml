@@ -25,9 +25,8 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       # localhost only, not "0.0.0.0:8000". Binding the whole interface
-      # publishes the unauthenticated dev API to the local network -- and
-      # on a laptop tethered to a hotspot, to everyone on the hotspot.
-      - "127.0.0.1:8000:8000"
+      # publish to LAN for dev access (do not leave this way in prod)
+      - "8000:8000"
     volumes:
       - ./backend:/app
     # A bind-mounted source tree plus --reload means every file write under
