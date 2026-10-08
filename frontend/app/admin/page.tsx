@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import AdminLogin from "@/components/admin/AdminLogin";
 import CreateStopForm from "@/components/admin/CreateStopForm";
 import CreateRouteForm from "@/components/admin/CreateRouteForm";
@@ -87,10 +87,15 @@ function AdminWorkspace({ token, onTokenInvalid }: AdminWorkspaceProps) {
  * when it's missing or a mutation came back 401.
  */
 export default function AdminPage() {
-  const [token, setTokenState] = useState<string | null>(() => {
-    const stored = getAdminToken();
-    return stored === null ? null : stored; // distinguishes "no token" (login) from 401 logout
-  });
+  const [token, setTokenState] = useState<string | null>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const stored = getAdminToken();
+      setTokenState(stored);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, []);
 
   function handleLogin(newToken: string) {
     setAdminToken(newToken);
