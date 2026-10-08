@@ -268,6 +268,11 @@ def test_privileged_route_selection_is_not_vacuous():
         ("GET", "/route-finder"),
         ("GET", "/suggestions"),
         ("GET", "/health"),
+        # Deliberately unauthenticated so a load balancer or orchestrator
+        # can poll it without holding an admin token; it reports dependency
+        # reachability (DB, and Redis when configured) and nothing about
+        # the deployment's data. See readiness_check in app/main.py.
+        ("GET", "/health/ready"),
     ]:
         assert public not in cases, f"{public} is public and must not be audited as privileged"
 

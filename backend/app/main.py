@@ -1,17 +1,23 @@
 import logging
 import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy import text
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api import admin, admin_auth, auth, congestion, fare, routes, routing, service_credentials, stops, suggestions
 from app.core.config import get_settings, validate_production_settings
 from app.core.rate_limit import limiter
+from app.core.redis_client import get_redis
 from app.core.request_context import request_context_middleware
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, engine
 from app.routing import congestion_zones, graph_builder
 
 logger = logging.getLogger("uvicorn.error")
@@ -68,7 +74,17 @@ async def lifespan(app: FastAPI):
     zones = congestion_zones.load_zones()
     logger.info("Congestion zones loaded: %d", len(zones))
 
-    yield
+    # try/finally around the yield so the shutdown path actually runs.
+    # The startup `db.close()` above returns a single session to the pool;
+    # it does not dispose the pool. Without this, the pool is only reclaimed
+    # when the OS reclaims the process's sockets -- which happens to be
+    # equivalent for a container that is exiting, and is not equivalent for
+    # an in-process lifespan restart (tests, or a future embedder).
+    try:
+        yield
+    finally:
+        engine.dispose()
+        logger.info("Database connection pool disposed")
 
 app = FastAPI(
     title="Kathmandu Bus Route Finder API",
@@ -243,7 +259,175 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 def health_check():
+    """Liveness only: the process is up and serving.
+
+    Deliberately touches no dependency. A liveness probe that reached for
+    Postgres would report the *database* as unhealthy, and an orchestrator
+    acting on that would restart this container -- which cannot fix a
+    database that is down, and would turn one outage into a restart loop
+    across every replica. Dependency state belongs in /health/ready.
+    """
     return {"status": "ok"}
+
+
+def _run_with_deadline(fn, timeout: float):
+    """Run fn() in a worker thread and return its result within `timeout`.
+
+    Returns the elapsed milliseconds on success, raises TimeoutError if the
+    deadline passes, and re-raises whatever fn raised otherwise. See
+    readiness_check for why the deadline lives here and not in SQL.
+    """
+    box: dict = {}
+
+    def target() -> None:
+        try:
+            box["result"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - forwarded to the caller
+            box["error"] = exc
+
+    thread = threading.Thread(target=target, daemon=True, name="readiness-probe")
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise TimeoutError(f"probe exceeded {timeout}s")
+    if "error" in box:
+        raise box["error"]
+    return box["result"]
+
+
+def _timed_redis_ping(client) -> int:
+    """PING the shared Redis client and return the elapsed milliseconds.
+
+    The timeout is applied by the caller's thread deadline, NOT by
+    per-call kwargs. An earlier version of this passed
+    socket_connect_timeout=2, socket_timeout=2 to ping() on the theory
+    that redis-py honours them per call. It does not, on two counts
+    (verified against redis-py 8.1.0):
+
+      * get_connection() takes no options at all -- it is decorated
+        @deprecated_args(args_to_warn=["*"]) -- and the RESP parser reads
+        connection.socket_timeout, an attribute fixed when the connection
+        object is built. Against a blackholed server, ping() with those
+        kwargs blocked for 5.01s, which is AbstractConnection's own
+        socket_timeout=5 default, not 2.
+
+      * Worse, the kwargs are forwarded to the PING response callback,
+        which is <lambda>(r) and accepts no keyword arguments. So a
+        *healthy* Redis raised TypeError and readiness reported 503 --
+        a false "unhealthy" on a perfectly good deployment.
+
+    Passing no kwargs is deliberate: the thread deadline in
+    _run_with_deadline is the only bound that is actually load-bearing,
+    and it is the one that works.
+    """
+    started = time.monotonic()
+    client.ping()
+    return round((time.monotonic() - started) * 1000)
+
+
+@app.get("/health/ready")
+def readiness_check():
+    """Readiness: can this process actually serve a request right now?
+
+    Every endpoint that matters reads Postgres, so a DB that is unreachable
+    means the process is up but useless and should report 503. Redis is
+    treated differently, and the distinction is the whole point of this
+    handler:
+
+      * Configured and unreachable -> 503. In production a missing shared
+        rate-limit store is refused at startup precisely because the
+        per-worker fallback multiplies an attacker's login guesses by the
+        worker count (see validate_production_settings and
+        app/core/rate_limit.py). A configured-but-unreachable Redis is
+        that same degradation appearing at runtime, so it is not cosmetic.
+
+      * Not configured (get_redis() is None) -> reported, not failed.
+        Development legitimately runs without it, and marking a working
+        dev backend permanently unready would make the status lie.
+
+    OSRM is deliberately not checked. It is unconditionally optional --
+    the backend returns road_geometry: null without it -- so failing
+    readiness on it would take the whole API down over a missing optional
+    geometry service.
+
+    Each probe is bounded at ~2s so a hung dependency cannot make the
+    readiness check itself hang. The bound is applied with a thread and an
+    explicit deadline rather than a SQL statement_timeout, because the
+    failure mode that matters most here is not a slow query -- it is an
+    *exhausted pool*, where the request spends its whole time waiting on
+    pool checkout (app/db/session.py sets pool_timeout=10). A server-side
+    timeout does not bound that; it fires after the connection is acquired.
+    Without the deadline this endpoint blocks for 10s under exactly the
+    incident it exists to report.
+
+    A probe that loses the race is abandoned, not cancelled. That is
+    deliberate: the thread is blocked in libpq/redis-py and cannot be
+    interrupted safely, and it will finish on its own and return its
+    connection to the pool. Readiness is a diagnostic surface polled
+    infrequently, so a transient leaked thread is a better trade than a
+    probe that can hang.
+
+    This is a diagnostic and orchestration surface; it is not wired to the
+    Compose healthcheck, which stays on /health (see docker-compose.yml),
+    because the only thing that healthcheck gates is the proxy's startup
+    ordering.
+    """
+    checks: dict[str, dict] = {}
+
+    def _probe(name: str, fn) -> None:
+        """Run one bounded probe and record the outcome. Thread-safe: the
+        per-probe dicts are written before the future is read, so a
+        completed probe's result is visible to get() once it returns."""
+        try:
+            result = _run_with_deadline(fn, timeout=2.0)
+        except TimeoutError:
+            checks[name] = {"ok": False, "error": "timeout"}
+            logger.warning("Readiness check: %s probe exceeded 2s", name)
+        except Exception as exc:  # noqa: BLE001 - any failure means "not ready"
+            checks[name] = {"ok": False, "error": type(exc).__name__}
+            logger.warning("Readiness check: %s not ready: %s", name, exc)
+        else:
+            checks[name] = {"ok": True, "ms": result}
+
+    def _db_probe() -> int:
+        started = time.monotonic()
+        # Its own connection, NOT the request-scoped `db` session. The
+        # deadline can abandon this thread while it is still blocked, and
+        # a request Session is owned by get_db's `finally: db.close()` --
+        # sharing one makes the two race, which SQLAlchemy rejects with
+        # IllegalStateChangeError. A dedicated connection is abandoned
+        # safely: the abandoned thread closes it when it unblocks, and
+        # closing returns it to the pool.
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return round((time.monotonic() - started) * 1000)
+
+    client = get_redis()
+
+    # Probes run concurrently, not in sequence. Each has its own 2s
+    # deadline; running them one after another made the total worst case
+    # 2s + 2s = 4.01s when both dependencies hung, which is long enough
+    # for a load balancer to have already given up on the check.
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="readiness") as pool:
+        futures = {"db": pool.submit(_probe, "db", _db_probe)}
+        if client is None:
+            checks["redis"] = {"ok": None, "skipped": "not configured"}
+        else:
+            futures["redis"] = pool.submit(
+                _probe, "redis", lambda: _timed_redis_ping(client)
+            )
+        # Context manager __exit__ waits for both, but each is already
+        # bounded by its own deadline, so this cannot hang the response.
+        for future in futures.values():
+            future.result()
+
+    ready = all(c["ok"] is not False for c in checks.values())
+    payload = {"status": "ok" if ready else "unhealthy", "checks": checks}
+    if ready:
+        return payload
+    # 503, not 500: this is a dependency being unavailable, which is
+    # exactly what a load balancer or orchestrator watches for.
+    return JSONResponse(status_code=503, content=payload)
 
 
 # Graph-rebuild is exposed once, as POST /graph/reload (app/api/admin.py) --
