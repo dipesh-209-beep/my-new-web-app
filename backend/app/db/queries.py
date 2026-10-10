@@ -6,6 +6,7 @@ Everything else is plain SQLAlchemy ORM. All functions take a live
 Session so callers control transaction/connection lifecycle.
 """
 
+from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 from geoalchemy2 import Geography
@@ -83,6 +84,81 @@ def get_route_stops(session: Session, route_id: str) -> Sequence[RouteStop]:
         .order_by(RouteStop.sequence_no)
     )
     return session.execute(stmt).scalars().all()
+
+
+@dataclass
+class RouteDisplayInfo:
+    """Display-only facts about a route, batched for route-finder legs.
+
+    `stop_positions` maps stop_id -> sequence_no in the route's forward
+    order, so a leg's travel direction can be derived by comparing its
+    board and alight positions (see app/api/routing.py). `operator_name`
+    prefers the linked Operator.name and falls back to the free-text
+    Route.operator column, matching how the rest of the app resolves an
+    operator (the text column is often all the source data has).
+    """
+
+    operator_name: Optional[str] = None
+    start_stop_id: Optional[str] = None
+    start_stop_name: Optional[str] = None
+    end_stop_id: Optional[str] = None
+    end_stop_name: Optional[str] = None
+    stop_positions: dict[str, int] = field(default_factory=dict)
+
+
+def get_route_display_info(
+    session: Session, route_ids: list[str]
+) -> dict[str, RouteDisplayInfo]:
+    """Batch lookup for the operator + termini + stop sequence of several
+    routes in a fixed number of queries, used to annotate route-finder
+    legs with operator name and direction. Returns {} for an empty input."""
+    if not route_ids:
+        return {}
+
+    info: dict[str, RouteDisplayInfo] = {}
+    stmt = (
+        select(
+            Route.route_id,
+            Route.operator,
+            Operator.name,
+            Route.start_stop_id,
+            Route.end_stop_id,
+        )
+        .outerjoin(Operator, Route.operator_id == Operator.operator_id)
+        .where(Route.route_id.in_(route_ids))
+    )
+    for route_id, operator_text, operator_name, start_stop_id, end_stop_id in session.execute(stmt):
+        info[route_id] = RouteDisplayInfo(
+            operator_name=operator_name or operator_text,
+            start_stop_id=start_stop_id,
+            end_stop_id=end_stop_id,
+        )
+
+    if not info:
+        return info
+
+    seq_stmt = select(
+        RouteStop.route_id, RouteStop.stop_id, RouteStop.sequence_no
+    ).where(RouteStop.route_id.in_(list(info.keys())))
+    for route_id, stop_id, sequence_no in session.execute(seq_stmt):
+        info[route_id].stop_positions[stop_id] = sequence_no
+
+    terminus_ids = {
+        sid
+        for i in info.values()
+        for sid in (i.start_stop_id, i.end_stop_id)
+        if sid is not None
+    }
+    if terminus_ids:
+        name_stmt = select(Stop.stop_id, Stop.stop_name).where(
+            Stop.stop_id.in_(terminus_ids)
+        )
+        names = dict(session.execute(name_stmt).all())
+        for route_info in info.values():
+            route_info.start_stop_name = names.get(route_info.start_stop_id)
+            route_info.end_stop_name = names.get(route_info.end_stop_id)
+
+    return info
 
 
 def get_operator(session: Session, operator_id: str) -> Optional[Operator]:

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, memo } from "react";
 import { Stop } from "@/types/route";
 import { buildStopLabel } from "@/lib/stopLabel";
+import { searchStops } from "@/lib/stopSearch";
 import { PinDotIcon } from "@/components/icons/TransitIcons";
 
 interface StopAutocompleteProps {
@@ -61,27 +62,14 @@ function StopAutocompleteImpl({
   }, [inputValue, debounceMs]);
 
   const results = useMemo(() => {
-    const query = debouncedValue.trim().toLowerCase();
-    if (!query) return [];
-
-    const seen = new Set<string>();
-    const matches: { stop: Stop; label: string; district?: string; stopId?: string }[] = [];
-    for (const stop of stops) {
-      if (matches.length >= MAX_RESULTS) break;
-      if (seen.has(stop.stop_id)) continue;
-      const nameMatch = stop.stop_name.toLowerCase().includes(query);
-      const districtMatch = stop.district?.toLowerCase().includes(query) ?? false;
-      if (nameMatch || districtMatch) {
-        seen.add(stop.stop_id);
-        matches.push({
-          stop,
-          label: buildStopLabel(stop, stops),
-          district: stop.district ?? undefined,
-          stopId: stop.stop_id,
-        });
-      }
-    }
-    return matches;
+    if (!debouncedValue.trim()) return [];
+    return searchStops(debouncedValue, stops)
+      .slice(0, MAX_RESULTS)
+      .map((match) => ({
+        match,
+        label: buildStopLabel(match.stop, stops),
+        district: match.stop.district ?? undefined,
+      }));
   }, [debouncedValue, stops]);
 
   // Reset highlight to the top match whenever the candidate list changes
@@ -122,8 +110,8 @@ function StopAutocompleteImpl({
       setHighlightedIndex((i) => (i - 1 + results.length) % results.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const match = results[highlightedIndex];
-      if (match) selectStop(match.stop);
+      const result = results[highlightedIndex];
+      if (result) selectStop(result.match.stop);
     } else if (e.key === "Escape") {
       setIsOpen(false);
     }
@@ -187,15 +175,15 @@ function StopAutocompleteImpl({
             role="listbox"
             className="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-md border border-route-line bg-white shadow-card"
           >
-            {results.map((match, i) => (
+            {results.map((result, i) => (
               <li
                 id={`${id}-option-${i}`}
-                key={match.stop.stop_id}
+                key={result.match.stop.stop_id}
                 role="option"
                 aria-selected={i === highlightedIndex}
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  selectStop(match.stop);
+                  selectStop(result.match.stop);
                 }}
                 onMouseEnter={() => setHighlightedIndex(i)}
                 className={`flex cursor-pointer items-start gap-2 px-3 py-2 text-sm ${
@@ -204,15 +192,14 @@ function StopAutocompleteImpl({
               >
                 <PinDotIcon size={7} className="mt-1.5 shrink-0 text-ink-tertiary" />
                 <div className="min-w-0">
-                  <p className="truncate font-medium">{match.stop.stop_name}</p>
+                  <p className="truncate font-medium">{result.label}</p>
                   <div className="flex flex-wrap gap-1.5 mt-0.5 text-xs text-ink-secondary">
-                    {match.district && <span>{match.district}</span>}
-                    {match.stopId && <span className="font-mono opacity-60">{match.stopId}</span>}
-                    {match.stop.zone && <span>{match.stop.zone}</span>}
-                    {match.stop.is_major_stop && (
+                    {result.district && <span>{result.district}</span>}
+                    {result.match.stop.zone && <span>{result.match.stop.zone}</span>}
+                    {result.match.stop.is_major_stop && (
                       <span className="rounded-full bg-accent-blue/10 px-1.5 py-0.5 text-accent-blue">Major</span>
                     )}
-                    {match.stop.is_interchange && (
+                    {result.match.stop.is_interchange && (
                       <span className="rounded-full bg-accent-purple/10 px-1.5 py-0.5 text-accent-purple">
                         Interchange
                       </span>

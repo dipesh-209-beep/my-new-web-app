@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { Stop, StopPickTarget } from "@/types/route";
 import { buildStopLabel, buildStopLabelIndex } from "@/lib/stopLabel";
+import { normalizeText } from "@/lib/stopSearch";
 import StopAutocomplete from "./StopAutocomplete";
 import { CrosshairIcon, LocationIcon, SwapIcon } from "@/components/icons/TransitIcons";
 
@@ -77,7 +78,10 @@ export default function SearchForm({
   const { labelToStop } = useMemo(() => buildStopLabelIndex(stops), [stops]);
 
   function resolveStop(typedLabel: string): Stop | null {
-    return labelToStop.get(typedLabel.trim().toLowerCase()) ?? null;
+    // Same normalization as lib/stopLabel's index keys (lowercase, ignore
+    // punctuation and capitalization variants), so a label typed freehand
+    // resolves exactly like one pasted from the autocomplete.
+    return labelToStop.get(normalizeText(typedLabel)) ?? null;
   }
 
   function addViaStop() {

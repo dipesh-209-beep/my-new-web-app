@@ -111,3 +111,63 @@ def test_route_finder_leg_num_ride_segments_reflects_consolidated_hops(client):
     # At least one leg must have been consolidated (num_ride_segments > 1) --
     # guards against a future regression back to "always 1".
     assert any(leg["num_ride_segments"] > 1 for leg in legs)
+
+
+def test_route_finder_legs_carry_operator_and_direction(client):
+    """
+    Each ride leg must expose the operating company (resolved from the
+    linked Operator row, falling back to the free-text route.operator
+    column) and a direction derived from the board/alight stops'
+    positions in the route's stop sequence. These are what the frontend
+    timeline shows ("towards X", "run by Y"); dropping them makes the UI
+    invent "bus service" labels instead of showing real data.
+    """
+    resp = client.get("/route-finder", params={"origin": "S0384", "destination": "S0408"})
+    assert resp.status_code == 200
+    legs = resp.json()["legs"]
+
+    ride_legs = [leg for leg in legs if leg["route_id"] != "TRANSFER"]
+    assert len(ride_legs) == 4, ride_legs
+
+    for leg in ride_legs:
+        assert leg.get("operator_name"), (
+            f"ride leg {leg['route_id']} missing operator_name: {leg}"
+        )
+        assert leg.get("direction_towards"), (
+            f"ride leg {leg['route_id']} missing direction_towards: {leg}"
+        )
+
+
+def test_route_finder_exposes_estimated_time_and_per_option_fare(client):
+    """
+    The result (and every alternative) must carry a backend-computed
+    estimated trip time and its own fare, so the UI can show a labeled
+    estimate instead of presenting the OSRM driving-profile duration as
+    the trip time, and so a selected alternative never borrows the
+    primary result's fare. Fare is banded on ridden distance only.
+    """
+    resp = client.get(
+        "/route-finder",
+        params={"origin": "S0384", "destination": "S0408", "include_alternatives": "true"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Whole-trip estimate is present and positive; each leg carries its own.
+    assert body["total_estimated_duration_s"] > 0
+    for leg in body["legs"]:
+        assert leg["estimated_duration_s"] is not None
+        assert leg["estimated_duration_s"] > 0
+
+    # The primary fare, if any, exposes its verification caveat.
+    if body["fare"] is not None:
+        assert "verification_note" in body["fare"]
+
+    # Each alternative carries its own estimate and fare (or an explicit
+    # null when no ride leg / no matching band), never omitted.
+    for alt in body["alternatives"]:
+        assert alt["total_estimated_duration_s"] is not None
+        assert alt["total_estimated_duration_s"] > 0
+        assert "fare" in alt
+        for leg in alt["legs"]:
+            assert leg["estimated_duration_s"] is not None

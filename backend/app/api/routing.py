@@ -7,6 +7,7 @@ from typing import Optional
 
 from app.routing.osrm_client import get_route_geometry, OSRMError
 from app.routing.graph_builder import haversine_distance_m
+from app.routing.constants import BUS_AVG_SPEED_MPS, WALK_SPEED_MPS, BOARD_WAIT_S
 from app.routing.time_buckets import day_and_bucket_for, now_in_nepal
 from app.db.session import get_db, SessionLocal
 from app.db import queries
@@ -196,6 +197,50 @@ def _total_road_distance_m(legs: list[RouteLeg]) -> float | None:
     return total
 
 
+def _leg_distance_m(leg: RouteLeg) -> float:
+    """A leg's travel distance: real OSRM road distance when available,
+    haversine straight-line otherwise."""
+    if leg.road_geometry is not None:
+        return leg.road_geometry["distance_m"]
+    return haversine_distance_m(
+        leg.board_stop.lat,
+        leg.board_stop.lng,
+        leg.alight_stop.lat,
+        leg.alight_stop.lng,
+    )
+
+
+def _leg_estimated_duration_s(leg: RouteLeg) -> float:
+    """Estimated travel time for one leg at fixed assumed speeds (.e.g
+    ~12 km/h buses, ~4.7 km/h walking). The OSRM driving-profile duration
+    is deliberately NOT used -- it describes a private car at free-flow
+    speed, not a bus making stops. Same assumptions the pathfinder's
+    "fastest_estimated" ranking uses, so the UI never shows a figure the
+    search never used."""
+    speed = WALK_SPEED_MPS if leg.route_id == "TRANSFER" else BUS_AVG_SPEED_MPS
+    return _leg_distance_m(leg) / speed
+
+
+def _annotate_leg_estimated_durations(legs: list[RouteLeg]) -> None:
+    for leg in legs:
+        leg.estimated_duration_s = _leg_estimated_duration_s(leg)
+
+
+def _total_estimated_duration_s(legs: list[RouteLeg]) -> float:
+    """Whole-trip estimate: ride/walk time at assumed speeds plus a fixed
+    boarding wait per bus boarded. Labeled an estimate by the caller."""
+    travel_s = sum(_leg_estimated_duration_s(leg) for leg in legs)
+    ride_count = sum(1 for leg in legs if leg.route_id != "TRANSFER")
+    return travel_s + ride_count * BOARD_WAIT_S
+
+
+def _ride_only_distance_m(legs: list[RouteLeg]) -> float:
+    """Distance ridden on buses, excluding walking transfers. Bus fares are
+    banded by the distance actually ridden -- a cross-street transfer walk
+    contributes to trip length but nothing to what the passenger pays."""
+    return sum(_leg_distance_m(leg) for leg in legs if leg.route_id != "TRANSFER")
+
+
 def _record_leg_congestion(legs: list[RouteLeg]) -> None:
     """Runs after the response is already sent (see BackgroundTasks in
     find_route below), so this never adds latency to a user's search. Each
@@ -279,6 +324,37 @@ def _all_route_ids(
             if seg.route_id:
                 ids.add(seg.route_id)
     return list(ids)
+
+
+def _annotate_ride_legs(
+    legs: list[RouteLeg],
+    route_info: dict[str, queries.RouteDisplayInfo],
+) -> None:
+    """Fill in operator_name and direction_towards for ride legs.
+
+    Direction is derived purely from data: the leg's board and alight
+    stops' positions in the route's forward stop sequence. Boarding
+    earlier than alighting means the rider is travelling the route's
+    forward direction (toward its end terminus); the reverse means the
+    return direction (toward its start terminus). Anything that can't be
+    resolved -- a transfer leg, a route with no stop sequence, or a stop
+    absent from it -- is left None rather than guessed.
+    """
+    for leg in legs:
+        if leg.route_id == "TRANSFER":
+            continue
+        info = route_info.get(leg.route_id)
+        if info is None:
+            continue
+        if info.operator_name:
+            leg.operator_name = info.operator_name
+        board_pos = info.stop_positions.get(leg.board_stop.stop_id)
+        alight_pos = info.stop_positions.get(leg.alight_stop.stop_id)
+        if board_pos is None or alight_pos is None or board_pos == alight_pos:
+            continue
+        terminus = info.end_stop_name if board_pos < alight_pos else info.start_stop_name
+        if terminus:
+            leg.direction_towards = terminus
 
 
 @router.get("/walking-route")
@@ -375,6 +451,7 @@ def find_route(
     # Collect all stop_ids needed for this result + alternatives
     all_route_ids = _all_route_ids(result.segments, result.alternatives)
     route_names = queries.get_route_names(db, all_route_ids)
+    route_info = queries.get_route_display_info(db, all_route_ids)
 
     # Build stop_map with all unique stops referenced by primary + alternatives
     needed_stop_ids: set[str] = set()
@@ -394,6 +471,7 @@ def find_route(
 
     # Build legs with pre-fetched stops (no DB access in _build_legs)
     legs = _build_legs(result.segments, route_names, stop_map)
+    _annotate_ride_legs(legs, route_info)
 
     # From here on the response is assembled without further DB access: the
     # stop_map above is what _build_legs needs, and the OSRM/congestion work
@@ -402,6 +480,7 @@ def find_route(
     # they claimed the session closes on this line -- but nothing after this
     # line is allowed to use it.)
     _attach_road_geometry(legs)
+    _annotate_leg_estimated_durations(legs)
     background_tasks.add_task(_record_leg_congestion, legs)
 
     # Prefer the real road distance OSRM returned for these legs over
@@ -419,17 +498,41 @@ def find_route(
     alternatives: list[RouteAlternative] = []
     for alt in result.alternatives:
         alt_legs = _build_legs(alt.segments, route_names, stop_map)
+        _annotate_ride_legs(alt_legs, route_info)
         _attach_road_geometry(alt_legs)
+        _annotate_leg_estimated_durations(alt_legs)
+        alt_ride_only_m = _ride_only_distance_m(alt_legs)
+        alt_fare_rule = (
+            queries.fare_for_distance(db, alt_ride_only_m / 1000)
+            if alt_ride_only_m > 0
+            else None
+        )
+        alt_fare = (
+            FareOut.model_validate(alt_fare_rule)
+            if alt_fare_rule is not None
+            else None
+        )
         alternatives.append(
             RouteAlternative(
                 label=alt.label,
                 total_cost=alt.total_distance_m,
                 transfer_count=alt.transfer_count,
                 legs=alt_legs,
+                fare=alt_fare,
+                total_estimated_duration_s=_total_estimated_duration_s(alt_legs),
             )
         )
 
-    fare_rule = queries.fare_for_distance(db, total_distance_m / 1000)
+    # Fare is banded on the distance actually ridden, not the whole trip:
+    # a walking transfer adds minutes but nothing to the bus fare, so
+    # counting it would over-charge the estimate (see the old bug where
+    # total_distance_m included walk legs).
+    ride_only_m = _ride_only_distance_m(legs)
+    fare_rule = (
+        queries.fare_for_distance(db, ride_only_m / 1000)
+        if ride_only_m > 0
+        else None
+    )
     fare = FareOut.model_validate(fare_rule) if fare_rule is not None else None
 
     return RouteFinderResult(
@@ -441,4 +544,5 @@ def find_route(
         legs=legs,
         fare=fare,
         alternatives=alternatives,
+        total_estimated_duration_s=_total_estimated_duration_s(legs),
     )

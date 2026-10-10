@@ -38,6 +38,20 @@ export interface RouteLeg {
   num_ride_segments: number; // count of merged ride segments (hops), not physical stops
   stops: Stop[]; // every physical stop on this leg, in order, board→alight inclusive
   road_geometry?: RoadGeometry | null;
+  /** Operator running this route (from the linked operator or free-text
+   * column). Null for walking transfers and routes with no recorded
+   * operator. */
+  operator_name?: string | null;
+  /** Terminus this leg travels toward, derived from board/alight positions
+   * in the route's stop sequence. Null when undeterminable. A direction
+   * hint, not a guarantee the vehicle terminates exactly there. */
+  direction_towards?: string | null;
+  /** Backend-computed estimated travel time for this leg at fixed assumed
+   * speeds (bus ~12 km/h, walk ~4.7 km/h) over the leg's real distance.
+   * Null only when the backend couldn't compute it. NOT the OSRM
+   * driving-profile duration -- that's how long a private car would take
+   * at free-flow speed. Always display as an estimate, never an ETA. */
+  estimated_duration_s?: number | null;
 }
 
 export interface FareOut {
@@ -47,6 +61,10 @@ export interface FareOut {
   fare_npr_min: number;
   fare_npr_max: number;
   student_discount_pct: number | null;
+  /** Caveat on how solid this fare figure is ("PENDING confirmation
+   * against the official gazette", for now). Frontend shows it under the
+   * fare so "Estimated fare" never reads as fact. */
+  verification_note?: string | null;
 }
 
 export interface RouteAlternative {
@@ -54,6 +72,13 @@ export interface RouteAlternative {
   total_cost: number;
   transfer_count: number;
   legs: RouteLeg[];
+  /** This option's own fare (computed on ride-leg distance only), so the
+   * selected alternative's card never has to borrow the primary
+   * result's fare. Null when there's no ride leg or no fare rule. */
+  fare?: FareOut | null;
+  /** Sum of every leg's estimate plus assumed per-ride boarding wait.
+   * Labeled approximation, same basis as the primary result. */
+  total_estimated_duration_s?: number | null;
 }
 
 export interface RouteFinderResult {
@@ -70,6 +95,13 @@ export interface RouteFinderResult {
   legs: RouteLeg[];
   fare: FareOut | null;
   alternatives: RouteAlternative[];
+  /** Whole-trip estimate: ride/walk time at assumed speeds plus per-ride
+   * boarding wait, computed by the backend. Optional here (like
+   * via_stop_ids) so hand-built fixtures don't all need updating; the
+   * display code falls back to summing leg estimates. Always shown as an
+   * estimate, never as a definitive ETA, and never as an OSRM
+   * driving-profile time. */
+  total_estimated_duration_s?: number | null;
 }
 
 // Frontend-only wrapper: the backend signals "not found" via HTTP 404,

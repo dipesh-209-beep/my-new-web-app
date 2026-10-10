@@ -80,10 +80,10 @@ function HomeInner() {
   }
 
   // The result BusMap actually draws: the primary result as-is, or the
-  // primary result with its legs swapped for the selected alternative's
-  // (alternatives don't carry fare/origin/destination of their own -- only
-  // legs/total_cost/transfer_count differ -- so everything else about the
-  // result stays the same).
+  // primary result with the selected alternative's fields swapped in
+  // (legs, total_cost, transfer_count, and now fare/estimate too). The
+  // spread keeps origin/destination/via_stop_ids from the primary, which
+  // are identical across options anyway.
   const mapResult =
     result && result.found && selectedAltIndex !== -1
       ? { ...result, ...result.alternatives[selectedAltIndex] }
@@ -243,6 +243,31 @@ const congestion = useCongestion();
               onUseMyLocation={useMyLocation}
             />
 
+            {/* Results sit directly under the form: they're the reason
+                for the search, and the layer toggles below are secondary
+                controls. Ordering them first also means a keyboard/switch
+                user reaches the answer without tabbing past the map-layer
+                and congestion panels. */}
+            <RouteResultPanel
+              result={result}
+              loading={loading}
+              loadingStage={loadingStage}
+              error={error}
+              selectedIndex={selectedAltIndex}
+              onSelectedIndexChange={setSelectedAltIndex}
+              onRetry={retry}
+            />
+
+            {stopsError && (
+              <InlineAlert
+                variant="warning"
+                action={{ label: "Retry", onClick: () => window.location.reload() }}
+              >
+                Couldn&apos;t load the stop list from the server. You can still search if you know
+                exact stop names, but suggestions won&apos;t be available.
+              </InlineAlert>
+            )}
+
             <div className="rounded-xl border border-route-line bg-surface-raised p-4 shadow-card">
               <LayerToggle
                 icon={<LayersIcon size={14} />}
@@ -309,26 +334,6 @@ const congestion = useCongestion();
                 )}
               </div>
             )}
-
-            {stopsError && (
-              <InlineAlert
-                variant="warning"
-                action={{ label: "Retry", onClick: () => window.location.reload() }}
-              >
-                Couldn&apos;t load the stop list from the server. You can still search if you know
-                exact stop names, but suggestions won&apos;t be available.
-              </InlineAlert>
-            )}
-
-            <RouteResultPanel
-              result={result}
-              loading={loading}
-              loadingStage={loadingStage}
-              error={error}
-              selectedIndex={selectedAltIndex}
-              onSelectedIndexChange={setSelectedAltIndex}
-              onRetry={retry}
-            />
           </>
         )}
       </aside>

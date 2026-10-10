@@ -44,6 +44,56 @@ def test_read_stop_404s_for_unknown_id(client):
     assert res.status_code == 404
 
 
+def test_read_stop_exposes_aliases_landmark_and_ward(client):
+    """StopOut must carry aliases/landmark/ward: the frontend stop search
+    ranks on alias and landmark (and the label disambiguation uses ward),
+    so dropping them from the response silently breaks stop search for
+    the ~31 stops with aliases and every stop whose match relies on its
+    landmark."""
+    created = "S__E2E_SEARCH_FIELDS"
+    session = SessionLocal()
+    try:
+        session.add(
+            Stop(
+                stop_id=created,
+                stop_name="__e2e search fields, delete me",
+                aliases="Test Alias",
+                landmark="Test Landmark Chowk / Junction",
+                ward=7,
+                lat=27.7515,
+                lng=85.402,
+                status="active",
+                is_major_stop=False,
+                has_shelter=False,
+                has_ticket_counter=False,
+                is_interchange=False,
+                wheelchair_access=False,
+                audio_support=False,
+                geo_out_of_bounds=False,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    try:
+        res = client.get(f"/stops/{created}")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["aliases"] == "Test Alias"
+        assert body["landmark"] == "Test Landmark Chowk / Junction"
+        assert body["ward"] == 7
+    finally:
+        session = SessionLocal()
+        try:
+            stop = session.get(Stop, created)
+            if stop is not None:
+                session.delete(stop)
+                session.commit()
+        finally:
+            session.close()
+
+
 def test_stops_nearby_not_shadowed_by_stop_id_route(client):
     """Regression guard: /stops/nearby must still resolve to the nearby
     handler, not get swallowed by /stops/{stop_id} matching 'nearby' as a

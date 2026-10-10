@@ -1,6 +1,6 @@
 "use client";
 
-import { FareOut, LoadingStage, RouteAlternative, RouteLeg, RouteSearchResult } from "@/types/route";
+import { FareOut, LoadingStage, RouteAlternative, RouteFinderResult, RouteSearchResult } from "@/types/route";
 import RouteTimeline from "./RouteTimeline";
 import { BusIcon, ClockIcon, TransferIcon, WalkIcon } from "@/components/icons/TransitIcons";
 import InlineAlert from "@/components/ui/InlineAlert";
@@ -53,29 +53,9 @@ function formatDuration(totalSeconds: number): { value: string; unit: string } {
 }
 
 function formatFare(fare: FareOut): string {
-  const range =
-    fare.fare_npr_min === fare.fare_npr_max
-      ? `Rs. ${fare.fare_npr_min}`
-      : `Rs. ${fare.fare_npr_min}–${fare.fare_npr_max}`;
-  return fare.student_discount_pct ? `${range} (${fare.student_discount_pct}% off, students)` : range;
-}
-
-// Simple haversine distance for straight-line estimation
-function calculateStraightLineDistance(
-  from: { lat: number; lng: number },
-  to: { lat: number; lng: number }
-): number {
-  const R = 6371; // Earth radius in km
-  const toRad = (deg: number) => deg * Math.PI / 180;
-  const dLat = toRad(to.lat - from.lat);
-  const dLng = toRad(to.lng - from.lng);
-  const lat1 = toRad(from.lat);
-  const lat2 = toRad(to.lat);
-  const sinDLat = Math.sin(dLat / 2);
-  const sinDLng = Math.sin(dLng / 2);
-  const haversineA = sinDLat * sinDLat + sinDLng * sinDLng * Math.cos(lat1) * Math.cos(lat2);
-  const c = 2 * Math.atan2(Math.sqrt(haversineA), Math.sqrt(1 - haversineA));
-  return R * c;
+  return fare.fare_npr_min === fare.fare_npr_max
+    ? `Rs. ${fare.fare_npr_min}`
+    : `Rs. ${fare.fare_npr_min}–${fare.fare_npr_max}`;
 }
 
 export default function RouteResultPanel({
@@ -131,51 +111,34 @@ export default function RouteResultPanel({
 
   // result.found === true from here on.
   const isPrimary = selectedIndex === -1;
-  const active: { legs: RouteLeg[]; total_cost: number; transfer_count: number } = isPrimary
+  const active: RouteFinderResult | RouteAlternative = isPrimary
     ? result
     : result.alternatives[selectedIndex];
 
   const legs = active.legs;
   const rideLegs = legs.filter((leg) => leg.route_id !== TRANSFER_ROUTE_ID);
   const walkLegs = legs.filter((leg) => leg.route_id === TRANSFER_ROUTE_ID);
-
-  // Backend now attaches real OSRM road_geometry to alternatives too
-  // (deduplicated to genuinely distinct paths, capped at 2, so it's no
-  // longer the tripled-OSRM-calls cost it used to be) -- so this checks
-  // the data itself rather than assuming only the primary result has
-  // it. Kept as a per-leg check (not just "isPrimary") because OSRM can
-  // still fail for an individual leg at request time (see
-  // _attach_road_geometry's `except OSRMError: pass`), leaving that
-  // leg's road_geometry null regardless of which option it's on.
-  const allLegsHaveGeometry = legs.every((leg) => leg.road_geometry);
-
   const activeAlt = isPrimary ? null : result.alternatives[selectedIndex];
+  // Each option carries its own fare now, so the selected alternative's
+  // card never borrows the primary result's fare (the old bug).
+  const activeFare = active.fare ?? null;
 
-  // Calculate estimated duration when road geometry is missing
-  // Use average speed of ~20 km/h for bus, ~4.5 km/h for walking
-  function estimateDuration(legsToEstimate: RouteLeg[]): number {
-    const BUS_SPEED_KMH = 20;
-    const WALK_SPEED_KMH = 4.5;
-    let totalSeconds = 0;
-    for (const leg of legsToEstimate) {
-      const isWalk = leg.route_id === TRANSFER_ROUTE_ID;
-      const speedKmh = isWalk ? WALK_SPEED_KMH : BUS_SPEED_KMH;
-      // Use road_geometry distance if available, otherwise straight-line distance
-      const distanceKm = leg.road_geometry
-        ? leg.road_geometry.distance_m / 1000
-        : calculateStraightLineDistance(leg.board_stop, leg.alight_stop);
-      totalSeconds += (distanceKm / speedKmh) * 3600;
-    }
-    return totalSeconds;
-  }
-
-  const totalDurationS = allLegsHaveGeometry
-    ? legs.reduce((sum, leg) => sum + (leg.road_geometry?.duration_s ?? 0), 0)
-    : estimateDuration(legs);
+  // Trip time is ALWAYS the backend's fixed-speed estimate, never the
+  // OSRM driving-profile duration_s -- that describes how long a private
+  // car would take at free-flow speed, not a bus that stops, boards and
+  // sits in traffic. Prefer the per-result total the backend computed;
+  // for hand-built/external data fall back to summing each leg's own
+  // estimate. Labeled "(est.)" unconditionally, because it always is one.
+  const totalDurationS =
+    active.total_estimated_duration_s ??
+    legs.reduce((sum, leg) => sum + (leg.estimated_duration_s ?? 0), 0);
   const duration = formatDuration(totalDurationS);
-  const isEstimated = !allLegsHaveGeometry;
-  const walkDurationS = walkLegs.reduce((sum, leg) => sum + (leg.road_geometry?.duration_s ?? 0), 0);
-  const hasWalkDuration = walkLegs.length > 0 && walkLegs.every((leg) => leg.road_geometry);
+  const walkDurationS = walkLegs.reduce(
+    (sum, leg) => sum + (leg.estimated_duration_s ?? 0),
+    0
+  );
+  const hasWalkDuration =
+    walkLegs.length > 0 && walkLegs.every((leg) => leg.estimated_duration_s != null);
 
   const cardLabel = isPrimary
     ? active.transfer_count === 0
@@ -226,18 +189,9 @@ export default function RouteResultPanel({
         <p className="text-xs font-semibold uppercase tracking-wide text-accent-purple">{cardLabel}</p>
 
         <div className="mt-1.5 flex items-baseline gap-2">
-          {isEstimated ? (
-            <>
-              <span className="text-3xl font-bold leading-none tracking-tight text-ink">{duration.value}</span>
-              <span className="text-sm font-medium text-ink-secondary">{duration.unit}</span>
-              <span className="text-xs text-accent-yellow-text font-medium ml-1">(est.)</span>
-            </>
-          ) : (
-            <>
-              <span className="text-3xl font-bold leading-none tracking-tight text-ink">{duration.value}</span>
-              <span className="text-sm font-medium text-ink-secondary">{duration.unit}</span>
-            </>
-          )}
+          <span className="text-3xl font-bold leading-none tracking-tight text-ink">{duration.value}</span>
+          <span className="text-sm font-medium text-ink-secondary">{duration.unit}</span>
+          <span className="text-xs text-accent-yellow-text font-medium ml-1">(est.)</span>
         </div>
 
         <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-ink-secondary">
@@ -258,14 +212,24 @@ export default function RouteResultPanel({
             </span>
           )}
           <span className="inline-flex items-center gap-1 font-semibold text-ink">
-            {result.fare ? formatFare(result.fare) : "Fare unavailable"}
+            {activeFare ? formatFare(activeFare) : "Fare unavailable"}
           </span>
         </div>
 
+        <p className="mt-2 inline-flex items-center gap-1 text-xs text-ink-tertiary">
+          <ClockIcon size={12} />
+          Time is an estimate from assumed travel speeds, not a live ETA.
+        </p>
+        {activeFare && (
+          <p className="mt-1 text-xs text-ink-tertiary">
+            Estimated fare
+            {activeFare.verification_note ? " — pending confirmation" : ""}, not a final ticket price.
+          </p>
+        )}
         {activeAlt?.label === "fastest_estimated" && (
-          <p className="mt-2 inline-flex items-center gap-1 text-xs text-ink-tertiary">
+          <p className="mt-1 inline-flex items-center gap-1 text-xs text-ink-tertiary">
             <ClockIcon size={12} />
-            Estimated from assumed travel speeds, not a live ETA.
+            This option was ranked by estimated travel time.
           </p>
         )}
       </div>

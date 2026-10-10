@@ -48,6 +48,7 @@ def fare_band(client):
         fare_npr_min=25.0,
         fare_npr_max=40.0,
         student_discount_pct=50.0,
+        verification_note="test-band: desk estimate, pending gazette confirmation",
     )
     session.add(row)
     session.commit()
@@ -71,6 +72,18 @@ def test_fare_lookup_matches_band_containing_distance(client, fare_band):
     assert body["fare_npr_min"] == 25.0
     assert body["fare_npr_max"] == 40.0
     assert body["student_discount_pct"] == 50.0
+
+
+def test_fare_exposes_verification_note(client, fare_band):
+    """The fare API must surface the rule's verification caveat, so the UI
+    can label a fare as estimated/pending rather than authoritative."""
+    resp = client.get("/fare", params={"distance_km": 505.0})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "verification_note" in body
+    assert body["verification_note"] == (
+        "test-band: desk estimate, pending gazette confirmation"
+    )
 
 
 def test_fare_lookup_is_inclusive_of_min_distance(client, fare_band):

@@ -14,6 +14,9 @@ class StopOut(BaseModel):
     lng: float
     zone: Optional[str] = None
     district: Optional[str] = None
+    aliases: Optional[str] = None
+    ward: Optional[int] = None
+    landmark: Optional[str] = None
     is_major_stop: bool
     is_interchange: bool
     status: str
@@ -109,6 +112,10 @@ class FareOut(BaseModel):
     fare_npr_min: float
     fare_npr_max: float
     student_discount_pct: Optional[float] = None
+    # Human note on how solid this fare band is ("PENDING confirmation
+    # against the official gazette"), read straight off the fare rule.
+    # Survives the cache layer because it's part of the validated schema.
+    verification_note: Optional[str] = None
 
 
 class RouteLeg(BaseModel):
@@ -123,13 +130,33 @@ class RouteLeg(BaseModel):
     num_ride_segments: int
     stops: list[StopOut] = []  # every physical stop on this leg, in order, board→alight inclusive
     road_geometry: Optional[dict] = None
+    # Operator that runs this route, resolved from the linked Operator row
+    # or the free-text Route.operator column. None for walking-transfer
+    # legs, and for routes whose operator isn't recorded.
+    operator_name: Optional[str] = None
+    # The terminus this leg travels toward, derived from the board/alight
+    # stops' positions in the route's stop sequence. None when it can't be
+    # determined (transfer leg, or a stop missing from the route's
+    # sequence). This is a direction hint for riders, not a guarantee the
+    # vehicle terminates exactly there.
+    direction_towards: Optional[str] = None
+    # Backend-computed estimated travel time for THIS leg: road distance
+    # (OSRM road_geometry when available, haversine otherwise) divided by
+    # a fixed assumed speed (BUS_AVG_SPEED_MPS for rides, WALK_SPEED_MPS
+    # for transfers). Deliberately NOT the OSRM driving-profile
+    # duration_s -- that describes how long a private car would take on
+    # the same roads at free-flow speeds, not a bus with stops, boarding,
+    # dwell and traffic. This is the labeled-approximate figure (see
+    # RouteFinderResult.total_estimated_duration_s), not a live ETA.
+    estimated_duration_s: Optional[float] = None
 
 
 class RouteAlternative(BaseModel):
     """A secondary option alongside the primary route-finder result.
-    Deliberately flat (no nested `alternatives` of its own, no `fare` --
-    callers show fare/details for the primary result and let the person
-    switch to an alternative if they prefer it). Each alternative is a
+    Deliberately flat (no nested `alternatives` of its own -- callers show
+    the details for whichever option is selected; each alternative carries
+    its own `fare` and estimated duration so the selected card never has
+    to substitute the primary result's figures). Each alternative is a
     genuinely different physical path -- deduplicated by stop sequence,
     not just by route_id, so two route numbers covering the identical
     stop-for-stop corridor collapse into a single option rather than
@@ -158,6 +185,14 @@ class RouteAlternative(BaseModel):
     total_cost: float
     transfer_count: int
     legs: list[RouteLeg]
+    # This option's own fare, computed on the ride-leg distance only
+    # (walking transfers contribute distance to the trip but nothing to
+    # the bus fare). None when there's no ride leg or no fare rule matches.
+    fare: Optional[FareOut] = None
+    # Sum of every leg's estimated_duration_s plus an assumed per-ride
+    # boarding wait (see api/routing.py). Labeled approximation, same
+    # basis as RouteFinderResult.total_estimated_duration_s.
+    total_estimated_duration_s: Optional[float] = None
 
 
 class RouteFinderResult(BaseModel):
@@ -172,6 +207,12 @@ class RouteFinderResult(BaseModel):
     legs: list[RouteLeg]
     fare: Optional[FareOut] = None
     alternatives: list[RouteAlternative] = []
+    # Sum of every leg's estimated_duration_s plus an assumed per-ride
+    # boarding wait -- time at fixed assumed speeds over the actual route
+    # distance, NOT the OSRM driving-profile duration summed up (which a
+    # private car at free-flow speed would take). A labeled estimate,
+    # never a live ETA; the frontend must show it as one.
+    total_estimated_duration_s: float
 
 
 # ---------------------------------------------------------------------------
