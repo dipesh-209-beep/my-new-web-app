@@ -54,9 +54,37 @@ Verified by reading the source, not by audit:
   origin/destination swap, "use my location"/"pick on map"/"+ Add a stop",
   the via-stop remove button, the Submit button, the map-layer and traffic
   toggle pills, the congestion day/hour selects and "Reset to now", the route
-  alternative pills, the bottom-sheet toggle, and the map's zoom and recenter
-  controls. Measured with a headless Chromium pass at 320/360/390 px. Leaflet's
-  own attribution is inline text (exempt under 2.5.5).
+  alternative pills, the bottom-sheet toggle, the map's zoom and recenter
+  controls, and the all-stops cluster bubbles. Markers draw at their natural
+  size but are wrapped in a transparent hit box at least 44×44 px — centered
+  (`withHitArea`) or bottom-anchored so a pin's tip stays on its coordinate
+  (`withBottomAnchoredHitArea`) — in `components/map/markerKit.ts`, so the
+  drawn marker keeps its shape while the tappable area meets the goal. The
+  authored controls and cluster bubbles were measured in a headless Chromium
+  pass at 320/360/390 px; the marker hit boxes (stop tag, route pin,
+  user-location) are verified by unit tests asserting `iconSize`/`iconAnchor`
+  (`BusMap.test.tsx`), not yet measured in a browser. Leaflet's own attribution
+  is inline text (exempt under 2.5.5).
+- **Map markers are keyboard-operable where they do something.** Cluster
+  bubbles are focusable buttons that zoom in on Enter or Space, and route
+  origin/destination/transfer pins and the "your location" marker open their
+  popup the same way (`components/map/markerA11y.ts`, applied in the map
+  layer hooks). Markers that are purely informational — individual stops
+  while map-picking is off, the sequenced stops of a browsed route — are
+  removed from the tab order (`tabindex="-1"`, no button role) instead of
+  being announced as controls that do nothing. This is what stops the
+  all-stops layer from exposing hundreds of tab stops that cannot be
+  activated. Because Leaflet builds a marker's icon element only once it is
+  on a map (`onAdd`) and rebuilds it on `setIcon` and on remove/re-add (the
+  route legend toggles layers exactly this way), the affordance is registered
+  against the marker's `add` event rather than bound once at construction, so
+  it survives a legend off/on toggle (`bindMarkerLifecycle` in
+  `components/map/markerA11y.ts`; covered by `BusMap.test.tsx`). The separate
+  hover icon swap is re-decorated by the layer hook itself (`decorateStop()` in
+  `components/map/useAllStopsLayer.ts`), not by `bindMarkerLifecycle`. Cluster
+  keyboard operability was checked in a headless Chromium pass at 320/360/390
+  px; the route-pin and user-location keyboard activation are verified by unit
+  tests (`BusMap.test.tsx`), not yet measured in a browser.
 - **Asynchronous route-search outcomes are announced.** The loading, found,
   no-route and error states each render inside an `aria-live` region (the
   loading and found panels use `aria-live="polite"`; the error uses
@@ -71,20 +99,27 @@ Verified by reading the source, not by audit:
 
 Ordered roughly by how much they cost a user.
 
-### 1. The map is not keyboard-operable
+### 1. The map is only partly keyboard-operable
 
-Leaflet is not keyboard-navigable by default: markers, popups, and the
-polyline layers are canvas/DOM elements with no tab stops, no focus order, and
-no key handling. A keyboard or screen-reader user cannot pan the map, select a
-stop, or read a route's stops through it.
+Marker *activation* is now reachable by keyboard: cluster bubbles respond to
+Enter/Space by zooming in, and the origin/destination/transfer and
+user-location pins open their popups, with the app's `:focus-visible` ring
+showing focus. Leaflet's default of making every marker a focusable button
+with no key handler — which made the all-stops layer hundreds of unactivatable
+tab stops — is disabled (`keyboard: false`) and replaced by explicit,
+per-marker affordances.
 
-This is the largest accessibility gap in the app, and the app *is* a map. The
-route results, stop details and fare information are all rendered in the
-surrounding panel as text, so the information is reachable — but the
-exploration experience is not.
+The map as a whole is still not keyboard-navigable, though. There is no
+keyboard panning, no way to move focus from one marker to the next with arrow
+keys, and individual stop markers only enter the tab order while map-picking
+is armed. Leaflet's polyline layers remain non-interactive for keyboard users,
+so a route cannot be traced through the map itself.
 
 The fix is not a Leaflet setting; it needs a non-map equivalent (a list of
-stops/routes that can be tabbed through and expanded) alongside the map.
+stops/routes that can be tabbed through and expanded) alongside the map. The
+route results, stop details and fare information are already rendered as text
+in the surrounding panel, so the information is reachable — the exploration
+experience is what remains weak.
 
 ### 2. The congestion legend is in the panel, not on the map
 
@@ -150,12 +185,16 @@ the plugin fixes the behaviour.
   politely is still unverified.
 - **The mobile bottom sheet** (`hooks/useSheet.ts`) — drag, focus trapping and
   Escape behaviour for a dialog-like surface.
-- **Text scaling** at 200% (reflow at 320 px is now verified and passes).
-- **Touch target sizes of the stop cluster bubbles** (the app's own controls
-  and the map zoom/recenter controls are now at least 44×44; the Leaflet
-  marker-cluster bubbles have not been resized).
+- **Text scaling** at 200%. Partly checked: at 1280 px and at 320 px the page
+  reflows without horizontal scrolling, and no text is lost at the sizes
+  probed. One control — an icon-only map-toggle button — had its box extend
+  past the viewport edge at 320 px + 200% text (the document did not scroll,
+  so it was clipped rather than reachable). It needs a manual look, because
+  the headless probe could not tell which of the map-toggle pills it was.
 - **Screen reader smoke tests** on the main flows: search, select a route,
-  walk to a stop, and the `/admin` UI.
+  walk to a stop, and the `/admin` UI. No browser would expose the app to the
+  AT-SPI bus in the audit environment, so the marker keyboard work above is
+  verified structurally and with a headless browser, not by hearing it read.
 
 ## How to check
 
@@ -166,13 +205,18 @@ the plugin fixes the behaviour.
    natural place.
 3. **Keyboard only:** unplug the mouse. Tab from page load — the skip link
    should be first. Reach every control that responds to a click. Confirm the
-   focus ring is visible on each. The map will fail this; that is gap 1.
+   focus ring is visible on each. On the map, cluster bubbles and popup pins
+   should activate on Enter/Space; individual stops are intentionally not in
+  the tab order unless map-picking is armed. Keyboard panning and marker-to-
+   marker navigation are still missing; that is gap 1.
 4. **Screen reader:** VoiceOver (macOS) or NVDA (Windows). Verify the
    autocomplete announces its expanded state and highlighted option, and that
    the results panel updates are announced.
 5. **Contrast:** any colour-contrast checker against the rendered page, at
    both themes, plus the congestion ramp specifically.
-6. **Zoom/reflow:** 200% browser zoom, and 320px viewport width.
+6. **Zoom/reflow:** 200% browser text scaling and 320px viewport width.
+   Watch the icon-only map-toggle buttons at 320 px + 200% — one was seen
+   clipping past the viewport edge and needs a manual confirmation.
 
 ## If you fix one thing
 

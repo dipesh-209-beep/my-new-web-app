@@ -8,6 +8,14 @@ export interface MockMarker {
   popup: { content: string; options?: unknown } | null;
   handlers: Record<string, (() => void)[]>;
   removed: boolean;
+  /** The marker's icon element. `null` until the marker is added to a live
+   * layer, matching Leaflet, where `Marker._initIcon` runs in `onAdd`. It is
+   * replaced with a new element when a removed marker is re-added. */
+  element: HTMLElement | null;
+  /** Set by `openPopup()`; assertions read this instead of a real popup. */
+  popupOpened: boolean;
+  /** Incremented by `openPopup()`; lets tests assert activation fires once. */
+  popupOpenCount: number;
 }
 
 export interface MockPolyline {
@@ -33,6 +41,8 @@ export interface MockMapInstance {
   fitBoundsCalls: unknown[][];
   zoom: number;
   handlers: Record<string, (() => void)[]>;
+  /** Spy, called once on init and again whenever the app recentres/zooms. */
+  setView: ReturnType<typeof vi.fn>;
   /** Test helper: simulate the map firing "zoomend" after a zoom change. */
   fireZoomEnd(newZoom: number): void;
 }
@@ -62,11 +72,44 @@ function makeMarker(kind: MockMarker["kind"], latlng: unknown, options: Record<s
     popup: null,
     handlers: {},
     removed: false,
+    element: null,
+    popupOpened: false,
+    popupOpenCount: 0,
   };
   leafletState.markers.push(marker);
 
+  const fire = (event: string) => {
+    marker.handlers[event]?.forEach((handler) => handler());
+  };
+
+  // `addToMap`/`removeFromMap` back the mock's layer-group lifecycle. Leaflet
+  // creates the icon element in `onAdd` (firing "add") and destroys it in
+  // `onRemove` (firing "remove"); a re-add builds a fresh element.
+  const addToMap = () => {
+    marker.element = document.createElement("div");
+    marker.removed = false;
+    fire("add");
+  };
+  const removeFromMap = () => {
+    marker.element = null;
+    marker.removed = true;
+    fire("remove");
+  };
+
   const api = {
     ...marker,
+    getElement: () => marker.element ?? undefined,
+    addToMap,
+    removeFromMap,
+    openPopup: () => {
+      marker.popupOpened = true;
+      marker.popupOpenCount += 1;
+      return api;
+    },
+    closePopup: () => {
+      marker.popupOpened = false;
+      return api;
+    },
     bindTooltip: (content: string, tooltipOptions?: unknown) => {
       marker.tooltip = { content, options: tooltipOptions };
       return api;
@@ -79,36 +122,58 @@ function makeMarker(kind: MockMarker["kind"], latlng: unknown, options: Record<s
       (marker.handlers[event] ??= []).push(handler);
       return api;
     },
+    off: (event: string, handler: () => void) => {
+      const list = marker.handlers[event];
+      if (list) marker.handlers[event] = list.filter((h) => h !== handler);
+      return api;
+    },
     setStyle: (opts: Record<string, unknown>) => {
       Object.assign(marker.options, opts);
       return api;
     },
     setIcon: (icon: unknown) => {
       marker.options.icon = icon;
+      // Leaflet rebuilds the icon element on setIcon while the marker is on a
+      // map; model the replacement so handlers on the old element are lost.
+      if (marker.element) {
+        marker.element = document.createElement("div");
+        fire("add");
+      }
       return api;
     },
-    addTo: () => api,
-    remove: () => {
-      marker.removed = true;
+    addTo: () => {
+      addToMap();
+      return api;
     },
+    remove: () => removeFromMap(),
   };
   return api;
 }
 
+/** Attach/detach a child layer to the map, if it knows how (markers do). */
+function attachLayer(layer: unknown): void {
+  (layer as { addToMap?: () => void }).addToMap?.();
+}
+function detachLayer(layer: unknown): void {
+  (layer as { removeFromMap?: () => void }).removeFromMap?.();
+}
+
 export function createLeafletMock() {
   function makeMapApi(): MockMapInstance & Record<string, unknown> {
+    const setView = vi.fn().mockReturnThis();
     const instance: MockMapInstance = {
       fitBoundsCalls: [],
       zoom: 12,
       handlers: {},
+      setView,
       fireZoomEnd(newZoom: number) {
         this.zoom = newZoom;
-        (this.handlers["zoomend"] ?? []).forEach((h) => h());
+        this.handlers["zoomend"]?.forEach((h) => h());
       },
     };
     const api = {
       ...instance,
-      setView: vi.fn().mockReturnThis(),
+      setView,
       on: vi.fn((event: string, handler: () => void) => {
         (instance.handlers[event] ??= []).push(handler);
         return api;
@@ -137,14 +202,25 @@ export function createLeafletMock() {
       const api = {
         addTo: () => {
           group.addedToMap = true;
+          group.removed = false;
+          group.layers.forEach((layer) => attachLayer(layer));
           return api;
         },
         addLayer: (layer: unknown) => {
           group.layers.push(layer);
+          if (group.addedToMap) attachLayer(layer);
+          return api;
+        },
+        removeLayer: (layer: unknown) => {
+          const index = group.layers.indexOf(layer);
+          if (index >= 0) group.layers.splice(index, 1);
+          detachLayer(layer);
           return api;
         },
         remove: () => {
           group.removed = true;
+          group.layers.forEach((layer) => detachLayer(layer));
+          return api;
         },
       };
       return api;

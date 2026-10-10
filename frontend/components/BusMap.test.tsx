@@ -26,6 +26,18 @@ function makeStop(overrides: Partial<Stop> = {}): Stop {
   };
 }
 
+/** Dispatch a keydown the way markerA11y's handler expects, returning the
+ * event so tests can assert `defaultPrevented` (Space must not scroll). */
+function pressKey(element: HTMLElement, key: string): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    bubbles: true,
+    cancelable: true,
+  });
+  element.dispatchEvent(event);
+  return event;
+}
+
 beforeEach(() => {
   leafletState.reset();
 });
@@ -425,6 +437,219 @@ describe("BusMap", () => {
       // Derived from the real gradient fn rather than a hardcoded hex, so
       // this can't go stale again if the gradient stops are retuned.
       expect(leafletState.polylines[0].options.color).toBe(getCongestionColor(2));
+    });
+  });
+
+  describe("keyboard accessibility", () => {
+    function makeResult(): RouteSearchResult {
+      const board = makeStop({ stop_id: "S0001", stop_name: "Ratna Park" });
+      const alight = makeStop({ stop_id: "S0002", stop_name: "Koteshwor" });
+      return {
+        found: true,
+        origin_stop_id: "S0001",
+        destination_stop_id: "S0002",
+        total_cost: 10,
+        transfer_count: 0,
+        fare: null,
+        alternatives: [],
+        legs: [
+          {
+            route_id: "R0001",
+            route_name: "Route 1",
+            board_stop: board,
+            alight_stop: alight,
+            num_ride_segments: 1,
+            stops: [board, alight],
+            road_geometry: null,
+          },
+        ],
+      };
+    }
+
+    function legendButton(): HTMLButtonElement {
+      const legendDiv = leafletState.controls.find(
+        (c) => c.div?.style.maxWidth === "min(220px, 60vw)"
+      )!.div!;
+      return legendDiv.querySelector("button")!;
+    }
+
+    it("makes a cluster marker a focusable button with a 44px target that zooms on Enter and Space", () => {
+      const stops = [
+        makeStop({ stop_id: "S0001", lat: 27.70, lng: 85.30 }),
+        makeStop({ stop_id: "S0002", lat: 27.7001, lng: 85.3001 }), // a few meters away
+      ];
+      render(<BusMap allStops={stops} />);
+
+      const cluster = leafletState.markers[0];
+      const el = cluster.element!;
+      expect(el.getAttribute("role")).toBe("button");
+      expect(el.tabIndex).toBe(0);
+      expect(el.getAttribute("aria-label")).toContain("2 bus stops");
+
+      // Leaflet's stock cluster is 26-34px; the icon element is padded to the
+      // 44px target size while the drawn bubble keeps its own size.
+      const icon = cluster.options.icon as { iconSize: [number, number] };
+      expect(icon.iconSize).toEqual([44, 44]);
+
+      const map = leafletState.mapInstances[0];
+      map.setView.mockClear(); // ignore the init setView
+
+      pressKey(el, "Enter");
+      expect(map.setView).toHaveBeenCalledTimes(1);
+
+      const space = pressKey(el, " ");
+      expect(map.setView).toHaveBeenCalledTimes(2);
+      // Space must not scroll the page while it activates a marker.
+      expect(space.defaultPrevented).toBe(true);
+    });
+
+    it("keeps stop markers out of the tab order until map-picking is armed, then activates exactly once on Enter", () => {
+      const stop = makeStop({ stop_id: "S0001", stop_name: "Ratna Park", lat: 27.70, lng: 85.30 });
+      const onStopPick = vi.fn();
+      const stops = [stop];
+
+      const { rerender } = render(
+        <BusMap allStops={stops} pickTarget={null} onStopPick={onStopPick} />
+      );
+      let el = leafletState.markers[0].element!;
+      // Inert while not picking: no button role, skipped by Tab.
+      expect(el.getAttribute("role")).toBeNull();
+      expect(el.tabIndex).toBe(-1);
+      pressKey(el, "Enter");
+      expect(onStopPick).not.toHaveBeenCalled();
+
+      // The drawn tag stays its natural size; the tappable box is 44px.
+      const icon = leafletState.markers[0].options.icon as { iconSize: [number, number] };
+      expect(icon.iconSize).toEqual([44, 44]);
+
+      rerender(<BusMap allStops={stops} pickTarget="origin" onStopPick={onStopPick} />);
+      el = leafletState.markers[0].element!;
+      expect(el.getAttribute("role")).toBe("button");
+      expect(el.tabIndex).toBe(0);
+      expect(el.getAttribute("aria-label")).toContain("Ratna Park");
+
+      pressKey(el, "Enter");
+      expect(onStopPick).toHaveBeenCalledTimes(1);
+      expect(onStopPick).toHaveBeenCalledWith(stop);
+    });
+
+    it("does not double-activate a stop when a hover icon swap replaces the element", () => {
+      const stop = makeStop({ stop_id: "S0001", lat: 27.70, lng: 85.30 });
+      const onStopPick = vi.fn();
+      render(<BusMap allStops={[stop]} pickTarget="origin" onStopPick={onStopPick} />);
+
+      const marker = leafletState.markers[0];
+      const firstElement = marker.element;
+
+      // Hover then leave recreates the icon element each time, and the app
+      // re-decorates the new one. Activation must still fire once.
+      marker.handlers["mouseover"]?.forEach((h) => h());
+      marker.handlers["mouseout"]?.forEach((h) => h());
+
+      expect(marker.element).not.toBe(firstElement);
+      pressKey(marker.element!, "Enter");
+      expect(onStopPick).toHaveBeenCalledTimes(1);
+    });
+
+    it("opens a route-result pin popup on Enter and Space, once per keypress", () => {
+      render(<BusMap result={makeResult()} />);
+
+      const originPin = leafletState.markers.find((m) =>
+        m.popup?.content.includes("Origin")
+      )!;
+      expect(originPin).toBeDefined();
+      expect(originPin.options.keyboard).toBe(false);
+      expect(originPin.element).not.toBeNull();
+      expect(originPin.element!.getAttribute("role")).toBe("button");
+      expect(originPin.element!.tabIndex).toBe(0);
+      expect(originPin.element!.getAttribute("aria-label")).toContain("Ratna Park");
+
+      // Bottom-anchored 44px hit box: the tip, not the box center, is the
+      // geographic anchor.
+      const icon = originPin.options.icon as { iconSize: [number, number]; iconAnchor: [number, number] };
+      expect(icon.iconSize).toEqual([44, 44]);
+      expect(icon.iconAnchor).toEqual([22, 44]);
+
+      expect(pressKey(originPin.element!, "Enter").defaultPrevented).toBe(true);
+      expect(originPin.popupOpenCount).toBe(1);
+
+      pressKey(originPin.element!, " ");
+      expect(originPin.popupOpenCount).toBe(2);
+      expect(originPin.popupOpened).toBe(true);
+    });
+
+    it("activates the user-location marker from the keyboard", () => {
+      render(<BusMap userLocation={{ lat: 27.7, lng: 85.3 }} />);
+
+      const marker = leafletState.markers.find((m) => m.popup?.content === "Your location")!;
+      expect(marker.element).not.toBeNull();
+      expect(marker.element!.getAttribute("role")).toBe("button");
+      expect(marker.element!.getAttribute("aria-label")).toBe("Your location");
+
+      const icon = marker.options.icon as { iconSize: [number, number]; iconAnchor: [number, number] };
+      expect(icon.iconSize).toEqual([44, 44]);
+      expect(icon.iconAnchor).toEqual([22, 22]);
+
+      pressKey(marker.element!, "Enter");
+      expect(marker.popupOpenCount).toBe(1);
+    });
+
+    it("preserves pin keyboard behavior and recreates the element after a legend off/on cycle", () => {
+      render(<BusMap result={makeResult()} />);
+
+      const originPin = leafletState.markers.find((m) => m.popup?.content.includes("Origin"))!;
+      const firstElement = originPin.element;
+      expect(firstElement).not.toBeNull();
+      expect(firstElement!.getAttribute("role")).toBe("button");
+
+      const rowButton = legendButton();
+
+      // Hide the leg: the marker leaves the map and Leaflet discards its
+      // element.
+      rowButton.click();
+      expect(originPin.element).toBeNull();
+
+      // Show it again: Leaflet builds a fresh element that must be
+      // re-decorated by the lifecycle, not left as a bare div with no role.
+      rowButton.click();
+      const secondElement = originPin.element;
+      expect(secondElement).not.toBeNull();
+      expect(secondElement).not.toBe(firstElement);
+      expect(secondElement!.getAttribute("role")).toBe("button");
+      expect(secondElement!.tabIndex).toBe(0);
+
+      pressKey(secondElement!, "Enter");
+      expect(originPin.popupOpenCount).toBe(1);
+    });
+
+    it("does not double-activate when a pin is decorated again on a repeated add", () => {
+      render(<BusMap result={makeResult()} />);
+
+      const originPin = leafletState.markers.find((m) => m.popup?.content.includes("Origin"))!;
+      expect(originPin.element).not.toBeNull();
+
+      // Re-run the lifecycle against the same element: rebinding must
+      // replace, not stack, the key handler.
+      originPin.handlers["add"]?.forEach((h) => h());
+
+      pressKey(originPin.element!, "Enter");
+      expect(originPin.popupOpenCount).toBe(1);
+    });
+
+    it("keeps informational browse-route markers out of the tab order", () => {
+      const entries: RouteStopEntry[] = [
+        { sequence_no: 1, stop: makeStop({ stop_id: "S0001", lat: 27.7, lng: 85.3 }) },
+        { sequence_no: 2, stop: makeStop({ stop_id: "S0002", lat: 27.71, lng: 85.32 }) },
+      ];
+      render(<BusMap browseRouteStops={entries} />);
+
+      const markers = leafletState.markers.filter((m) => m.kind === "marker");
+      expect(markers).toHaveLength(2);
+      markers.forEach((m) => {
+        expect(m.options.keyboard).toBe(false);
+        expect(m.element!.getAttribute("role")).toBeNull();
+        expect(m.element!.tabIndex).toBe(-1);
+      });
     });
   });
 });

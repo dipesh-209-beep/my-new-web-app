@@ -6,6 +6,7 @@ import { RouteSearchResult } from "@/types/route";
 import { LEG_COLORS, TRANSFER_ROUTE_ID } from "@/lib/constants";
 import { escapeHtml } from "@/lib/escapeHtml";
 import { pinIcon } from "./markerKit";
+import { makeMarkerInteractive } from "./markerA11y";
 
 // Pins (not tags) for origin/destination/transfer -- these are the
 // specific singular points a found trip is about, distinct in shape (not
@@ -77,22 +78,33 @@ export function useRouteResultLayer({
 
       const fromMarker = L.marker([leg.board_stop.lat, leg.board_stop.lng], {
         icon: fromIcon,
+        keyboard: false,
       });
       fromMarker.bindPopup(
         `<strong>${escapeHtml(leg.board_stop.stop_name)}</strong><br/>${
           isFirstLeg ? "Origin" : "Transfer point"
         }`
       );
+      // Pins open a popup on click; make Enter/Space do the same.
+      makeMarkerInteractive(fromMarker, {
+        label: `${leg.board_stop.stop_name} — ${isFirstLeg ? "origin" : "transfer point"}`,
+        onActivate: () => fromMarker.openPopup(),
+      });
       legLayer.addLayer(fromMarker);
 
       const toMarker = L.marker([leg.alight_stop.lat, leg.alight_stop.lng], {
         icon: toIcon,
+        keyboard: false,
       });
       toMarker.bindPopup(
         `<strong>${escapeHtml(leg.alight_stop.stop_name)}</strong><br/>${
           isLastLeg ? "Destination" : "Transfer point"
         }`
       );
+      makeMarkerInteractive(toMarker, {
+        label: `${leg.alight_stop.stop_name} — ${isLastLeg ? "destination" : "transfer point"}`,
+        onActivate: () => toMarker.openPopup(),
+      });
       legLayer.addLayer(toMarker);
 
       // Intermediate stops

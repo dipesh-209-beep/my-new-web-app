@@ -5,6 +5,7 @@ import L from "leaflet";
 import { LatLng, WalkingRoute, Stop } from "@/types/route";
 import { escapeHtml } from "@/lib/escapeHtml";
 import { userLocationPulseIcon } from "./markerKit";
+import { makeMarkerInteractive } from "./markerA11y";
 
 const USER_WALK_COLOR = "#0D9488";
 const userLocationIcon = userLocationPulseIcon();
@@ -30,8 +31,13 @@ export function useUserLocationLayer({
     const marker = L.marker([userLocation.lat, userLocation.lng], {
       icon: userLocationIcon,
       zIndexOffset: 1000,
+      keyboard: false,
     });
     marker.bindPopup("Your location");
+    makeMarkerInteractive(marker, {
+      label: "Your location",
+      onActivate: () => marker.openPopup(),
+    });
     layer.addLayer(marker);
 
     if (walkingRoute) {

@@ -65,6 +65,9 @@ export function useRouteBrowserLayer({
     validEntries.forEach(({ entry, lat, lng }) => {
       const marker = L.marker([lat, lng], {
         icon: sequencedStopIcon(entry.sequence_no, BROWSE_ROUTE_COLOR),
+        // Informational only (tooltip, no action): keep it out of the tab
+        // order instead of exposing another focusable no-op button.
+        keyboard: false,
       });
       marker.bindTooltip(`${entry.sequence_no}. ${escapeHtml(entry.stop.stop_name)}`, {
         direction: "top",

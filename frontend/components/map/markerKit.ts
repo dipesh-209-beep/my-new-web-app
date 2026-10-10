@@ -39,6 +39,48 @@ const INK = "#1B1A2E";
 const INK_DIM = "#C9C7D6";
 const BRAND = "#E0A614";
 
+/** WCAG 2.5.5 target size (also the app's 44px convention, see
+ * components/map/useRecenterControl.ts). Interactive markers wrap their
+ * visual in a centered box at least this large so the tap/click target meets
+ * the goal while the drawn marker keeps its natural size. */
+const MIN_TARGET_PX = 44;
+
+/** Center a marker's visual inside a hit box that is at least
+ * MIN_TARGET_PX square, keeping the visual's own dimensions. The icon
+ * anchor stays at the center, so the drawn marker still sits exactly on its
+ * coordinate -- only the clickable area grows. */
+function withHitArea(
+  inner: string,
+  visualWidth: number,
+  visualHeight: number
+): { html: string; iconSize: [number, number]; iconAnchor: [number, number] } {
+  const width = Math.max(MIN_TARGET_PX, visualWidth);
+  const height = Math.max(MIN_TARGET_PX, visualHeight);
+  return {
+    html: `<span style="display:flex;align-items:center;justify-content:center;width:${width}px;height:${height}px;">${inner}</span>`,
+    iconSize: [width, height],
+    iconAnchor: [width / 2, height / 2],
+  };
+}
+
+/** Bottom-anchored variant of `withHitArea` for the teardrop pins. A pin's tip
+ * is the geographic point, so the hit box grows *upward* (the visual sits at
+ * the bottom-center of the box) and the icon anchor stays on the tip. A
+ * centered hit box would lift the tip off the coordinate. */
+function withBottomAnchoredHitArea(
+  inner: string,
+  visualWidth: number,
+  visualHeight: number
+): { html: string; iconSize: [number, number]; iconAnchor: [number, number] } {
+  const width = Math.max(MIN_TARGET_PX, visualWidth);
+  const height = Math.max(MIN_TARGET_PX, visualHeight);
+  return {
+    html: `<span style="display:flex;align-items:flex-end;justify-content:center;width:${width}px;height:${height}px;">${inner}</span>`,
+    iconSize: [width, height],
+    iconAnchor: [width / 2, height],
+  };
+}
+
 const BUS_GLYPH_PATH =
   "M5 4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v11a2 2 0 0 1-1 1.73V19a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H8v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-2.27A2 2 0 0 1 4 15V4Zm2 0v6h10V4H7Zm.5 9.25a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5Zm9 0a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5Z";
 
@@ -68,12 +110,14 @@ export function busTagIcon(state: StopTagState = "default"): L.DivIcon {
 
   return L.divIcon({
     className: "",
-    html: `<span style="display:flex;align-items:center;justify-content:center;
+    ...withHitArea(
+      `<span style="display:flex;align-items:center;justify-content:center;
       width:${w}px;height:${h}px;border-radius:3px;background:${bg};
       border:1.5px solid #ffffff;box-shadow:0 0 0 1px rgba(27,26,46,0.35);">
       ${busGlyph(glyphFill, glyphSize)}</span>`,
-    iconSize: [w, h],
-    iconAnchor: [w / 2, h / 2],
+      w,
+      h
+    ),
   });
 }
 
@@ -142,13 +186,17 @@ export function pinIcon(role: PinRole): L.DivIcon {
 
   return L.divIcon({
     className: "",
-    html: `<svg width="${size}" height="${size}" viewBox="0 0 24 24">
+    ...withBottomAnchoredHitArea(
+      `<svg width="${size}" height="${size}" viewBox="0 0 24 24">
       <path d="M12 22s-7.5-6.8-7.5-12A7.5 7.5 0 0 1 19.5 10c0 5.2-7.5 12-7.5 12Z"
         fill="${color}" stroke="#ffffff" stroke-width="1.5"/>
       ${glyph}
     </svg>`,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size],
+      size,
+      size
+    ),
+    // Relative to the anchor (the tip), not the box: popups still open at the
+    // top of the pin regardless of how large the hit box is.
     popupAnchor: [0, -size],
   });
 }
@@ -159,12 +207,16 @@ export function pinIcon(role: PinRole): L.DivIcon {
 export function userLocationPulseIcon(): L.DivIcon {
   return L.divIcon({
     className: "",
-    html: `<span style="position:relative;display:block;width:16px;height:16px;">
+    // Centered marker, so the centered hit area keeps the dot on its
+    // coordinate; the 32px pulse ring (16px dot + 8px inset) still fits.
+    ...withHitArea(
+      `<span style="position:relative;display:block;width:16px;height:16px;">
         <span style="position:absolute;inset:-8px;border-radius:9999px;background:rgba(224,166,20,0.25);"></span>
         <span style="position:absolute;inset:0;border-radius:9999px;background:${BRAND};border:2px solid #ffffff;box-shadow:0 0 0 1px rgba(27,26,46,0.35);"></span>
       </span>`,
-    iconSize: [16, 16],
-    iconAnchor: [8, 8],
+      16,
+      16
+    ),
   });
 }
 
@@ -176,8 +228,10 @@ export function clusterIcon(count: number): L.DivIcon {
   const size = count >= 100 ? 34 : count >= 10 ? 30 : 26;
   return L.divIcon({
     className: "",
-    html: `<span style="display:flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:9999px;background:${INK};color:#ffffff;font-size:11px;font-weight:700;border:2px solid #ffffff;box-shadow:0 0 0 1px rgba(27,26,46,0.35);">${count}</span>`,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
+    ...withHitArea(
+      `<span style="display:flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:9999px;background:${INK};color:#ffffff;font-size:11px;font-weight:700;border:2px solid #ffffff;box-shadow:0 0 0 1px rgba(27,26,46,0.35);">${count}</span>`,
+      size,
+      size
+    ),
   });
 }
