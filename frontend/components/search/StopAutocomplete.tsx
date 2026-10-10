@@ -151,7 +151,7 @@ function StopAutocompleteImpl({
           placeholder={stopsLoading ? "Loading stops…" : placeholder}
           autoComplete="off"
           aria-invalid={invalid}
-          className={`w-full rounded-md border bg-surface-raised py-2.5 pl-3 pr-8 text-sm text-ink outline-none transition-colors focus:border-accent-blue focus:bg-white ${
+          className={`w-full rounded-md border bg-surface-raised py-2.5 pl-3 pr-12 text-base text-ink outline-none transition-colors focus:border-accent-blue focus:bg-white ${
             invalid ? "border-accent-red" : isSelectedStop ? "border-accent-green" : "border-route-line"
           }`}
         />
@@ -163,7 +163,7 @@ function StopAutocompleteImpl({
               setIsOpen(false);
             }}
             aria-label={`Clear ${label.toLowerCase()}`}
-            className="absolute right-2 flex h-5 w-5 items-center justify-center rounded-full text-ink-tertiary hover:bg-surface-sunken hover:text-ink"
+            className="absolute right-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full text-ink-tertiary hover:bg-surface-sunken hover:text-ink"
           >
             ×
           </button>

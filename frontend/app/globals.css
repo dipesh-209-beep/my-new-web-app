@@ -101,6 +101,18 @@ body {
   color: #171717;
 }
 
+/* Enlarge Leaflet's stock zoom buttons to the app's 44px touch-target
+   size. Leaflet ships 30px controls, which pass WCAG 2.5.8 (24px) but
+   miss 2.5.5 (44px) on touch; overriding both the touch and non-touch
+   variants keeps them consistent whether or not a coarse pointer is
+   reported. */
+.leaflet-bar a,
+.leaflet-touch .leaflet-bar a {
+  width: 44px;
+  height: 44px;
+  line-height: 44px;
+}
+
 /* Tooltips (stop names on hover, cluster bubble hints, browse-route
    numbered stops) get the same crisp-hairline, signage-flat treatment as
    popups above, in the ink/indigo palette rather than a neutral gray. */

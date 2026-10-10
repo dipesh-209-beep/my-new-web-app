@@ -113,7 +113,7 @@ export default function AdminPage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-4 py-6">
+    <div className="mx-auto w-full max-w-3xl px-4 py-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-ink">Admin</h1>
@@ -142,6 +142,6 @@ export default function AdminPage() {
       ) : (
         <AdminWorkspace token={token} onTokenInvalid={handleTokenInvalid} />
       )}
-    </main>
+    </div>
   );
 }

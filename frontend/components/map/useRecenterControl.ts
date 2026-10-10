@@ -26,8 +26,10 @@ export function useRecenterControl({
         button.type = "button";
         button.setAttribute("aria-label", "Recenter map");
         button.title = "Recenter map";
-        button.style.width = "34px";
-        button.style.height = "34px";
+        // 44px keeps this map control at the same touch-target size as the
+        // rest of the app's controls (WCAG 2.5.5).
+        button.style.width = "44px";
+        button.style.height = "44px";
         button.style.background = "#ffffff";
         button.style.border = "1px solid #DEDCF0";
         button.style.borderRadius = "4px";

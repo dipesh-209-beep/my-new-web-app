@@ -6,6 +6,7 @@ import {
   RouteAlternative,
   RouteFinderResult,
   RouteLeg,
+  RouteSearchResult,
   Stop,
 } from "@/types/route";
 
@@ -137,5 +138,39 @@ describe("RouteResultPanel time and fare honesty", () => {
   it("says fare is unavailable when no fare rule matched", () => {
     renderPanel(makeResult({ fare: null }));
     expect(screen.getByText("Fare unavailable")).toBeTruthy();
+  });
+});
+
+describe("RouteResultPanel announces async outcomes", () => {
+  // Each async outcome (loading, found, not-found, error) replaces the
+  // previous one without a page navigation, so it has to land in a live
+  // region or a screen-reader user never hears it. The not-found case used
+  // to be a bare <div> -- silent.
+  it("announces a no-route result politely instead of rendering it silently", () => {
+    render(
+      <RouteResultPanel
+        result={{ found: false } as RouteSearchResult}
+        loading={false}
+        error={null}
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+      />
+    );
+    const status = screen.getByRole("status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveTextContent("No bus route found between these stops.");
+  });
+
+  it("announces the loading state politely", () => {
+    render(
+      <RouteResultPanel
+        result={null}
+        loading
+        error={null}
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+      />
+    );
+    expect(screen.getByText("Finding the best routes…").closest("[aria-live='polite']")).not.toBeNull();
   });
 });

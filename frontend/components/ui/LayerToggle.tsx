@@ -53,7 +53,7 @@ export default function LayerToggle({
         type="button"
         onClick={onToggle}
         aria-pressed={enabled}
-        className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+        className={`inline-flex min-h-11 min-w-11 items-center justify-center rounded-md px-3 text-xs font-medium transition-colors ${
           enabled ? `${activeBgClass} text-white` : `border border-route-line text-ink-secondary ${hoverClass}`
         }`}
       >

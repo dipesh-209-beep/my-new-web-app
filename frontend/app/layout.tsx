@@ -33,9 +33,8 @@ export default function RootLayout({
           {/* First tab stop, visually hidden until focused. Without it a
               keyboard user has to traverse the nav bar's every link on
               every page load before reaching the map, and the nav is
-              duplicated by the sheet's own controls on mobile. Targets the
-              <main> in app/page.tsx, which is the only landmark that
-              differs from the navigation. */}
+              duplicated by the sheet's own controls on mobile. Targets
+              the single <main> landmark rendered here for every page. */}
           <a
             href="#main-content"
             className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:shadow-lg"
@@ -43,7 +42,17 @@ export default function RootLayout({
             Skip to map and results
           </a>
           <NavBar />
-          <div className="min-h-0 flex-1">{children}</div>
+          {/* The one <main> landmark for the whole app. Pages render
+              their content inside it (app/page.tsx used to carry its own
+              <main id="main-content">, which left /stops and /routes with
+              no matching landmark and a skip link that went nowhere). */}
+          {/* tabIndex={-1} makes the landmark programmatically focusable so
+              the skip link actually moves focus here; without it the browser
+              changes the hash but leaves focus on <body>, and a keyboard user
+              still has to tab through the nav. */}
+          <main id="main-content" tabIndex={-1} className="min-h-0 flex-1 outline-none">
+            {children}
+          </main>
         </UserAuthProvider>
       </body>
     </html>

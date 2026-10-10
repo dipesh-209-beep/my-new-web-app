@@ -48,8 +48,8 @@ export default function CongestionPanel({
         iconBgClass="bg-accent-orange/10"
         activeBgClass="bg-accent-orange"
         hoverClass="hover:border-accent-orange hover:text-accent-orange"
-        title="Map layers"
-        subtitle="Traffic conditions"
+        title="Traffic"
+        subtitle="Traffic conditions overlay"
         enabled={enabled}
         onToggle={onToggle}
       />
@@ -69,7 +69,7 @@ export default function CongestionPanel({
               id="congestion-day"
               value={dayOfWeek ?? "now"}
               onChange={(e) => onDayChange(e.target.value === "now" ? null : Number(e.target.value))}
-              className="rounded-md border border-route-line bg-white px-2 py-1 text-ink"
+              className="min-h-11 rounded-md border border-route-line bg-white px-2 py-1 text-ink"
             >
               <option value="now">Today</option>
               {DAY_LABELS.map((label, i) => (
@@ -85,7 +85,7 @@ export default function CongestionPanel({
               id="congestion-hour"
               value={hourBucket ?? "now"}
               onChange={(e) => onHourChange(e.target.value === "now" ? null : Number(e.target.value))}
-              className="rounded-md border border-route-line bg-white px-2 py-1 text-ink"
+              className="min-h-11 rounded-md border border-route-line bg-white px-2 py-1 text-ink"
             >
               <option value="now">Now</option>
               {HOUR_BUCKETS.map((h) => (
@@ -101,7 +101,7 @@ export default function CongestionPanel({
                   onDayChange(null);
                   onHourChange(null);
                 }}
-                className="text-accent-orange hover:underline"
+                className="inline-flex min-h-11 items-center text-accent-orange hover:underline"
               >
                 Reset to now
               </button>

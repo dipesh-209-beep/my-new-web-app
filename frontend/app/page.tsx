@@ -178,8 +178,7 @@ const congestion = useCongestion();
   }
 
   return (
-    <main
-      id="main-content"
+    <div
       className="relative flex h-full w-full flex-col md:flex-row"
     >
       {/* Mobile: full-screen map under the navbar, with the planner floating
@@ -208,7 +207,7 @@ const congestion = useCongestion();
                 Plan your journey
               </h1>
               <p className="mt-1 text-sm text-ink-secondary">
-                Kathmandu Valley public transit — direct or single-transfer routes.
+                Find direct buses and multi-transfer connections across the Kathmandu Valley.
               </p>
             </div>
           )}
@@ -217,7 +216,7 @@ const congestion = useCongestion();
             onClick={toggleSidebarMinimized}
             aria-label={showMinimized ? "Restore search panel" : "Minimize search panel"}
             title={showMinimized ? "Restore search panel" : "Minimize search panel"}
-            className="flex flex-shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-ink-secondary hover:text-ink"
+            className="flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center gap-1 rounded p-2 text-ink-secondary hover:text-ink"
           >
             <ChevronIcon direction={showMinimized ? "down" : "up"} />
           </button>
@@ -275,8 +274,8 @@ const congestion = useCongestion();
                 iconBgClass="bg-ink/5"
                 activeBgClass="bg-ink"
                 hoverClass="hover:border-ink hover:text-ink"
-                title="Map layers"
-                subtitle="All stops"
+                title="Stops"
+                subtitle="Show all stops on the map"
                 enabled={showAllStops}
                 onToggle={() => setShowAllStops((prev) => !prev)}
               />
@@ -310,7 +309,7 @@ const congestion = useCongestion();
                       type="button"
                       onClick={() => setDirection("forward")}
                       aria-pressed={direction === "forward"}
-                      className={`rounded-md px-3 py-1 font-medium transition-colors ${
+                      className={`min-h-11 rounded-md px-3 py-1.5 font-medium transition-colors ${
                         direction === "forward"
                           ? "bg-white text-ink shadow-sm"
                           : "text-ink-secondary hover:text-ink"
@@ -322,7 +321,7 @@ const congestion = useCongestion();
                       type="button"
                       onClick={() => setDirection("reverse")}
                       aria-pressed={direction === "reverse"}
-                      className={`rounded-md px-3 py-1 font-medium transition-colors ${
+                      className={`min-h-11 rounded-md px-3 py-1.5 font-medium transition-colors ${
                         direction === "reverse"
                           ? "bg-white text-ink shadow-sm"
                           : "text-ink-secondary hover:text-ink"
@@ -357,6 +356,6 @@ const congestion = useCongestion();
           />
         </MapErrorBoundary>
       </div>
-    </main>
+    </div>
   );
 }

@@ -68,28 +68,28 @@ export default function NavBar() {
   }
 
   const brandMark = (
-    <Link href="/" className="flex items-center gap-1.5 font-semibold tracking-tight">
+    <Link href="/" className="flex min-h-11 min-w-11 items-center gap-1.5 font-semibold tracking-tight">
       <span
         aria-hidden
         className="flex h-5 w-5 items-center justify-center rounded-[3px] bg-brand text-[10px] font-bold text-ink"
       >
         K
       </span>
-      <span className="text-ink">KTM</span>
-      <span className="text-brand-dark">Transit</span>
+      <span className="hidden text-ink sm:inline">KTM</span>
+      <span className="hidden text-brand-dark sm:inline">Transit</span>
     </Link>
   );
 
   if (minimized && hydrated) {
     return (
-      <header className="flex h-7 shrink-0 items-center justify-between border-b border-route-line bg-surface-raised px-4 text-xs">
+      <header className="flex min-h-7 shrink-0 items-center justify-between border-b border-route-line bg-surface-raised px-3 py-1 text-xs sm:px-4">
         {brandMark}
         <button
           type="button"
           onClick={toggleMinimized}
           aria-label="Restore navigation bar"
           title="Restore navigation bar"
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-ink-secondary hover:text-ink"
+          className="flex min-h-11 min-w-11 items-center justify-center gap-1 rounded p-2 text-ink-secondary hover:text-ink"
         >
           <ChevronIcon direction="down" />
         </button>
@@ -98,9 +98,9 @@ export default function NavBar() {
   }
 
   return (
-    <header className="flex h-12 shrink-0 items-center justify-between border-b border-route-line bg-surface-raised px-4 text-sm">
+    <header className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-route-line bg-surface-raised px-2 py-1.5 text-sm sm:gap-x-3 sm:px-4">
       {brandMark}
-      <nav className="flex items-center gap-5">
+      <nav className="flex items-center gap-1 sm:gap-5">
         {LINKS.map((link) => {
           const isActive = link.href === "/" ? pathname === "/" : pathname.startsWith(link.href);
           return (
@@ -108,7 +108,7 @@ export default function NavBar() {
               key={link.href}
               href={link.href}
               aria-current={isActive ? "page" : undefined}
-              className={`border-b-2 pb-[3px] transition-colors ${
+              className={`inline-flex min-h-11 min-w-11 items-center justify-center border-b-2 transition-colors ${
                 isActive
                   ? "border-brand font-medium text-ink"
                   : "border-transparent text-ink-secondary hover:text-ink"
@@ -119,7 +119,7 @@ export default function NavBar() {
           );
         })}
       </nav>
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3">
         <span className="hidden items-center gap-1.5 text-xs text-ink-secondary sm:flex">
           <span className="h-1.5 w-1.5 rounded-full bg-accent-green" aria-hidden />
           Kathmandu Valley
@@ -130,7 +130,7 @@ export default function NavBar() {
             onClick={() => setAuthOpen((v) => !v)}
             aria-expanded={authOpen}
             aria-haspopup="true"
-            className="flex max-w-[14rem] items-center gap-1.5 rounded-md border border-route-line px-2.5 py-1 text-sm text-ink transition-colors hover:border-accent-blue"
+            className="flex min-h-11 max-w-[14rem] items-center gap-1.5 rounded-md border border-route-line px-2.5 py-1 text-sm text-ink transition-colors hover:border-accent-blue"
           >
             {authHydrated && token ? (
               <>
@@ -171,7 +171,7 @@ export default function NavBar() {
           onClick={toggleMinimized}
           aria-label="Minimize navigation bar"
           title="Minimize navigation bar"
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-ink-secondary hover:text-ink"
+          className="flex min-h-11 min-w-11 items-center justify-center gap-1 rounded p-2 text-ink-secondary hover:text-ink"
         >
           <ChevronIcon direction="up" />
         </button>

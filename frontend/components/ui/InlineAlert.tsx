@@ -46,7 +46,11 @@ export default function InlineAlert({ variant, children, action }: InlineAlertPr
     >
       <p>{children}</p>
       {action && (
-        <button type="button" onClick={action.onClick} className="self-start text-xs font-medium underline">
+        <button
+          type="button"
+          onClick={action.onClick}
+          className="inline-flex min-h-11 items-center self-start text-xs font-medium underline"
+        >
           {action.label}
         </button>
       )}

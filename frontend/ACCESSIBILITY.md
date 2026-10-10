@@ -1,6 +1,6 @@
 # Accessibility
 
-**Last reviewed: 2026-09-29**
+**Last reviewed: 2026-10-10**
 
 This is an honest assessment, not a conformance claim. **This application has
 not been audited against WCAG** and no conformance level (A, AA, or AAA) is
@@ -26,7 +26,9 @@ Verified by reading the source, not by audit:
 - **A single, consistent focus indicator** (`:focus-visible`, 2px solid
   `#e0a614` with 2px offset) rather than relying on per-browser defaults that
   are easy to lose against a light theme.
-- **Landmarks**: `nav` in `NavBar.tsx`, `main` in `app/page.tsx`.
+- **Landmarks**: `nav` in `NavBar.tsx`, and one `main#main-content` in
+  `app/layout.tsx` that every page renders into (so `/stops` and `/routes`
+  share it).
 - **A skip link** to `#main-content`, first in the tab order, visually hidden
   until focused. Without it a keyboard user traverses the whole nav bar on
   every page load.
@@ -46,6 +48,24 @@ Verified by reading the source, not by audit:
   `no-noninteractive-tabindex`, `anchor-is-valid`, `heading-has-content`, plus
   `alt-text` and the four `aria-*` correctness rules promoted from next's
   warnings. The codebase currently passes all of them.
+- **Touch targets are at least 44×44 CSS px** (WCAG 2.5.5 Target Size) for the
+  controls this project authors: nav links and the brand mark, the
+  sign-in/minimize/restore buttons, the autocomplete clear buttons, the
+  origin/destination swap, "use my location"/"pick on map"/"+ Add a stop",
+  the via-stop remove button, the Submit button, the map-layer and traffic
+  toggle pills, the congestion day/hour selects and "Reset to now", the route
+  alternative pills, the bottom-sheet toggle, and the map's zoom and recenter
+  controls. Measured with a headless Chromium pass at 320/360/390 px. Leaflet's
+  own attribution is inline text (exempt under 2.5.5).
+- **Asynchronous route-search outcomes are announced.** The loading, found,
+  no-route and error states each render inside an `aria-live` region (the
+  loading and found panels use `aria-live="polite"`; the error uses
+  `role="alert"`; the "No bus route found" panel uses `role="status"`), so a
+  screen-reader user hears the result of a search without a page change.
+- **Reflow at 320 px.** The page lays out without horizontal scrolling down to
+  320 CSS px wide (checked at 320/360/390 px, including with the traffic and
+  via-stop panels expanded). The header collapses to a single row and its
+  wordmark drops to the "K" mark below the `sm` breakpoint.
 
 ## Known gaps
 
@@ -66,13 +86,15 @@ exploration experience is not.
 The fix is not a Leaflet setting; it needs a non-map equivalent (a list of
 stops/routes that can be tabbed through and expanded) alongside the map.
 
-### 2. No gradient legend for the congestion overlay
+### 2. The congestion legend is in the panel, not on the map
 
-Congestion is coloured on the map with no on-screen key explaining the
-gradient. A user who cannot distinguish the colours, or who is looking at a
-greyscale screenshot, has no way to interpret the overlay as a whole — they
-would have to open every segment popup individually. The popups carry the
-information; nothing summarises it.
+The gradient key (a bar labelled Low / Moderate / Heavy) sits in the Traffic
+panel (`components/CongestionPanel.tsx`), not on the map itself. On desktop the
+panel and map sit side by side, so the key is co-visible with the overlay. On a
+phone the two share the screen through a bottom sheet: collapsing the sheet to
+see the whole map also hides the key. The per-segment popups still pair colour
+with a text label and a numeric ratio, so nothing is unreadable — but the
+at-a-glance key is not always visible next to the overlay.
 
 ### 3. No automated runtime testing
 
@@ -121,13 +143,17 @@ the plugin fixes the behaviour.
   future palette regression — and the two remaining `#16A34A` links on
   `/routes/[routeId]` ("← Back to all routes", on white) still sit at
   3.30:1, as does the `hover:text-accent-green` on the breadcrumb link.
-- **Live regions** for asynchronous updates. Route search, geolocation and
-  congestion fetches all resolve asynchronously; whether results are announced
-  politely is unverified.
+- **Live regions** for the *other* asynchronous updates. The route-search
+  outcomes (loading / found / no-route / error) are now live regions and
+  covered by tests (`RouteResultPanel.test.tsx`); the geolocation and
+  congestion fetches resolve asynchronously and whether those are announced
+  politely is still unverified.
 - **The mobile bottom sheet** (`hooks/useSheet.ts`) — drag, focus trapping and
   Escape behaviour for a dialog-like surface.
-- **Zoom and text scaling** at 200%, and reflow at 320px wide.
-- **Touch target sizes** in the map controls and stop cluster bubbles.
+- **Text scaling** at 200% (reflow at 320 px is now verified and passes).
+- **Touch target sizes of the stop cluster bubbles** (the app's own controls
+  and the map zoom/recenter controls are now at least 44×44; the Leaflet
+  marker-cluster bubbles have not been resized).
 - **Screen reader smoke tests** on the main flows: search, select a route,
   walk to a stop, and the `/admin` UI.
 

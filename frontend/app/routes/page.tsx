@@ -22,7 +22,7 @@ export default function RoutesPage() {
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
         placeholder="Search by route name or number…"
-        className="w-full rounded-md border border-route-line bg-surface-raised px-3 py-2 text-sm text-ink outline-none focus:border-accent-green"
+        className="w-full rounded-md border border-route-line bg-surface-raised px-3 py-2.5 text-base text-ink outline-none focus:border-accent-green"
       />
 
       {loading && routes.length === 0 && (

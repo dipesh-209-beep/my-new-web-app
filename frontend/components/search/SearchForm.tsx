@@ -190,7 +190,7 @@ export default function SearchForm({
           <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-accent-red" />
         </div>
 
-        <div className="flex min-w-0 flex-1 flex-col gap-2 pr-9">
+        <div className="flex min-w-0 flex-1 flex-col gap-2 pr-12">
           <StopAutocomplete
             id="origin"
             label="From"
@@ -215,7 +215,7 @@ export default function SearchForm({
                   type="button"
                   onClick={onUseMyLocation}
                   disabled={locating}
-                  className="inline-flex items-center gap-1 text-xs text-accent-blue hover:underline disabled:opacity-50"
+                  className="inline-flex min-h-11 items-center gap-1 text-xs text-accent-blue hover:underline disabled:opacity-50"
                 >
                   <LocationIcon size={12} />
                   {locating ? "Locating…" : "Use my location"}
@@ -224,7 +224,7 @@ export default function SearchForm({
                   type="button"
                   onClick={() => togglePick("origin")}
                   aria-pressed={pickTarget === "origin"}
-                  className={`inline-flex items-center gap-1 text-xs hover:underline ${
+                  className={`inline-flex min-h-11 items-center gap-1 text-xs hover:underline ${
                     pickTarget === "origin" ? "font-semibold text-accent-blue" : "text-ink-secondary"
                   }`}
                 >
@@ -258,7 +258,7 @@ export default function SearchForm({
                 type="button"
                 onClick={() => togglePick("destination")}
                 aria-pressed={pickTarget === "destination"}
-                className={`inline-flex items-center gap-1 text-xs hover:underline ${
+                className={`inline-flex min-h-11 items-center gap-1 text-xs hover:underline ${
                   pickTarget === "destination" ? "font-semibold text-accent-red" : "text-ink-secondary"
                 }`}
               >
@@ -274,7 +274,7 @@ export default function SearchForm({
           onClick={handleSwap}
           aria-label="Swap origin and destination"
           title="Swap origin and destination"
-          className="absolute right-0 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-route-line bg-white text-ink-secondary shadow-card hover:border-accent-blue hover:text-accent-blue"
+          className="absolute right-0 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-route-line bg-white text-ink-secondary shadow-card hover:border-accent-blue hover:text-accent-blue"
         >
           <SwapIcon size={15} />
         </button>
@@ -306,7 +306,7 @@ export default function SearchForm({
                 onClick={() => removeViaStop(via.id)}
                 aria-label={`Remove via stop ${i + 1}`}
                 title="Remove this stop"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-surface-sunken hover:text-accent-red"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-surface-sunken hover:text-accent-red"
               >
                 ×
               </button>
@@ -319,7 +319,7 @@ export default function SearchForm({
         type="button"
         onClick={addViaStop}
         disabled={viaStops.length >= 3}
-        className="self-start text-xs font-medium text-accent-blue hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
+        className="inline-flex min-h-11 items-center self-start text-xs font-medium text-accent-blue hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
       >
         + Add a stop along the way
       </button>
@@ -342,7 +342,7 @@ export default function SearchForm({
       <button
         type="submit"
         disabled={loading}
-        className="mt-1 rounded-md bg-brand py-2.5 text-sm font-semibold tracking-wide text-ink transition-colors hover:bg-brand-dark disabled:opacity-50"
+        className="mt-1 min-h-11 rounded-md bg-brand py-2.5 text-sm font-semibold tracking-wide text-ink transition-colors hover:bg-brand-dark disabled:opacity-50"
       >
         {loading ? "Searching…" : "Find route"}
       </button>

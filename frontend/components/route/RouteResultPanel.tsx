@@ -94,7 +94,11 @@ export default function RouteResultPanel({
 
   if (result && !result.found) {
     return (
-      <div className="rounded-xl border border-route-line bg-surface-raised p-4 text-sm text-ink shadow-card">
+      <div
+        role="status"
+        aria-live="polite"
+        className="rounded-xl border border-route-line bg-surface-raised p-4 text-sm text-ink shadow-card"
+      >
         <p className="font-medium">No bus route found between these stops.</p>
         <p className="mt-1 text-ink-secondary">Try nearby stops, or a different origin or destination.</p>
       </div>
@@ -158,7 +162,7 @@ export default function RouteResultPanel({
             onClick={() => onSelectedIndexChange(-1)}
             aria-pressed={isPrimary}
             aria-label={result.transfer_count === 0 ? "Direct route" : "Recommended route"}
-            className={`shrink-0 rounded-full border px-2.5 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-purple ${
+            className={`inline-flex min-h-11 shrink-0 items-center rounded-full border px-3 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-purple ${
               isPrimary
                 ? "border-accent-purple bg-accent-purple/10 font-medium text-accent-purple"
                 : "border-route-line bg-white text-ink-secondary hover:border-accent-purple hover:text-accent-purple"
@@ -173,7 +177,7 @@ export default function RouteResultPanel({
               onClick={() => onSelectedIndexChange(i)}
               aria-pressed={selectedIndex === i}
               aria-label={`${ALTERNATIVE_LABELS[alt.label]}: ${formatAltSummary(alt)}`}
-              className={`shrink-0 rounded-full border px-2.5 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-purple ${
+              className={`inline-flex min-h-11 shrink-0 items-center rounded-full border px-3 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-purple ${
                 selectedIndex === i
                   ? "border-accent-purple bg-accent-purple/10 font-medium text-accent-purple"
                   : "border-route-line bg-white text-ink-secondary hover:border-accent-purple hover:text-accent-purple"

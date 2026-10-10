@@ -34,7 +34,7 @@ export default function StopsPage() {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search by stop name or district…"
-        className="w-full rounded-md border border-route-line bg-surface-raised px-3 py-2 text-sm text-ink outline-none focus:border-accent-blue"
+        className="w-full rounded-md border border-route-line bg-surface-raised px-3 py-2.5 text-base text-ink outline-none focus:border-accent-blue"
       />
 
       {error && (
