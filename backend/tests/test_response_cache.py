@@ -12,6 +12,7 @@ import pytest
 import redis as redis_module
 
 from app.core import redis_client
+from app.core.config import get_settings
 from app.core.redis_client import get_redis
 from app.core.response_cache import _json_dumps, cached_response, invalidate, invalidate_all
 
@@ -111,9 +112,22 @@ class TestJsonSerialization:
 class TestWithRedis:
     @pytest.fixture(autouse=True)
     def _require_redis(self, monkeypatch, redis_url):
-        monkeypatch.setenv("REDIS_URL", redis_url)
+        # Point the cached Settings singleton at the test Redis rather than
+        # only the environment: get_settings() is @lru_cache'd and reads
+        # REDIS_URL once per process, so by the time this fixture runs it has
+        # already been populated (conftest imports app.core.security, which
+        # pulls settings in). monkeypatch.setenv alone would therefore be
+        # ignored and get_redis() would return None. monkeypatch.setattr on
+        # the singleton is the same correction test_health_ready.py uses, and
+        # it restores the original value automatically even if a test fails.
+        monkeypatch.setattr(get_settings(), "REDIS_URL", redis_url)
         redis_client._reset_for_tests()
         client = get_redis()
+        if client is None:
+            pytest.fail(
+                f"get_redis() returned None with REDIS_URL={redis_url!r} "
+                "configured -- the Settings cache did not pick up the test URL"
+            )
         try:
             client.ping()
         except redis_module.RedisError:
@@ -121,6 +135,8 @@ class TestWithRedis:
         invalidate_all()
         yield
         invalidate_all()
+        # Don't leak a client bound to the test Redis into later tests.
+        redis_client._reset_for_tests()
 
     def test_caches_and_serves_repeat_calls_without_recomputing(self):
         call_count = {"n": 0}

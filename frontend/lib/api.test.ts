@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, findRoute, getAllStops, getRouteGeometry, getRouteStops, getStops } from "@/lib/api";
+import { ApiError, findRoute, getAllStops, getFare, getRouteGeometry, getRouteStops, getStops } from "@/lib/api";
 import { Stop } from "@/types/route";
 
 function jsonResponse(body: unknown, init: { status?: number; ok?: boolean } = {}) {
@@ -199,5 +199,117 @@ describe("getRouteStops / getRouteGeometry direction param", () => {
     const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(calledUrl).toContain("/routes/R1/geometry");
     expect(calledUrl).toContain("direction=reverse");
+  });
+});
+
+describe("getFare", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requests the band for the given distance and returns the FareOut body", async () => {
+    const fare = {
+      fare_id: "F03",
+      min_distance_km: 10,
+      max_distance_km: 15,
+      fare_npr_min: 30,
+      fare_npr_max: 35,
+      student_discount_pct: 45,
+      verification_note: "PENDING confirmation against the official gazette notice.",
+    };
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(jsonResponse(fare));
+
+    const result = await getFare(12.4);
+
+    const calledUrl = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(calledUrl).toContain("/fare");
+    expect(calledUrl).toContain("distance_km=12.4");
+    expect(result).toEqual(fare);
+  });
+
+  it("surfaces a 404 (no covering band) as an ApiError the caller can treat as unavailable", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      jsonResponse({ detail: "No fare band covers a 500 km trip." }, { status: 404, ok: false })
+    );
+    await expect(getFare(500)).rejects.toMatchObject({
+      name: "ApiError",
+      kind: "http",
+      status: 404,
+    });
+  });
+});
+
+describe("findRoute avoid_congestion param", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function mockSuccess() {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      jsonResponse({
+        origin_stop_id: "S0001",
+        destination_stop_id: "S0002",
+        total_cost: 1,
+        transfer_count: 0,
+        legs: [],
+        fare: null,
+        alternatives: [],
+      })
+    );
+  }
+
+  function calledUrl(): string {
+    return (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+  }
+
+  it("includes avoid_congestion=true when the caller enables it", async () => {
+    mockSuccess();
+    await findRoute({ origin: "S0001", destination: "S0002", avoid_congestion: true });
+    expect(calledUrl()).toContain("avoid_congestion=true");
+  });
+
+  it("sends avoid_congestion=false explicitly when the caller sets it to false", async () => {
+    mockSuccess();
+    await findRoute({ origin: "S0001", destination: "S0002", avoid_congestion: false });
+    expect(calledUrl()).toContain("avoid_congestion=false");
+  });
+
+  it("omits avoid_congestion entirely for existing callers that don't pass it (backend default preserved)", async () => {
+    mockSuccess();
+    await findRoute({ origin: "S0001", destination: "S0002" });
+    expect(calledUrl()).not.toContain("avoid_congestion");
+  });
+
+  it("keeps via stops (repeated param) alongside avoid_congestion", async () => {
+    mockSuccess();
+    await findRoute({
+      origin: "S0001",
+      destination: "S0002",
+      avoid_congestion: true,
+      via: ["S0003", "S0004"],
+    });
+    expect(calledUrl()).toContain("avoid_congestion=true");
+    expect(calledUrl()).toContain("via=S0003");
+    expect(calledUrl()).toContain("via=S0004");
+  });
+
+  it("still requests alternatives as before when avoid_congestion is set", async () => {
+    mockSuccess();
+    await findRoute({
+      origin: "S0001",
+      destination: "S0002",
+      include_alternatives: true,
+      avoid_congestion: true,
+    });
+    expect(calledUrl()).toContain("include_alternatives=true");
+    expect(calledUrl()).toContain("avoid_congestion=true");
   });
 });

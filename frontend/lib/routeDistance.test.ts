@@ -14,6 +14,7 @@ function makeRoute(overrides: Partial<RouteSummary> = {}): RouteSummary {
     is_bidirectional: false,
     approx_distance_km: null,
     osrm_distance_km: null,
+    estimated_duration_min: null,
     status: "active",
     operator: null,
     ...overrides,

@@ -383,7 +383,7 @@ direct backend access gets the application's 10 requests/minute. See
 New `stop_id`/`route_id` values are server-generated, not caller-supplied.
 See `backend/README.md` for details.
 
-The frontend exposes a browser-based data-entry UI at `/admin` (link in the nav bar): sign in with the per-admin JWT, then create stops/routes and manage each route's stop sequence (add, in-place reorder, remove) and status from the map app itself. The `DELETE`/`PATCH` methods are why the backend CORS allow-list includes both of those verbs.
+The frontend exposes a browser-based data-entry UI at `/admin` (reached by navigating there directly; it is deliberately not linked from the public nav bar, which is customer-facing): sign in with the per-admin JWT, then create stops/routes and manage each route's stop sequence (add, in-place reorder, remove) and status from the map app itself. The `DELETE`/`PATCH` methods are why the backend CORS allow-list includes both of those verbs.
 
 ## Deployment
 

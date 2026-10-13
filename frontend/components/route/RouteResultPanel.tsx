@@ -1,10 +1,11 @@
 "use client";
 
-import { FareOut, LoadingStage, RouteAlternative, RouteFinderResult, RouteSearchResult } from "@/types/route";
+import { LoadingStage, RouteAlternative, RouteFinderResult, RouteSearchResult } from "@/types/route";
 import RouteTimeline from "./RouteTimeline";
 import { BusIcon, ClockIcon, TransferIcon, WalkIcon } from "@/components/icons/TransitIcons";
 import InlineAlert from "@/components/ui/InlineAlert";
 import { TRANSFER_ROUTE_ID } from "@/lib/constants";
+import { formatFareRange } from "./RouteEstimates";
 
 interface RouteResultPanelProps {
   result: RouteSearchResult | null;
@@ -50,12 +51,6 @@ function formatDuration(totalSeconds: number): { value: string; unit: string } {
   return remaining === 0
     ? { value: String(hours), unit: "hr" }
     : { value: `${hours}h ${remaining}`, unit: "min" };
-}
-
-function formatFare(fare: FareOut): string {
-  return fare.fare_npr_min === fare.fare_npr_max
-    ? `Rs. ${fare.fare_npr_min}`
-    : `Rs. ${fare.fare_npr_min}–${fare.fare_npr_max}`;
 }
 
 export default function RouteResultPanel({
@@ -126,6 +121,16 @@ export default function RouteResultPanel({
   // Each option carries its own fare now, so the selected alternative's
   // card never borrows the primary result's fare (the old bug).
   const activeFare = active.fare ?? null;
+  // Same defensive formatting as the route-detail panel: null when the fare
+  // object is missing OR either amount is absent/non-finite/negative, so a
+  // malformed response can never render as "Rs. undefined" or "Rs. NaN".
+  const activeFareRange = activeFare ? formatFareRange(activeFare) : null;
+  const verificationNote =
+    activeFare &&
+    typeof activeFare.verification_note === "string" &&
+    activeFare.verification_note.trim() !== ""
+      ? activeFare.verification_note
+      : null;
 
   // Trip time is ALWAYS the backend's fixed-speed estimate, never the
   // OSRM driving-profile duration_s -- that describes how long a private
@@ -216,7 +221,7 @@ export default function RouteResultPanel({
             </span>
           )}
           <span className="inline-flex items-center gap-1 font-semibold text-ink">
-            {activeFare ? formatFare(activeFare) : "Fare unavailable"}
+            {activeFareRange ?? "Fare unavailable"}
           </span>
         </div>
 
@@ -224,11 +229,18 @@ export default function RouteResultPanel({
           <ClockIcon size={12} />
           Time is an estimate from assumed travel speeds, not a live ETA.
         </p>
-        {activeFare && (
-          <p className="mt-1 text-xs text-ink-tertiary">
-            Estimated fare
-            {activeFare.verification_note ? " — pending confirmation" : ""}, not a final ticket price.
-          </p>
+        {activeFareRange && (
+          <>
+            <p className="mt-1 text-xs text-ink-tertiary">
+              Estimated fare, not a final ticket price.
+            </p>
+            {verificationNote && (
+              <details className="mt-1 text-xs text-ink-tertiary">
+                <summary className="cursor-pointer">Fare verification information</summary>
+                <p className="mt-1">{verificationNote}</p>
+              </details>
+            )}
+          </>
         )}
         {activeAlt?.label === "fastest_estimated" && (
           <p className="mt-1 inline-flex items-center gap-1 text-xs text-ink-tertiary">

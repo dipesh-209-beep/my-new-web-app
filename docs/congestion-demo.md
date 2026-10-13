@@ -84,11 +84,16 @@ via a different transfer point.
 
 ## A case where nothing changes, and why that's correct
 
-Direct routes are unaffected by `avoid_congestion` by design (see
-`pathfinder.py`'s `find_shortest_path` docstring) — a direct route always
-wins regardless of congestion. E.g. `Koteshwor → Kalanki` stays a direct
-ride on `R3214592` in both cases, which is the intended behavior, not a
-bug.
+Direct routes are only scored congestion-aware when `avoid_congestion=true`
+(see `pathfinder.py`'s `find_shortest_path` docstring): the direct route
+and the transfer fallback are then compared on the same cost basis, so a
+direct route can lose to a less-congested transfer. When it is
+free-flowing or otherwise still the cheaper option, the direct ride stays.
+Under `avoid_congestion=false`, a viable direct route retains the
+historical direct-first behavior; under `avoid_congestion=true`, the
+comparison can pick a transfer route over a congested direct route. A
+direct route remains available whenever the transfer search has nothing
+cheaper to offer.
 
 ## Real severity data behind the zones
 

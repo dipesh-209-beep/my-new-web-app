@@ -10,8 +10,17 @@ interface UseRouteSearchResult {
   /** viaIds: intermediate stop_ids the trip must pass through, in
    * order. include_alternatives is still requested, but the backend
    * ignores it (and returns no alternatives) whenever viaIds is
-   * non-empty -- see findRoute's `via` param doc. */
-  search: (originId: string, destinationId: string, viaIds?: string[]) => Promise<void>;
+   * non-empty -- see findRoute's `via` param doc.
+   *
+   * avoidCongestion: when true, the backend may prefer a less-congested
+   * transfer route over a congested direct one. Defaults to false, so
+   * existing callers keep the direct-route-first behavior. */
+  search: (
+    originId: string,
+    destinationId: string,
+    viaIds?: string[],
+    avoidCongestion?: boolean
+  ) => Promise<void>;
   retry: () => void;
   reset: () => void;
 }
@@ -29,15 +38,25 @@ export function useRouteSearch(): UseRouteSearchResult {
   const [error, setError] = useState<string | null>(null);
 
   // Store last search params for retry
-  const lastSearchRef = useRef<{ originId: string; destinationId: string; viaIds: string[] } | null>(null);
+  const lastSearchRef = useRef<{
+    originId: string;
+    destinationId: string;
+    viaIds: string[];
+    avoidCongestion: boolean;
+  } | null>(null);
 
   // Guards against a slow earlier search overwriting a faster later one
   // if the user fires two searches back-to-back.
   const requestIdRef = useRef(0);
 
-  async function search(originId: string, destinationId: string, viaIds: string[] = []) {
+  async function search(
+    originId: string,
+    destinationId: string,
+    viaIds: string[] = [],
+    avoidCongestion = false
+  ) {
     const requestId = ++requestIdRef.current;
-    lastSearchRef.current = { originId, destinationId, viaIds };
+    lastSearchRef.current = { originId, destinationId, viaIds, avoidCongestion };
     setLoading(true);
     setLoadingStage("searching");
     setError(null);
@@ -49,6 +68,7 @@ export function useRouteSearch(): UseRouteSearchResult {
         destination: destinationId,
         include_alternatives: true,
         via: viaIds,
+        avoid_congestion: avoidCongestion,
       });
       if (requestIdRef.current !== requestId) return;
 
@@ -83,7 +103,7 @@ export function useRouteSearch(): UseRouteSearchResult {
   function retry() {
     const params = lastSearchRef.current;
     if (params) {
-      search(params.originId, params.destinationId, params.viaIds);
+      search(params.originId, params.destinationId, params.viaIds, params.avoidCongestion);
     }
   }
 

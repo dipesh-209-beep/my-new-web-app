@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ApiError, getRoute, getRouteGeometry, getRouteStops } from "@/lib/api";
-import { formatRouteDistance } from "@/lib/routeDistance";
+import { ApiError, getFare, getRoute, getRouteGeometry, getRouteStops } from "@/lib/api";
+import { bestRouteDistanceKm, formatRouteDistance } from "@/lib/routeDistance";
 import SuggestionBox from "@/components/user/SuggestionBox";
-import { RouteDirection, RouteGeometry, RouteOut, RouteStopEntry } from "@/types/route";
+import RouteEstimates from "@/components/route/RouteEstimates";
+import { FareOut, RouteDirection, RouteGeometry, RouteOut, RouteStopEntry } from "@/types/route";
 
 const BusMap = dynamic(() => import("@/components/BusMap"), {
   ssr: false,
@@ -25,6 +26,8 @@ export default function RouteDetailPage() {
   const [route, setRoute] = useState<RouteOut | null>(null);
   const [stops, setStops] = useState<RouteStopEntry[]>([]);
   const [geometry, setGeometry] = useState<RouteGeometry | null>(null);
+  const [fare, setFare] = useState<FareOut | null>(null);
+  const [fareLoading, setFareLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [stopsLoading, setStopsLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
@@ -64,6 +67,41 @@ export default function RouteDetailPage() {
       cancelled = true;
     };
   }, [routeId]);
+
+  // Fare is direction-independent, so it's fetched once per route once a
+  // route distance is known, rather than on every forward/reverse flip.
+  // Every failure -- no distance, no covering fare band (404), network or
+  // parse error -- leaves `fare` null and the panel shows an honest
+  // unavailable state instead of a substituted value.
+  useEffect(() => {
+    if (!route) return;
+    const distanceKm = bestRouteDistanceKm(route);
+
+    let cancelled = false;
+    async function loadFare() {
+      if (distanceKm === null) {
+        if (!cancelled) {
+          setFare(null);
+          setFareLoading(false);
+        }
+        return;
+      }
+      setFareLoading(true);
+      try {
+        const data = await getFare(distanceKm);
+        if (!cancelled) setFare(data);
+      } catch {
+        if (!cancelled) setFare(null);
+      } finally {
+        if (!cancelled) setFareLoading(false);
+      }
+    }
+
+    loadFare();
+    return () => {
+      cancelled = true;
+    };
+  }, [route]);
 
   // Stops and the road-following geometry ARE direction-dependent, so
   // flipping forward/return refetches exactly these two and nothing else --
@@ -175,6 +213,12 @@ export default function RouteDetailPage() {
           </span>
         )}
       </div>
+
+      <RouteEstimates
+        durationMinutes={route.estimated_duration_min}
+        fare={fare}
+        fareLoading={fareLoading}
+      />
 
       <div className="h-56 overflow-hidden rounded-xl border border-route-line shadow-card sm:h-72">
         <BusMap browseRouteStops={stops} browseRouteGeometry={geometry} />

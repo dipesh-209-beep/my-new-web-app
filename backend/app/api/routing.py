@@ -383,10 +383,13 @@ def find_route(
     avoid_congestion: bool = Query(
         False,
         description=(
-            "When true, the transfer-search fallback (used only if no direct "
-            "route exists) weights ride segments by current historical "
-            "congestion instead of raw distance alone. Direct routes are "
-            "unaffected -- a direct route always wins either way."
+            "When true, direct and transfer candidates are compared on "
+            "the same congestion-aware cost (congestion-inflated ride "
+            "distance plus the per-boarding transfer penalty), so a "
+            "heavily congested direct route can lose to a "
+            "less-congested transfer path. When false, a direct route "
+            "always wins and the transfer fallback ranks by raw "
+            "distance alone."
         ),
     ),
     include_alternatives: bool = Query(
@@ -411,8 +414,10 @@ def find_route(
         description=(
             "Maximum number of transfers (bus changes) allowed. "
             "0 = direct route only, 1 = one transfer, etc. "
-            "Only applies when no direct route exists and Dijkstra "
-            "fallback is used. Default is unlimited."
+            "Applies to the Dijkstra transfer search, which runs "
+            "when no direct route exists, and also under "
+            "avoid_congestion=true even when a direct route exists. "
+            "It does not cap a direct ride. Default is unlimited."
         ),
     ),
     via: list[str] = Query(

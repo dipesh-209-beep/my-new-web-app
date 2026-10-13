@@ -19,7 +19,12 @@ export interface ViaStopField {
 interface SearchFormProps {
   stops: Stop[];
   stopsLoading?: boolean;
-  onSearch: (originId: string, destinationId: string, viaIds: string[]) => void;
+  onSearch: (
+    originId: string,
+    destinationId: string,
+    viaIds: string[],
+    avoidCongestion: boolean
+  ) => void;
   loading?: boolean;
   // Map-click stop picking is owned by the parent (it also drives the map),
   // so origin/destination text are controlled from there rather than kept
@@ -61,6 +66,9 @@ export default function SearchForm({
   const [fieldError, setFieldError] = useState<FieldError>(null);
   const [originSelectedStop, setOriginSelectedStop] = useState<Stop | null>(null);
   const [destinationSelectedStop, setDestinationSelectedStop] = useState<Stop | null>(null);
+  // Default off: the backend only changes route choice when this is true,
+  // so an untouched form keeps the direct-route-first behavior.
+  const [avoidCongestion, setAvoidCongestion] = useState(false);
 
   // Via stop IDs must be stable per instance but not shared across
   // unmounts/remounts (SSR hydration, React 18 strict mode double-mount).
@@ -150,7 +158,7 @@ export default function SearchForm({
     }
 
     setFieldError(null);
-    onSearch(origin.stop_id, destination.stop_id, viaIds);
+    onSearch(origin.stop_id, destination.stop_id, viaIds, avoidCongestion);
   }
 
   function handleSwap() {
@@ -338,6 +346,27 @@ export default function SearchForm({
           {locateError}
         </p>
       )}
+
+      <div className="flex flex-col gap-1 border-t border-route-line pt-3">
+        <label
+          htmlFor="avoid-congestion"
+          className="flex items-start gap-2 text-sm font-medium text-ink"
+        >
+          <input
+            id="avoid-congestion"
+            type="checkbox"
+            checked={avoidCongestion}
+            onChange={(e) => setAvoidCongestion(e.target.checked)}
+            aria-describedby="avoid-congestion-help"
+            className="mt-0.5 h-4 w-4 shrink-0 rounded border-route-line text-brand focus:ring-accent-blue"
+          />
+          Avoid congested routes
+        </label>
+        <p id="avoid-congestion-help" className="pl-6 text-xs text-ink-secondary">
+          Prefer a less-congested connection, which may mean taking a transfer instead of a
+          direct bus. Congestion levels are estimated and may be incomplete.
+        </p>
+      </div>
 
       <button
         type="submit"

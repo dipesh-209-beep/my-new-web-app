@@ -179,6 +179,11 @@ export interface RouteSummary {
   /** Real OSRM road distance -- prefer this over approx_distance_km
    * (source-data-supplied, not reliably accurate) whenever it's set. */
   osrm_distance_km: number | null;
+  /** Whole-route estimated running time in minutes, from the route record
+   * (mirrors RouteOut.estimated_duration_min in backend/app/schemas.py).
+   * Source-supplied and often absent -- null when there's no estimate.
+   * A planning estimate for the full route, never a live ETA. */
+  estimated_duration_min: number | null;
   has_ac?: boolean;
   is_express?: boolean;
   status: string;

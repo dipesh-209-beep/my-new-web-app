@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db.session import SessionLocal
+from app.core.config import get_settings
 from app.core.redis_client import get_redis
 from app.core.response_cache import invalidate_all
 from sqlalchemy.exc import OperationalError
@@ -109,10 +110,21 @@ class TestRoutesCacheWithRedis:
 
     @pytest.fixture(autouse=True)
     def _require_redis(self, monkeypatch, redis_url):
-        monkeypatch.setenv("REDIS_URL", redis_url)
+        # Point the cached Settings singleton at the test Redis, not just the
+        # environment: get_settings() is @lru_cache'd (populated before this
+        # fixture runs), so monkeypatch.setenv would be ignored and
+        # get_redis() would return None. monkeypatch.setattr on the singleton
+        # is the established correction (test_health_ready.py), and it is
+        # restored automatically even if a test fails.
+        monkeypatch.setattr(get_settings(), "REDIS_URL", redis_url)
         from app.core import redis_client
         redis_client._reset_for_tests()
         client = get_redis()
+        if client is None:
+            pytest.fail(
+                f"get_redis() returned None with REDIS_URL={redis_url!r} "
+                "configured -- the Settings cache did not pick up the test URL"
+            )
         try:
             client.ping()
         except redis_module.RedisError:
@@ -120,6 +132,8 @@ class TestRoutesCacheWithRedis:
         invalidate_all()
         yield
         invalidate_all()
+        # Don't leak a client bound to the test Redis into later tests.
+        redis_client._reset_for_tests()
 
     def test_read_route_cached_response_has_operator(self, client, route_id):
         """After Redis cache hit, RouteOut.operator_ref relationship must be accessible."""
@@ -202,10 +216,21 @@ class TestStopsCacheWithRedis:
 
     @pytest.fixture(autouse=True)
     def _require_redis(self, monkeypatch, redis_url):
-        monkeypatch.setenv("REDIS_URL", redis_url)
+        # Point the cached Settings singleton at the test Redis, not just the
+        # environment: get_settings() is @lru_cache'd (populated before this
+        # fixture runs), so monkeypatch.setenv would be ignored and
+        # get_redis() would return None. monkeypatch.setattr on the singleton
+        # is the established correction (test_health_ready.py), and it is
+        # restored automatically even if a test fails.
+        monkeypatch.setattr(get_settings(), "REDIS_URL", redis_url)
         from app.core import redis_client
         redis_client._reset_for_tests()
         client = get_redis()
+        if client is None:
+            pytest.fail(
+                f"get_redis() returned None with REDIS_URL={redis_url!r} "
+                "configured -- the Settings cache did not pick up the test URL"
+            )
         try:
             client.ping()
         except redis_module.RedisError:
@@ -213,6 +238,8 @@ class TestStopsCacheWithRedis:
         invalidate_all()
         yield
         invalidate_all()
+        # Don't leak a client bound to the test Redis into later tests.
+        redis_client._reset_for_tests()
 
     def test_read_stop_cached_response_accessible(self, client):
         """After Redis cache hit, StopOut must be fully accessible."""

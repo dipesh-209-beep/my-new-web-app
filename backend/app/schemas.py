@@ -57,6 +57,10 @@ class RouteOut(BaseModel):
     # accurate. Null until backend/scripts/compute_osrm_route_distances.py
     # has been run for a given route.
     osrm_distance_km: Optional[float] = None
+    # Whole-route estimated running time in minutes (Route.estimated_duration_min),
+    # supplied by the source data. Null where the source left it blank. A
+    # planning estimate for the full route, never a live ETA.
+    estimated_duration_min: Optional[float] = None
     status: str
     # Whether the return leg exists as a distinct travel direction (see
     # Route.is_bidirectional) -- the frontend uses this to decide whether

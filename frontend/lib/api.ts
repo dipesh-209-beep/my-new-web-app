@@ -14,6 +14,7 @@
  *   GET /routes/{route_id}
  *   GET /routes/{route_id}/stops
  *   GET /routes/{route_id}/geometry
+ *   GET /fare
  *   GET /route-finder
  *   GET /walking-route
  *   GET /congestion
@@ -22,6 +23,7 @@
 
 import {
   CongestionResponse,
+  FareOut,
   RouteDirection,
   RouteFinderResult,
   RouteGeometry,
@@ -212,6 +214,21 @@ export function getRouteGeometry(
 }
 
 // ---------------------------------------------------------------------------
+// Fare
+// ---------------------------------------------------------------------------
+
+/**
+ * Distance-banded fare lookup (GET /fare?distance_km=...). Returns the fare
+ * band whose [min, max) range covers the trip distance. Throws an ApiError
+ * with status 404 when no band covers the distance -- a legitimate "no fare
+ * rule for this trip length" outcome, so callers should treat 404 as
+ * "unavailable" rather than a hard failure.
+ */
+export function getFare(distanceKm: number, options?: RequestOptions): Promise<FareOut> {
+  return request<FareOut>(`/fare${qs({ distance_km: distanceKm })}`, options);
+}
+
+// ---------------------------------------------------------------------------
 // Route finder / walking directions
 // ---------------------------------------------------------------------------
 
@@ -226,6 +243,12 @@ export async function findRoute(
     origin: string;
     destination: string;
     include_alternatives?: boolean;
+    /** When true, /route-finder scores direct and transfer candidates on
+     * the same congestion-aware basis, so it may return a less-congested
+     * transfer path instead of a heavily congested direct route. Defaults
+     * to false when omitted, preserving direct-route-first behavior for
+     * existing callers. */
+    avoid_congestion?: boolean;
     /** Intermediate stop_ids the trip must pass through, in order. The
      * backend ignores include_alternatives when this is non-empty (see
      * /route-finder's `via` docstring), so callers shouldn't rely on

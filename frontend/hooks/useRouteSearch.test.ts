@@ -164,4 +164,34 @@ describe("useRouteSearch", () => {
     expect(hook.current.result).toBeNull();
     expect(hook.current.loading).toBe(false);
   });
+
+  it("forwards avoidCongestion to findRoute, defaulting it to false", async () => {
+    const spy = vi.spyOn(api, "findRoute").mockResolvedValue({ found: true, result: makeResult() });
+    const { result: hook } = renderHook(() => useRouteSearch());
+
+    await act(async () => {
+      await hook.current.search("S0001", "S0002", [], true);
+    });
+    expect(spy).toHaveBeenLastCalledWith(expect.objectContaining({ avoid_congestion: true }));
+
+    await act(async () => {
+      await hook.current.search("S0003", "S0004");
+    });
+    expect(spy).toHaveBeenLastCalledWith(expect.objectContaining({ avoid_congestion: false }));
+  });
+
+  it("retry() re-sends the avoidCongestion value the first search used", async () => {
+    const spy = vi.spyOn(api, "findRoute").mockResolvedValue({ found: true, result: makeResult() });
+    const { result: hook } = renderHook(() => useRouteSearch());
+
+    await act(async () => {
+      await hook.current.search("S0001", "S0002", [], true);
+    });
+    act(() => {
+      hook.current.retry();
+    });
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenLastCalledWith(expect.objectContaining({ avoid_congestion: true }));
+  });
 });

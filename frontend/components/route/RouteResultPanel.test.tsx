@@ -54,6 +54,12 @@ function makeFare(overrides: Partial<FareOut> = {}): FareOut {
   };
 }
 
+/** A shape the client could receive unchecked from a malformed or unexpected
+ * 200 response -- typed as FareOut only to exercise the panel's guard. */
+function malformedFare(overrides: Record<string, unknown>): FareOut {
+  return { ...makeFare(), ...overrides } as unknown as FareOut;
+}
+
 function makeResult(overrides: Partial<RouteFinderResult> = {}): RouteFinderResult {
   return {
     origin_stop_id: "S1",
@@ -122,7 +128,7 @@ describe("RouteResultPanel time and fare honesty", () => {
     expect(screen.queryByText(/Rs\. 20–25/)).toBeNull();
   });
 
-  it("marks an unverified fare as pending confirmation", () => {
+  it("keeps the verification note neutral and inspectable instead of claiming pending confirmation", () => {
     renderPanel(
       makeResult({
         fare: makeFare({
@@ -130,9 +136,66 @@ describe("RouteResultPanel time and fare honesty", () => {
         }),
       })
     );
+    expect(screen.getByText("Fare verification information")).toBeTruthy();
+    expect(screen.getByText("PENDING confirmation against the official gazette notice.")).toBeTruthy();
+    expect(screen.getByText("Estimated fare, not a final ticket price.")).toBeTruthy();
+    expect(screen.queryByText("— pending confirmation")).toBeNull();
+    expect(screen.queryByText(/official fare/i)).toBeNull();
+  });
+
+  it("keeps an unexpected non-empty verification note neutral", () => {
+    renderPanel(
+      makeResult({
+        fare: makeFare({
+          verification_note: "roadside listing reviewed 2027-01; indicative only.",
+        }),
+      })
+    );
+    expect(screen.getByText("Fare verification information")).toBeTruthy();
     expect(
-      screen.getByText(/Estimated fare — pending confirmation/)
+      screen.getByText("roadside listing reviewed 2027-01; indicative only.")
     ).toBeTruthy();
+    expect(screen.queryByText(/— pending confirmation/)).toBeNull();
+  });
+
+  it("omits the verification disclosure when the fare carries no note", () => {
+    renderPanel(makeResult({ fare: makeFare({ verification_note: null }) }));
+    expect(screen.getByText("Rs. 20–25")).toBeTruthy();
+    expect(screen.getByText("Estimated fare, not a final ticket price.")).toBeTruthy();
+    expect(screen.queryByText("Fare verification information")).toBeNull();
+  });
+
+  it("shows Fare unavailable instead of Rs. undefined when amounts are missing", () => {
+    renderPanel(
+      makeResult({
+        fare: malformedFare({ fare_npr_min: undefined, fare_npr_max: undefined }),
+      })
+    );
+    expect(screen.getByText("Fare unavailable")).toBeTruthy();
+    expect(screen.queryByText(/undefined/)).toBeNull();
+    // No "Estimated fare" note paragraph when there's no valid amount to show.
+    expect(screen.queryByText("Estimated fare, not a final ticket price.")).toBeNull();
+  });
+
+  it("shows Fare unavailable instead of Rs. NaN for non-finite amounts", () => {
+    renderPanel(
+      makeResult({
+        fare: makeFare({ fare_npr_min: NaN, fare_npr_max: Infinity }),
+      })
+    );
+    expect(screen.getByText("Fare unavailable")).toBeTruthy();
+    expect(screen.queryByText(/NaN/)).toBeNull();
+  });
+
+  it("shows Fare unavailable for a negative amount (invalid per the >= 0 contract)", () => {
+    renderPanel(makeResult({ fare: makeFare({ fare_npr_min: -1 }) }));
+    expect(screen.getByText("Fare unavailable")).toBeTruthy();
+  });
+
+  it("preserves a legitimate zero fare", () => {
+    renderPanel(makeResult({ fare: makeFare({ fare_npr_min: 0, fare_npr_max: 0 }) }));
+    expect(screen.getByText("Rs. 0")).toBeTruthy();
+    expect(screen.getByText("Estimated fare, not a final ticket price.")).toBeTruthy();
   });
 
   it("says fare is unavailable when no fare rule matched", () => {

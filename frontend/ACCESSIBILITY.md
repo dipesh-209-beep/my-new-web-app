@@ -1,6 +1,6 @@
 # Accessibility
 
-**Last reviewed: 2026-10-10**
+**Last reviewed: 2026-10-13**
 
 This is an honest assessment, not a conformance claim. **This application has
 not been audited against WCAG** and no conformance level (A, AA, or AAA) is
@@ -47,7 +47,9 @@ Verified by reading the source, not by audit:
   `interactive-supports-focus`, `no-noninteractive-element-interactions`,
   `no-noninteractive-tabindex`, `anchor-is-valid`, `heading-has-content`, plus
   `alt-text` and the four `aria-*` correctness rules promoted from next's
-  warnings. The codebase currently passes all of them.
+  warnings. The codebase currently passes all of them. Runtime structure/ARIA
+  checks (`axe-core` via `vitest-axe`, in `npm test`) cover the components and
+  states listed under gap 3.
 - **Touch targets are at least 44×44 CSS px** (WCAG 2.5.5 Target Size) for the
   controls this project authors: nav links and the brand mark, the
   sign-in/minimize/restore buttons, the autocomplete clear buttons, the
@@ -90,10 +92,12 @@ Verified by reading the source, not by audit:
   loading and found panels use `aria-live="polite"`; the error uses
   `role="alert"`; the "No bus route found" panel uses `role="status"`), so a
   screen-reader user hears the result of a search without a page change.
-- **Reflow at 320 px.** The page lays out without horizontal scrolling down to
-  320 CSS px wide (checked at 320/360/390 px, including with the traffic and
-  via-stop panels expanded). The header collapses to a single row and its
-  wordmark drops to the "K" mark below the `sm` breakpoint.
+- **Reflow at 320 px and at 200% text.** The page lays out without horizontal
+  scrolling down to 320 CSS px wide (checked at 320/360/390 px, including with
+  the traffic and via-stop panels expanded). It also holds at 200% browser text
+  scaling: a headless Chromium probe measured no horizontal overflow in the
+  sidebar at 320/360/390 px and at a 1280 px desktop. The header collapses to a
+  single row and its wordmark drops to the "K" mark below the `sm` breakpoint.
 
 ## Known gaps
 
@@ -131,13 +135,33 @@ see the whole map also hides the key. The per-segment popups still pair colour
 with a text label and a numeric ratio, so nothing is unreadable — but the
 at-a-glance key is not always visible next to the overlay.
 
-### 3. No automated runtime testing
+### 3. Automated runtime testing covers structure, not appearance
 
-`eslint-plugin-jsx-a11y` catches a class of static errors. It cannot tell you
-whether a label is *meaningful*, whether focus order makes sense, whether
-contrast passes, or whether a live region announces a route change. There is
-no `axe-core`, no `jest-axe`/Vitest equivalent, and no manual
-screen-reader pass on record.
+`axe-core` runs through `vitest-axe`, registered in `vitest.setup.ts` and run
+by `npm test`. It currently checks the rendered DOM of four files:
+
+- `NavBar.a11y.test.tsx` — the default expanded nav bar.
+- `RouteResultPanel.a11y.test.tsx` — the "found" result state.
+- `SearchForm.a11y.test.tsx` — the empty form, rendering the real
+  `StopAutocomplete` (not a stub).
+- `StopAutocomplete.a11y.test.tsx` — the collapsed combobox, the expanded
+  suggestion listbox, and the no-match message.
+
+That catches structural and ARIA problems (roles, accessible names,
+parent/child relationships, required attributes) in those states. It does
+**not** establish:
+
+- **Colour contrast** — jsdom does not render styles, so axe's contrast rule
+  cannot be trusted there; contrast is still measured by hand (gap 5).
+- **Layout, overflow, reflow or target sizes** — there is no layout engine in
+  jsdom.
+- **Keyboard or screen-reader behaviour** — axe reports markup, not what a
+  browser or assistive technology does with it.
+- **States other than those listed** — the other result states (loading,
+  error, no-route), the minimized nav bar, the via-stop and validation states
+  of the form, the congestion panel, the map, and the `/admin` UI have no axe
+  pass. `eslint-plugin-jsx-a11y` still catches static errors across all of
+  them, and there is no axe run against a built page in CI.
 
 ### 4. `control-has-associated-label` is not enabled, deliberately
 
@@ -185,24 +209,18 @@ the plugin fixes the behaviour.
   politely is still unverified.
 - **The mobile bottom sheet** (`hooks/useSheet.ts`) — drag, focus trapping and
   Escape behaviour for a dialog-like surface.
-- **Text scaling** at 200%. Partly checked: at 1280 px and at 320 px the page
-  reflows without horizontal scrolling, and no text is lost at the sizes
-  probed. One control — an icon-only map-toggle button — had its box extend
-  past the viewport edge at 320 px + 200% text (the document did not scroll,
-  so it was clipped rather than reachable). It needs a manual look, because
-  the headless probe could not tell which of the map-toggle pills it was.
 - **Screen reader smoke tests** on the main flows: search, select a route,
-  walk to a stop, and the `/admin` UI. No browser would expose the app to the
-  AT-SPI bus in the audit environment, so the marker keyboard work above is
-  verified structurally and with a headless browser, not by hearing it read.
+  walk to a stop, and the `/admin` UI. No spoken pass is on record for any of
+  them, so the marker keyboard work above is verified structurally and with a
+  headless browser, not by hearing it read.
 
 ## How to check
 
 1. **Static:** `cd frontend && npm run lint` — the `jsx-a11y` rules above.
-2. **Automated runtime:** add `axe-core` to the Vitest setup for the existing
-   component tests, and run axe against a built page in CI. Neither exists
-   yet; the component tests in `components/`, `hooks/` and `lib/` are the
-   natural place.
+2. **Automated runtime:** `cd frontend && npm test` runs `axe-core` through
+   `vitest-axe` over the components and states listed in gap 3. Add a
+   `*.a11y.test.tsx` next to a component to extend it. There is still no axe
+   pass against a *built* page in CI.
 3. **Keyboard only:** unplug the mouse. Tab from page load — the skip link
    should be first. Reach every control that responds to a click. Confirm the
    focus ring is visible on each. On the map, cluster bubbles and popup pins
@@ -214,9 +232,12 @@ the plugin fixes the behaviour.
    the results panel updates are announced.
 5. **Contrast:** any colour-contrast checker against the rendered page, at
    both themes, plus the congestion ramp specifically.
-6. **Zoom/reflow:** 200% browser text scaling and 320px viewport width.
-   Watch the icon-only map-toggle buttons at 320 px + 200% — one was seen
-   clipping past the viewport edge and needs a manual confirmation.
+6. **Zoom/reflow:** 200% browser text scaling and 320px viewport width. Check
+   that the sidebar does not scroll horizontally at 320 px + 200%. The one
+   control seen clipping there — the Traffic panel's On/Off pill — was fixed
+   in `components/ui/LayerToggle.tsx`: the label column shrinks (`min-w-0`)
+   while the pill keeps its 44 px target (`shrink-0`). `LayerToggle.test.tsx`
+   pins those classes (jsdom cannot measure layout).
 
 ## If you fix one thing
 

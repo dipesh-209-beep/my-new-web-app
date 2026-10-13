@@ -39,12 +39,12 @@ export default function LayerToggle({
   onToggle,
 }: LayerToggleProps) {
   return (
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2">
+    <div className="flex items-center justify-between gap-2">
+      <div className="flex min-w-0 items-center gap-2">
         <span className={`flex h-7 w-7 items-center justify-center rounded-md ${iconBgClass} ${iconColorClass}`}>
           {icon}
         </span>
-        <div>
+        <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">{title}</p>
           <p className="text-sm text-ink">{subtitle}</p>
         </div>
@@ -53,7 +53,7 @@ export default function LayerToggle({
         type="button"
         onClick={onToggle}
         aria-pressed={enabled}
-        className={`inline-flex min-h-11 min-w-11 items-center justify-center rounded-md px-3 text-xs font-medium transition-colors ${
+        className={`inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md px-3 text-xs font-medium transition-colors ${
           enabled ? `${activeBgClass} text-white` : `border border-route-line text-ink-secondary ${hoverClass}`
         }`}
       >

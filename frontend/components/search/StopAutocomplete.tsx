@@ -209,7 +209,7 @@ function StopAutocompleteImpl({
               </li>
             ))}
             {showEmptyState && (
-              <li className="px-3 py-3 text-sm text-ink-secondary">
+              <li role="option" aria-disabled="true" aria-selected="false" className="px-3 py-3 text-sm text-ink-secondary">
                 No stops match &quot;{debouncedValue.trim()}&quot;.
               </li>
             )}

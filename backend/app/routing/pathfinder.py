@@ -4,8 +4,12 @@ routing/pathfinder.py
 Route finding logic:
 
 1. Look for an active route containing both origin and destination.
-2. If a direct route exists, use it directly.
-3. If no direct route exists, use NetworkX shortest-path search.
+2. By default (avoid_congestion=False), if a viable direct route
+   exists it is used directly.
+3. With avoid_congestion=True the NetworkX shortest-path search also
+   runs when a direct route exists, so a transfer route can win based
+   on congestion-aware cost. If no viable option exists, the search
+   uses NetworkX shortest-path search to find transfer routes.
 
 Loop routes are handled correctly even when the same physical stop occurs
 multiple times in the same route.
@@ -25,6 +29,7 @@ from app.routing.constants import (
     BOARD_WAIT_S,
     BUS_AVG_SPEED_MPS,
     CONGESTION_LAMBDA,
+    TRANSFER_PENALTY,
     WALK_SPEED_MPS,
 )
 from app.routing.time_buckets import day_and_bucket_for, now_in_nepal
@@ -386,6 +391,61 @@ def _duration_weight_fn(graph: nx.DiGraph = None, congestion_lookup: dict[tuple,
             return BOARD_WAIT_S
         return 0.0  # alight -- instantaneous
     return weight
+def _congestion_aware_cost(
+    graph: nx.DiGraph,
+    zones: list,
+    congestion_lookup: dict[tuple, float],
+    result: RouteFinderResult,
+) -> float:
+    """Total cost of a route candidate on the SAME basis the
+    congestion-aware Dijkstra fallback minimizes, so a direct candidate
+    and a transfer candidate can be compared head-to-head.
+
+    For each ride edge the walked/ridden distance is inflated by the
+    blended organic/zone ratio, exactly as _congestion_weight_fn does for
+    a graph path; walk legs contribute their raw distance; and
+    TRANSFER_PENALTY is added once per boarding (a path with
+    transfer_count transfers has transfer_count + 1 boardings). A direct
+    candidate therefore pays the same one-boarding penalty a graph path
+    from its origin would pay via a "board" edge -- the penalty is
+    per boarded bus, not per transfer, so neither candidate type gets a
+    free pass.
+
+    A candidate that boards no bus at all -- e.g. a pure walk between two
+    stops close enough to be an interchange -- incurs no boarding penalty:
+    transfer_count is clamped at 0 and cannot distinguish "no boardings"
+    from "one boarding", so the presence of a ride segment is used as the
+    marker instead (a bus boarding always produces at least one ride edge).
+
+    With a free-flow or empty lookup every ride edge's inflation factor
+    is 1.0 and the score collapses to the plain distance-plus-boarding
+    cost the default (avoid_congestion=False) Dijkstra ranks by, which
+    is what keeps route choice stable when congestion data provides no
+    distinction.
+    """
+    boardings = (
+        result.transfer_count + 1
+        if any(segment.route_id is not None for segment in result.segments)
+        else 0
+    )
+    total = TRANSFER_PENALTY * boardings
+    for segment in result.segments:
+        if segment.route_id is None:
+            total += segment.weight  # walk/interchange leg
+            continue
+        ratio = _ride_congestion_ratio(
+            graph,
+            zones,
+            congestion_lookup,
+            segment.from_stop_id,
+            segment.to_stop_id,
+            {"kind": "ride", "route_id": segment.route_id},
+        )
+        if ratio > 1:
+            total += segment.weight * (1 + CONGESTION_LAMBDA * (ratio - 1))
+        else:
+            total += segment.weight
+    return total
 def _path_to_result(graph: nx.DiGraph, path: list) -> RouteFinderResult:
     """Shared conversion from a raw NetworkX path (a list of graph nodes)
     into a RouteFinderResult, regardless of which weight function chose
@@ -447,7 +507,12 @@ def _find_with_dijkstra(
     weight="weight",
     max_transfers: Optional[int] = None,
 ) -> RouteFinderResult:
-    """Fallback search used only when no direct route exists.
+    """NetworkX shortest-path search used to find transfer routes.
+
+    Called as a fallback when no viable direct route exists (the default
+    behavior), and also under avoid_congestion=True even when a direct route
+    exists, so its congestion-aware cost can be compared against direct
+    candidates.
 
     `weight` is passed straight through to nx.shortest_path: the default
     "weight" string uses each edge's static weight attribute (distance +
@@ -747,14 +812,17 @@ def find_shortest_path(
     max_transfers: Optional[int] = None,
 ) -> RouteFinderResult:
     """
-    avoid_congestion: when True and no direct route exists, the Dijkstra
-    transfer-search fallback weights "ride" edges by current congestion
-    (see _find_with_dijkstra / _congestion_weight_fn) instead of raw
-    distance alone. Direct routes are unaffected either way -- a direct
-    route always wins regardless of congestion, per STEP 2 below;
-    congestion only ever influences *which transfer path* is chosen when
-    there's a real choice to make. Defaults to False so existing callers
-    keep today's distance-only behavior unless they opt in.
+    avoid_congestion: when True, direct and transfer candidates are both
+    scored on the same congestion-aware cost basis -- ridden distance
+    inflated per ride edge by the blended organic/zone ratio (see
+    _congestion_weight_fn and _congestion_aware_cost) plus
+    TRANSFER_PENALTY once per boarding -- and the cheaper winner is
+    returned. A congested direct route can therefore lose to a
+    less-congested transfer path, and multiple direct routes resolve by
+    congested cost rather than raw distance. Defaults to False and keeps
+    the historical behavior exactly: a direct route wins outright (STEP 2
+    below), and the Dijkstra transfer fallback ranks by raw distance plus
+    the static boarding penalty alone.
 
     include_alternatives: when True, populates the returned result's
     `.alternatives` with up to 2 additional options -- see
@@ -764,8 +832,10 @@ def find_shortest_path(
     alternatives is extra Dijkstra work this skips when unused.
 
     max_transfers: maximum number of transfers allowed (0 = direct only,
-    1 = one transfer, etc.). Only applies when no direct route exists
-    and Dijkstra fallback is used. Defaults to None (no limit).
+    1 = one transfer, etc.). Applies to the Dijkstra transfer search,
+    which runs when no direct route exists, and also under
+    avoid_congestion=True even when a direct route exists. It does not
+    cap a single direct ride. Defaults to None (no limit).
     """
 
     graph = gb.get_cached_graph(session)
@@ -802,9 +872,9 @@ def find_shortest_path(
     )
 
     # ------------------------------------------------------------
-    # STEP 2: DIRECT ROUTE ALWAYS WINS
+    # STEP 2 (default): DIRECT ROUTE ALWAYS WINS
     # ------------------------------------------------------------
-    if direct_candidates:
+    if direct_candidates and not avoid_congestion:
         primary = direct_candidates[0]
         if include_alternatives:
             primary = RouteFinderResult(
@@ -817,7 +887,12 @@ def find_shortest_path(
         return primary
 
     # ------------------------------------------------------------
-    # STEP 3: NO DIRECT ROUTE -> DIJKSTRA
+    # STEP 3: DIJKSTRA FALLBACK (always, under avoid_congestion=True)
+    #
+    # With avoidance on, a direct route is NOT returned early: the
+    # transfer fallback is still searched and both candidate types are
+    # scored on the same congestion-aware cost basis, so a heavily
+    # congested direct route can lose to a less-congested transfer.
     # ------------------------------------------------------------
     congestion_lookup = None
     if avoid_congestion:
@@ -831,25 +906,76 @@ def find_shortest_path(
         if congestion_lookup is not None
         else "weight"
     )
-    primary = _find_with_dijkstra(
-        graph,
-        origin_stop_id,
-        destination_stop_id,
-        weight=weight_arg,
-        max_transfers=max_transfers,
-    )
+
+    zones = congestion_zones.load_zones() if avoid_congestion else []
+    best_direct = None
+    if direct_candidates:
+        best_direct = min(
+            direct_candidates,
+            key=lambda r: _congestion_aware_cost(graph, zones, congestion_lookup, r),
+        )
+
+    try:
+        transfer = _find_with_dijkstra(
+            graph,
+            origin_stop_id,
+            destination_stop_id,
+            weight=weight_arg,
+            max_transfers=max_transfers,
+        )
+    except NoRouteFoundError as exc:
+        # A viable direct route must not disappear because a transfer
+        # search failed (e.g. an overly tight max_transfers cap). If
+        # there is no direct fallback, re-raise the original error so
+        # callers keep the exact message (incl. the "with max N
+        # transfers" suffix).
+        if not best_direct:
+            raise exc
+        transfer = None
+
+    # Pick the winner on a single comparable cost basis. When avoidance
+    # is off there is no direct candidate here (STEP 2 returned), so
+    # this reduces to the unchanged Dijkstra result.
+    if best_direct is not None and transfer is not None:
+        direct_cost = _congestion_aware_cost(graph, zones, congestion_lookup, best_direct)
+        transfer_cost = _congestion_aware_cost(graph, zones, congestion_lookup, transfer)
+        if direct_cost <= transfer_cost:
+            primary = best_direct
+        else:
+            primary = transfer
+    elif transfer is not None:
+        primary = transfer
+    elif best_direct is not None:
+        primary = best_direct
+    else:
+        raise NoRouteFoundError(
+            f"No route found between '{origin_stop_id}' "
+            f"and '{destination_stop_id}'"
+        )
 
     if include_alternatives:
+        alternatives = (
+            # _alternatives_from_direct_candidates assumes candidates[0]
+            # is the primary result; the congestion-aware winner is not
+            # necessarily the shortest-by-distance candidate, so reorder
+            # so the chosen direct route leads the list.
+            _alternatives_from_direct_candidates(
+                [best_direct]
+                + [c for c in direct_candidates if c is not best_direct]
+            )
+            if primary is best_direct
+            else _alternatives_from_dijkstra(
+                graph, origin_stop_id, destination_stop_id, primary,
+                congestion_lookup=congestion_lookup,
+                max_transfers=max_transfers,
+            )
+        )
         primary = RouteFinderResult(
             segments=primary.segments,
             total_distance_m=primary.total_distance_m,
             transfer_count=primary.transfer_count,
             stop_sequence=primary.stop_sequence,
-            alternatives=_alternatives_from_dijkstra(
-                graph, origin_stop_id, destination_stop_id, primary,
-                congestion_lookup=congestion_lookup,
-                max_transfers=max_transfers,
-            ),
+            alternatives=alternatives,
         )
 
     return primary
