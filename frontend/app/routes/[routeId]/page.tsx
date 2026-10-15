@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ApiError, getFare, getRoute, getRouteGeometry, getRouteStops } from "@/lib/api";
-import { bestRouteDistanceKm, formatRouteDistance } from "@/lib/routeDistance";
+import { bestRouteDistanceKm, formatRouteDistanceKm, routeDistanceInfo } from "@/lib/routeDistance";
 import SuggestionBox from "@/components/user/SuggestionBox";
 import RouteEstimates from "@/components/route/RouteEstimates";
 import { FareOut, RouteDirection, RouteGeometry, RouteOut, RouteStopEntry } from "@/types/route";
@@ -189,6 +189,11 @@ export default function RouteDetailPage() {
     );
   }
 
+  // Resolved once so the header label and the fare caveat agree on both the
+  // value and whether it's a real OSRM road distance or only the source-data
+  // approximation.
+  const distanceInfo = routeDistanceInfo(route);
+
   return (
     <div className="mx-auto flex h-full max-w-2xl flex-col gap-4 overflow-y-auto p-4">
       <Link href="/routes" className="text-sm text-ink-secondary hover:text-accent-green">
@@ -202,7 +207,7 @@ export default function RouteDetailPage() {
         </h1>
         <p className="mt-1 font-mono text-sm text-ink-secondary">
           {route.vehicle_type} · {route.total_stops} stops
-          {formatRouteDistance(route) && <> · {formatRouteDistance(route)}</>}
+          {distanceInfo && <> · {formatRouteDistanceKm(distanceInfo)}</>}
         </p>
         {route.operator && (
           <p className="text-sm text-ink-secondary">Operated by {route.operator.name}</p>
@@ -222,6 +227,13 @@ export default function RouteDetailPage() {
         fare={fare}
         fareLoading={fareLoading}
       />
+
+      {fare && distanceInfo?.source === "approximate" && (
+        <p className="text-xs text-ink-secondary">
+          This fare is estimated from the route&apos;s approximate distance, which can differ from
+          the real road distance.
+        </p>
+      )}
 
       <div className="h-56 overflow-hidden rounded-xl border border-route-line shadow-card sm:h-72">
         <BusMap browseRouteStops={stops} browseRouteGeometry={geometry} />

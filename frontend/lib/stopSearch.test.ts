@@ -126,3 +126,59 @@ describe("searchStops", () => {
     expect(searchStops("   ", [stop])).toEqual([]);
   });
 });
+
+describe("case-colliding stop names", () => {
+  // The real dataset carries near-duplicate records that share a normalized
+  // name but differ in capitalization -- e.g. S0130 "Kalanki" and S_395
+  // "KALANKI". They are separate, distinct stops; this only pins down the
+  // suggestion order so raw code-unit comparison can't float an ALLCAPS
+  // duplicate to the top. Inputs are deliberately in reverse dataset order.
+  function kalankiPair(): Stop[] {
+    return [
+      makeStop({ stop_id: "S_395", stop_name: "KALANKI" }),
+      makeStop({ stop_id: "S0130", stop_name: "Kalanki", district: "KATHMANDU", ward: 28 }),
+    ];
+  }
+
+  it("orders 'Kalanki' before 'KALANKI' for the query 'kalanki'", () => {
+    const results = searchStops("kalanki", kalankiPair());
+    expect(results.map((r) => r.stop.stop_name)).toEqual(["Kalanki", "KALANKI"]);
+    expect(results.map((r) => r.stop.stop_id)).toEqual(["S0130", "S_395"]);
+    // Both are still exact name matches at the same tier -- ordering did
+    // not change relevance.
+    expect(results.every((r) => r.score === 100 && r.matchedField === "name")).toBe(true);
+  });
+
+  it("orders 'Tripureshwor' before 'TRIPURESHWOR' for the query 'tripureshwor'", () => {
+    const stops = [
+      makeStop({ stop_id: "S_396", stop_name: "TRIPURESHWOR" }),
+      makeStop({ stop_id: "S0056", stop_name: "Tripureshwor", district: "KATHMANDU", ward: 15 }),
+    ];
+    const results = searchStops("tripureshwor", stops);
+    expect(results.map((r) => r.stop.stop_name)).toEqual(["Tripureshwor", "TRIPURESHWOR"]);
+    expect(results.map((r) => r.stop.stop_id)).toEqual(["S0056", "S_396"]);
+  });
+
+  it("produces the same order on repeated searches", () => {
+    const stops = kalankiPair();
+    const first = searchStops("kalanki", stops).map((r) => r.stop.stop_id);
+    for (let i = 0; i < 5; i += 1) {
+      expect(searchStops("kalanki", stops).map((r) => r.stop.stop_id)).toEqual(first);
+    }
+  });
+
+  it("keeps the query's case irrelevant to the result order", () => {
+    const stops = kalankiPair();
+    const expected = searchStops("kalanki", stops).map((r) => r.stop.stop_id);
+    expect(searchStops("Kalanki", stops).map((r) => r.stop.stop_id)).toEqual(expected);
+    expect(searchStops("KALANKI", stops).map((r) => r.stop.stop_id)).toEqual(expected);
+  });
+
+  it("still ranks the shorter name first among equal-score matches", () => {
+    // Regression guard: the case-insensitive comparison must not disturb
+    // the pre-existing length-then-name tie-break.
+    const a = makeStop({ stop_id: "S0001", stop_name: "Baneshwor Chowk" });
+    const b = makeStop({ stop_id: "S0002", stop_name: "Baneshwor" });
+    expect(searchStops("baneshwor", [a, b]).map((r) => r.stop.stop_id)).toEqual(["S0002", "S0001"]);
+  });
+});

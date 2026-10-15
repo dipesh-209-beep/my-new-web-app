@@ -235,6 +235,15 @@ data/raw/  →  scripts/clean_data.py  →  data/processed/*_clean.csv  →  sch
 
 `scripts/clean_data.py` removes orphaned `route_stops`, re-sequences stop order per route, recomputes each route's `start_stop_id`/`end_stop_id`/`total_stops`, resolves or nulls `operator_id`, flags distance outliers, and checks for orphan `route_operators`/`operators` pairs — writing validated CSVs plus a `processed/report.md` describing exactly what changed. `scripts/validate_clean.py` re-runs the same integrity checks against the CSVs with no database required. `schema.sql` then builds the schema (via Alembic) and `scripts/import_data.py` loads the CSVs via `COPY` in dependency order, ending with a built-in referential-integrity sanity check. `make data` / `make import` (repo root) run the two scripts for you. See `data/README.md` and `data/scripts/README.md` for full detail and current dataset row counts.
 
+After `make import` — and again after any route-stop change or stop-coordinate correction — populate each active route's real road distance by calling OSRM over its full stop sequence:
+
+```bash
+make osrm-route-distances          # needs `make osrm-up`; only fills nulls
+make osrm-route-distances FORCE=1  # recompute every active route
+```
+
+This writes `routes.osrm_distance_km` and, after each successfully committed batch of changes, invalidates the route-list/route-detail response caches (`GET /routes`, `GET /routes/{route_id}`). With Redis configured (the production default) that clears the shared cache, so a running backend stops serving the old distance immediately; with process-local caching only, it clears the script's own cache and another API process may keep serving stale entries until its route-cache TTL expires. It is a **whole-route** figure — one OSRM request per route — so it can differ from the `/route-finder` per-leg total, which makes one OSRM request per ride leg with its own constraints and transfer/walk handling; it is not the graph/haversine fallback basis either. A route whose OSRM call fails or returns an unusable distance is reported and skipped, never written. See `backend/scripts/compute_osrm_route_distances.py` for the full behavior.
+
 ## Testing
 
 Backend tests use **pytest**:

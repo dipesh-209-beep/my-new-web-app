@@ -18,7 +18,14 @@ from app.routing.pathfinder import (
     PathSegment,
     RouteAlternative as PFRouteAlternative,
 )
-from app.schemas import FareOut, RouteAlternative, RouteFinderResult, RouteLeg, StopOut
+from app.schemas import (
+    DistanceSource,
+    FareOut,
+    RouteAlternative,
+    RouteFinderResult,
+    RouteLeg,
+    StopOut,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -183,62 +190,137 @@ def _attach_road_geometry(legs: list[RouteLeg]) -> None:
             )
 
 
-def _total_road_distance_m(legs: list[RouteLeg]) -> float | None:
-    """Sums each leg's real OSRM road_geometry distance. Returns None
-    (rather than a partial figure) if any leg is missing road_geometry
-    -- e.g. OSRM was briefly unreachable -- so callers can fall back to
-    the graph's haversine-based total_distance_m instead of silently
-    under-reporting."""
-    total = 0.0
-    for leg in legs:
-        if leg.road_geometry is None:
-            return None
-        total += leg.road_geometry["distance_m"]
-    return total
+def _path_distance_source(legs: list[RouteLeg]) -> DistanceSource:
+    """The single distance basis a whole path's figures are on.
+
+    "osrm" only when *every* leg carries real OSRM road_geometry -- the
+    complete real road distance. Otherwise "graph": the routing graph's
+    straight-line (haversine) edge-weight sum, used as one fallback for
+    the entire path whenever OSRM supplied nothing for one or more legs
+    (OSRM unavailable, or a single leg had no matchable road nearby).
+
+    A path-level, all-or-nothing choice -- deliberately not per-leg. A
+    path that mixed real road distances with straight-line stand-ins
+    would let the total, the fare and the duration each silently combine
+    the two, so they could disagree with nothing to say so. One basis per
+    path lets `total_distance_source` describe all three (see
+    _total_distance_with_source and the fare/duration helpers below); on
+    "graph" every per-leg figure is the graph's per-edge haversine sum
+    (_leg_graph_distance_m), which reconciles with the path total rather
+    than measuring the leg as a single board->alight chord.
+    """
+    if all(leg.road_geometry is not None for leg in legs):
+        return "osrm"
+    return "graph"
 
 
-def _leg_distance_m(leg: RouteLeg) -> float:
-    """A leg's travel distance: real OSRM road distance when available,
-    haversine straight-line otherwise."""
-    if leg.road_geometry is not None:
-        return leg.road_geometry["distance_m"]
-    return haversine_distance_m(
-        leg.board_stop.lat,
-        leg.board_stop.lng,
-        leg.alight_stop.lat,
-        leg.alight_stop.lng,
+def _total_distance_with_source(
+    legs: list[RouteLeg], graph_distance_m: float
+) -> tuple[float, DistanceSource]:
+    """Total path distance, on the path's single distance basis.
+
+    Real OSRM road distance when every leg has geometry; otherwise the
+    path's routing-graph (haversine) edge-weight sum. Because each leg's
+    "graph" distance is that same per-edge sum restricted to the leg
+    (_leg_graph_distance_m), the leg distances add up to this total.
+    Returns the basis alongside the figure (see DistanceSource in
+    app/schemas.py), so a caller can never present an OSRM total and a
+    fallback total as the same kind of number.
+    """
+    if _path_distance_source(legs) == "graph":
+        return graph_distance_m, "graph"
+    return sum(leg.road_geometry["distance_m"] for leg in legs), "osrm"
+
+
+def _leg_graph_distance_m(leg: RouteLeg) -> float:
+    """A leg's fallback (routing-graph) distance: the sum of the graph's
+    haversine edge weights along the leg.
+
+    The graph builds every ride/walk edge as the haversine distance
+    between its two endpoint stops (see app/routing/graph_builder.py), and
+    `_build_legs` keeps a leg's full stop list -- including the
+    intermediate stops a merged multi-hop leg passes through -- so summing
+    the straight-line distance between each consecutive pair of those
+    stops reproduces exactly the per-edge sum NetworkX used, with no OSRM
+    input and no display geometry. That is what makes each leg reconcile
+    with the path total (`result.total_distance_m`, the same per-edge sum
+    over the whole path).
+
+    For a one-hop leg this equals the board->alight straight line; for a
+    multi-hop, non-collinear leg it is strictly larger, so measuring the
+    leg with only the board->alight chord would understate it and disagree
+    with the path total. Falls back to that single chord only if the leg
+    somehow carries fewer than two stops (never the case for a leg built
+    by _build_legs)."""
+    if len(leg.stops) < 2:
+        return haversine_distance_m(
+            leg.board_stop.lat,
+            leg.board_stop.lng,
+            leg.alight_stop.lat,
+            leg.alight_stop.lng,
+        )
+    return sum(
+        haversine_distance_m(a.lat, a.lng, b.lat, b.lng)
+        for a, b in zip(leg.stops, leg.stops[1:])
     )
 
 
-def _leg_estimated_duration_s(leg: RouteLeg) -> float:
+def _leg_distance_m(leg: RouteLeg, source: DistanceSource) -> float:
+    """A leg's travel distance, on the path's single distance basis
+    (`source`, from _path_distance_source).
+
+    Under "osrm" every leg of the path has road_geometry by construction,
+    so this is the real road distance. Under "graph" the whole path fell
+    back, so even a leg that happens to carry road_geometry is measured as
+    the graph's summed per-edge haversine (see _leg_graph_distance_m) --
+    keeping the path internally on one basis, and keeping each leg's
+    distance reconciling with the path total, rather than mixing the two.
+    """
+    if source == "osrm":
+        return leg.road_geometry["distance_m"]
+    return _leg_graph_distance_m(leg)
+
+
+def _leg_estimated_duration_s(leg: RouteLeg, source: DistanceSource) -> float:
     """Estimated travel time for one leg at fixed assumed speeds (.e.g
-    ~12 km/h buses, ~4.7 km/h walking). The OSRM driving-profile duration
-    is deliberately NOT used -- it describes a private car at free-flow
-    speed, not a bus making stops. Same assumptions the pathfinder's
-    "fastest_estimated" ranking uses, so the UI never shows a figure the
-    search never used."""
+    ~12 km/h buses, ~4.7 km/h walking) over its `source`-basis distance.
+    The OSRM driving-profile duration is deliberately NOT used -- it
+    describes a private car at free-flow speed, not a bus making stops.
+    Same assumptions the pathfinder's "fastest_estimated" ranking uses,
+    so the UI never shows a figure the search never used."""
     speed = WALK_SPEED_MPS if leg.route_id == "TRANSFER" else BUS_AVG_SPEED_MPS
-    return _leg_distance_m(leg) / speed
+    return _leg_distance_m(leg, source) / speed
 
 
-def _annotate_leg_estimated_durations(legs: list[RouteLeg]) -> None:
+def _annotate_leg_estimated_durations(
+    legs: list[RouteLeg], source: DistanceSource
+) -> None:
     for leg in legs:
-        leg.estimated_duration_s = _leg_estimated_duration_s(leg)
+        leg.estimated_duration_s = _leg_estimated_duration_s(leg, source)
 
 
-def _total_estimated_duration_s(legs: list[RouteLeg]) -> float:
-    """Whole-trip estimate: ride/walk time at assumed speeds plus a fixed
-    boarding wait per bus boarded. Labeled an estimate by the caller."""
-    travel_s = sum(_leg_estimated_duration_s(leg) for leg in legs)
+def _total_estimated_duration_s(
+    legs: list[RouteLeg], source: DistanceSource
+) -> float:
+    """Whole-trip estimate: ride/walk time at assumed speeds over each
+    leg's `source`-basis distance, plus a fixed boarding wait per bus
+    boarded. Labeled an estimate by the caller."""
+    travel_s = sum(_leg_estimated_duration_s(leg, source) for leg in legs)
     ride_count = sum(1 for leg in legs if leg.route_id != "TRANSFER")
     return travel_s + ride_count * BOARD_WAIT_S
 
 
-def _ride_only_distance_m(legs: list[RouteLeg]) -> float:
-    """Distance ridden on buses, excluding walking transfers. Bus fares are
-    banded by the distance actually ridden -- a cross-street transfer walk
-    contributes to trip length but nothing to what the passenger pays."""
-    return sum(_leg_distance_m(leg) for leg in legs if leg.route_id != "TRANSFER")
+def _ride_only_distance_m(legs: list[RouteLeg], source: DistanceSource) -> float:
+    """Distance ridden on buses, excluding walking transfers, on the
+    path's single distance basis (`source`). Bus fares are banded by the
+    distance actually ridden -- a cross-street transfer walk contributes
+    to trip length but nothing to what the passenger pays -- and the fare
+    is put on the same basis as the displayed total so the two can't
+    disagree about how far the trip was measured.
+    """
+    return sum(
+        _leg_distance_m(leg, source) for leg in legs if leg.route_id != "TRANSFER"
+    )
 
 
 def _record_leg_congestion(legs: list[RouteLeg]) -> None:
@@ -490,28 +572,31 @@ def find_route(
     # they claimed the session closes on this line -- but nothing after this
     # line is allowed to use it.)
     _attach_road_geometry(legs)
-    _annotate_leg_estimated_durations(legs)
-    background_tasks.add_task(_record_leg_congestion, legs)
 
-    # Prefer the real road distance OSRM returned for these legs over
-    # result.total_distance_m, which is a sum of straight-line
-    # (haversine) edge weights from the routing graph -- fine for
-    # ranking candidate paths during search, but a systematic
-    # under-estimate of how far the bus/walk actually travels, since
-    # roads curve and rarely follow the great-circle line between two
-    # stops. Only used when every leg has road_geometry; otherwise
-    # fall back so a single OSRM hiccup doesn't blank out the figure.
-    total_distance_m = _total_road_distance_m(legs)
-    if total_distance_m is None:
-        total_distance_m = result.total_distance_m
+    # One distance basis for the whole path, chosen once (see
+    # _path_distance_source): the summed OSRM road distance when all legs
+    # have geometry, otherwise this path's routing-graph (haversine) sum.
+    # It is picked *before* the duration and fare below so all three share
+    # it, and recorded as `total_distance_source` so an OSRM figure and a
+    # fallback figure are never presented as the same kind of number. Same
+    # policy for the primary and every alternative, so the totals are
+    # directly comparable regardless of which one OSRM could fully cover.
+    total_distance_m, total_distance_source = _total_distance_with_source(
+        legs, result.total_distance_m
+    )
+    _annotate_leg_estimated_durations(legs, total_distance_source)
+    background_tasks.add_task(_record_leg_congestion, legs)
 
     alternatives: list[RouteAlternative] = []
     for alt in result.alternatives:
         alt_legs = _build_legs(alt.segments, route_names, stop_map)
         _annotate_ride_legs(alt_legs, route_info)
         _attach_road_geometry(alt_legs)
-        _annotate_leg_estimated_durations(alt_legs)
-        alt_ride_only_m = _ride_only_distance_m(alt_legs)
+        alt_total_distance_m, alt_distance_source = _total_distance_with_source(
+            alt_legs, alt.total_distance_m
+        )
+        _annotate_leg_estimated_durations(alt_legs, alt_distance_source)
+        alt_ride_only_m = _ride_only_distance_m(alt_legs, alt_distance_source)
         alt_fare_rule = (
             queries.fare_for_distance(db, alt_ride_only_m / 1000)
             if alt_ride_only_m > 0
@@ -525,19 +610,24 @@ def find_route(
         alternatives.append(
             RouteAlternative(
                 label=alt.label,
-                total_cost=alt.total_distance_m,
+                total_cost=alt_total_distance_m,
+                total_distance_source=alt_distance_source,
                 transfer_count=alt.transfer_count,
                 legs=alt_legs,
                 fare=alt_fare,
-                total_estimated_duration_s=_total_estimated_duration_s(alt_legs),
+                total_estimated_duration_s=_total_estimated_duration_s(
+                    alt_legs, alt_distance_source
+                ),
             )
         )
 
     # Fare is banded on the distance actually ridden, not the whole trip:
     # a walking transfer adds minutes but nothing to the bus fare, so
     # counting it would over-charge the estimate (see the old bug where
-    # total_distance_m included walk legs).
-    ride_only_m = _ride_only_distance_m(legs)
+    # total_distance_m included walk legs). Uses the path's single basis
+    # (`total_distance_source`) so the fare and the displayed total can't
+    # be measuring the trip two different ways.
+    ride_only_m = _ride_only_distance_m(legs, total_distance_source)
     fare_rule = (
         queries.fare_for_distance(db, ride_only_m / 1000)
         if ride_only_m > 0
@@ -550,10 +640,13 @@ def find_route(
         destination_stop_id=destination,
         via_stop_ids=via,
         total_cost=total_distance_m,
+        total_distance_source=total_distance_source,
         transfer_count=result.transfer_count,
         legs=legs,
         fare=fare,
         alternatives=alternatives,
-        total_estimated_duration_s=_total_estimated_duration_s(legs),
+        total_estimated_duration_s=_total_estimated_duration_s(
+            legs, total_distance_source
+        ),
         rank_reason=result.rank_reason,
     )

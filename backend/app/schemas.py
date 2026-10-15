@@ -236,15 +236,39 @@ class RouteLeg(BaseModel):
     # sequence). This is a direction hint for riders, not a guarantee the
     # vehicle terminates exactly there.
     direction_towards: Optional[str] = None
-    # Backend-computed estimated travel time for THIS leg: road distance
-    # (OSRM road_geometry when available, haversine otherwise) divided by
-    # a fixed assumed speed (BUS_AVG_SPEED_MPS for rides, WALK_SPEED_MPS
-    # for transfers). Deliberately NOT the OSRM driving-profile
-    # duration_s -- that describes how long a private car would take on
-    # the same roads at free-flow speeds, not a bus with stops, boarding,
-    # dwell and traffic. This is the labeled-approximate figure (see
+    # Backend-computed estimated travel time for THIS leg: its distance on
+    # the path's single distance basis (OSRM road_geometry when the whole
+    # path is on "osrm"; otherwise the graph's summed per-edge haversine
+    # along this leg -- the same per-edge sum the path total is built from,
+    # so the legs reconcile with it -- see DistanceSource) divided by a
+    # fixed assumed speed (BUS_AVG_SPEED_MPS for rides, WALK_SPEED_MPS for
+    # transfers). Deliberately NOT the OSRM driving-profile duration_s --
+    # that describes how long a private car would take on the same roads at
+    # free-flow speeds, not a bus with stops, boarding, dwell and traffic.
+    # This is the labeled-approximate figure (see
     # RouteFinderResult.total_estimated_duration_s), not a live ETA.
     estimated_duration_s: Optional[float] = None
+
+
+# Which distance basis a route result's figures are on. One basis is chosen
+# per path (see api/routing.py's _path_distance_source) and used by *all* of
+# that path's distance-derived figures -- `total_cost`, the fare's ride-only
+# distance, and the leg/total estimated durations -- so no two of them can
+# silently combine different measurements:
+#   - "osrm": the complete real road distance, summed from the
+#     road_geometry of *every* leg.
+#   - "graph": the routing graph's straight-line (haversine) edge-weight
+#     sum, used as the fallback whenever OSRM supplied nothing for one or
+#     more legs (OSRM unavailable, or a single leg had no matchable road).
+#     Applied per edge and summed per leg, so each leg's distance adds up
+#     to the path total rather than measuring the leg as one board->alight
+#     chord.
+# Because the choice is per-path and all-or-nothing, `total_distance_source`
+# alone fully describes every distance-derived figure; there is deliberately
+# no separate fare/duration source field that could duplicate or contradict
+# it. A route-level tag only -- if per-leg provenance is added later,
+# RouteLeg should carry its own `distance_source` using these same values.
+DistanceSource = Literal["osrm", "graph"]
 
 
 class RouteAlternative(BaseModel):
@@ -265,29 +289,43 @@ class RouteAlternative(BaseModel):
         Exact, not estimated.
       - "shortest_distance": minimum total distance, ignoring the small
         per-transfer weighting the primary/recommended result applies.
-        Only appears when no direct route exists. total_cost here is
-        still the routing graph's straight-line (haversine) edge-weight
-        sum, not an OSRM road distance -- prefer summing each leg's own
-        road_geometry.distance_m for the real travel distance.
+        Only appears when no direct route exists.
       - "fastest_estimated": minimum estimated travel time, using fixed
         assumed speeds per edge kind (~12 km/h riding, ~4.7 km/h
         walking, since no per-edge duration data exists pre-search --
         OSRM duration is only computed after a path is already chosen).
         This is a labeled approximation, not a live ETA. Only appears
         when no direct route exists.
+
+    `total_cost` uses the same distance policy as the primary result --
+    the summed OSRM road distance when every leg has road_geometry, else
+    the routing graph's straight-line (haversine) edge-weight sum -- and
+    `total_distance_source` records which, so a primary total and an
+    alternative total are always on the same basis. That same basis is
+    also what this alternative's fare distance and estimated durations use
+    (see DistanceSource), so every distance-derived figure on the option
+    agrees.
     """
 
     label: Literal["alternate_direct_route", "shortest_distance", "fastest_estimated"]
     total_cost: float
+    # The path's single distance basis (see DistanceSource). It covers this
+    # alternative's `total_cost`, its fare's ride-only distance, and its
+    # estimated durations. None only for hand-built fixtures or older
+    # payloads; the API always sets it.
+    total_distance_source: Optional[DistanceSource] = None
     transfer_count: int
     legs: list[RouteLeg]
     # This option's own fare, computed on the ride-leg distance only
     # (walking transfers contribute distance to the trip but nothing to
-    # the bus fare). None when there's no ride leg or no fare rule matches.
+    # the bus fare), on the same distance basis as `total_cost` (see
+    # total_distance_source). None when there's no ride leg or no fare rule
+    # matches.
     fare: Optional[FareOut] = None
     # Sum of every leg's estimated_duration_s plus an assumed per-ride
-    # boarding wait (see api/routing.py). Labeled approximation, same
-    # basis as RouteFinderResult.total_estimated_duration_s.
+    # boarding wait (see api/routing.py). Labeled approximation, on the
+    # same distance basis as total_cost and the same basis as
+    # RouteFinderResult.total_estimated_duration_s.
     total_estimated_duration_s: Optional[float] = None
 
 
@@ -298,16 +336,30 @@ class RouteFinderResult(BaseModel):
     # (empty for a plain origin->destination search). Echoed back so the
     # frontend can label the trip without re-deriving it from `legs`.
     via_stop_ids: list[str] = []
+    # Whole-trip distance, on the path's single distance basis (see
+    # total_distance_source / DistanceSource): the summed OSRM road
+    # distance when every leg has road_geometry, else the routing graph's
+    # straight-line (haversine) sum.
     total_cost: float
+    # The path's single distance basis (see DistanceSource). It covers this
+    # result's `total_cost`, its fare's ride-only distance, and its
+    # estimated durations. None only for hand-built fixtures or older
+    # payloads; the API always sets it.
+    total_distance_source: Optional[DistanceSource] = None
     transfer_count: int
     legs: list[RouteLeg]
+    # Fare for the trip, computed on the ride-leg distance only (walking
+    # transfers contribute distance but nothing to the bus fare), on the
+    # same distance basis as `total_cost` (see total_distance_source). None
+    # when there's no ride leg or no fare rule matches.
     fare: Optional[FareOut] = None
     alternatives: list[RouteAlternative] = []
     # Sum of every leg's estimated_duration_s plus an assumed per-ride
-    # boarding wait -- time at fixed assumed speeds over the actual route
-    # distance, NOT the OSRM driving-profile duration summed up (which a
-    # private car at free-flow speed would take). A labeled estimate,
-    # never a live ETA; the frontend must show it as one.
+    # boarding wait -- time at fixed assumed speeds over each leg's
+    # distance on the same basis as total_cost, NOT the OSRM driving-
+    # profile duration summed up (which a private car at free-flow speed
+    # would take). A labeled estimate, never a live ETA; the frontend must
+    # show it as one.
     total_estimated_duration_s: float
     # Machine-readable reason this result was chosen as the primary, so the
     # UI can explain the pick instead of showing a bare "Recommended". One

@@ -77,8 +77,8 @@ export interface StopMatch {
  *
  * Exact and prefix tiers always beat substring tiers, and fuzzy matches can
  * never outrank a real name/alias match. Ties break by shortest name, then
- * alphabetically, then stop_id, so results are stable no matter what order
- * the dataset arrives in (no first-in-dataset cut-off).
+ * case-insensitively alphabetically, then stop_id, so results are stable no
+ * matter what order the dataset arrives in (no first-in-dataset cut-off).
  */
 export function searchStops(query: string, stops: Stop[]): StopMatch[] {
   const q = normalizeText(query);
@@ -148,7 +148,16 @@ export function searchStops(query: string, stops: Stop[]): StopMatch[] {
     const aName = a.stop.stop_name ?? "";
     const bName = b.stop.stop_name ?? "";
     if (aName.length !== bName.length) return aName.length - bName.length;
-    if (aName !== bName) return aName < bName ? -1 : 1;
+    // Case-insensitive name comparison. Comparing raw code units would sort
+    // an all-caps name ("KALANKI") ahead of a mixed-case one ("Kalanki")
+    // even though they are equally relevant -- that is an arbitrary artifact
+    // of capitalization, not a signal of which stop is canonical. Both
+    // records stay distinct; this only makes their order predictable.
+    const aFolded = aName.toLowerCase();
+    const bFolded = bName.toLowerCase();
+    if (aFolded !== bFolded) return aFolded < bFolded ? -1 : 1;
+    // Stable, deterministic final key: stop_id is unique, so equal-score
+    // names that differ only by case still order consistently.
     return a.stop.stop_id < b.stop.stop_id ? -1 : 1;
   });
 

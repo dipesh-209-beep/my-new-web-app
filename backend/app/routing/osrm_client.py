@@ -1,3 +1,4 @@
+import math
 import os
 import threading
 import time
@@ -194,6 +195,76 @@ def _should_retry(exc: Exception, response: Optional[httpx.Response] = None) -> 
     return False
 
 
+def _is_positive_finite_number(value) -> bool:
+    """True only for a real, finite number strictly greater than zero.
+
+    Rejects bools (a subclass of int), strings, None, NaN and +/-inf. OSRM
+    routes require a positive distance and duration; anything else means we
+    cannot trust the measurement, so callers get the ordinary fallback
+    instead of a bad number flowing into a total, fare or duration."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def _parse_route_response(data) -> dict:
+    """Validate a decoded OSRM /route response and extract the first
+    route's geometry, distance and duration.
+
+    OSRM *should* return
+    {"code": "Ok", "routes": [{"geometry": {...}, "distance": <m>,
+    "duration": <s>}, ...]}, but an HTTP 200 can still be truncated,
+    wrong-typed, or carry a non-finite/negative measurement. Validating
+    here turns every such case into the OSRMError callers already handle
+    (see app/api/routing.py::_attach_road_geometry and app/api/routes.py),
+    rather than letting a KeyError/IndexError/TypeError escape or a bad
+    number propagate into a total, fare or duration.
+
+    Every message is a fixed string: it never echoes the response body or
+    the request URL, so a malformed payload can't leak into logs or an
+    error surfaced to a client.
+    """
+    if not isinstance(data, dict):
+        raise OSRMError("OSRM response was not a JSON object")
+
+    code = data.get("code")
+    if code != "Ok":
+        raise OSRMError(f"OSRM returned code={code}")
+
+    routes = data.get("routes")
+    if not isinstance(routes, list) or not routes:
+        raise OSRMError("OSRM response contained no routes")
+
+    route = routes[0]
+    if not isinstance(route, dict):
+        raise OSRMError("OSRM route was not an object")
+
+    geometry = route.get("geometry")
+    if not isinstance(geometry, dict):
+        raise OSRMError("OSRM route was missing a geometry object")
+    if geometry.get("type") != "LineString":
+        raise OSRMError("OSRM route geometry was not a LineString")
+    if not isinstance(geometry.get("coordinates"), list):
+        raise OSRMError("OSRM route geometry had no coordinate list")
+
+    distance = route.get("distance")
+    if not _is_positive_finite_number(distance):
+        raise OSRMError("OSRM route distance was missing or invalid")
+
+    duration = route.get("duration")
+    if not _is_positive_finite_number(duration):
+        raise OSRMError("OSRM route duration was missing or invalid")
+
+    return {
+        "geometry": geometry,  # GeoJSON LineString
+        "distance_m": distance,
+        "duration_s": duration,
+    }
+
+
 def get_route_geometry(
     coords: list[tuple[float, float]],
     profile: str = "driving",
@@ -302,15 +373,15 @@ def get_route_geometry(
             raise OSRMError(f"OSRM returned HTTP {last_response.status_code} after retries") from last_exc
         raise OSRMError(f"OSRM request failed after retries: {last_exc}") from last_exc
 
-    data = last_response.json()
-    if data.get("code") != "Ok":
-        raise OSRMError(f"OSRM returned code={data.get('code')}")
+    try:
+        data = last_response.json()
+    except ValueError as exc:
+        # A 200 whose body isn't valid JSON (truncated, an HTML error
+        # page, a proxy interstitial) must fail like any other OSRM
+        # problem so the caller falls back, not escape as a raw
+        # JSONDecodeError.
+        raise OSRMError("OSRM returned a response that was not valid JSON") from exc
 
-    route = data["routes"][0]
-    result = {
-        "geometry": route["geometry"],   # GeoJSON LineString
-        "distance_m": route["distance"],
-        "duration_s": route["duration"],
-    }
+    result = _parse_route_response(data)
     _cache_set(cache_key, result)
     return result

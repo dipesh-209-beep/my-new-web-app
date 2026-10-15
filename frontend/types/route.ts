@@ -47,12 +47,20 @@ export interface RouteLeg {
    * hint, not a guarantee the vehicle terminates exactly there. */
   direction_towards?: string | null;
   /** Backend-computed estimated travel time for this leg at fixed assumed
-   * speeds (bus ~12 km/h, walk ~4.7 km/h) over the leg's real distance.
-   * Null only when the backend couldn't compute it. NOT the OSRM
-   * driving-profile duration -- that's how long a private car would take
-   * at free-flow speed. Always display as an estimate, never an ETA. */
+   * speeds (bus ~12 km/h, walk ~4.7 km/h) over the leg's distance on the
+   * path's single distance basis (see DistanceSource). Null only when the
+   * backend couldn't compute it. NOT the OSRM driving-profile duration --
+   * that's how long a private car would take at free-flow speed. Always
+   * display as an estimate, never an ETA. */
   estimated_duration_s?: number | null;
 }
+
+/** Which basis a result's distance-derived figures are on. Chosen once per
+ * path (all legs have real OSRM geometry, or the whole path falls back to
+ * the routing graph's straight-line sum), so `total_distance_source`
+ * describes the total, the fare distance, and the estimated durations
+ * alike. Mirrors DistanceSource in backend/app/schemas.py. */
+export type DistanceSource = "osrm" | "graph";
 
 export interface FareOut {
   fare_id: string;
@@ -70,14 +78,19 @@ export interface FareOut {
 export interface RouteAlternative {
   label: "alternate_direct_route" | "shortest_distance" | "fastest_estimated";
   total_cost: number;
+  /** The path's single distance basis (see DistanceSource), covering this
+   * option's total, fare distance, and estimated durations. Null only for
+   * hand-built fixtures or older payloads; the API always sets it. */
+  total_distance_source?: DistanceSource | null;
   transfer_count: number;
   legs: RouteLeg[];
-  /** This option's own fare (computed on ride-leg distance only), so the
-   * selected alternative's card never has to borrow the primary
-   * result's fare. Null when there's no ride leg or no fare rule. */
+  /** This option's own fare (computed on ride-leg distance only, on the
+   * same basis as total_cost), so the selected alternative's card never
+   * has to borrow the primary result's fare. Null when there's no ride leg
+   * or no fare rule. */
   fare?: FareOut | null;
   /** Sum of every leg's estimate plus assumed per-ride boarding wait.
-   * Labeled approximation, same basis as the primary result. */
+   * Labeled approximation, same distance basis as the primary result. */
   total_estimated_duration_s?: number | null;
 }
 
@@ -91,16 +104,21 @@ export interface RouteFinderResult {
   // updating just to satisfy this new field.
   via_stop_ids?: string[];
   total_cost: number;
+  /** The path's single distance basis (see DistanceSource), covering this
+   * result's total, fare distance, and estimated durations. Optional here
+   * (like via_stop_ids) so hand-built fixtures don't all need updating;
+   * the API always sets it. */
+  total_distance_source?: DistanceSource | null;
   transfer_count: number;
   legs: RouteLeg[];
   fare: FareOut | null;
   alternatives: RouteAlternative[];
-  /** Whole-trip estimate: ride/walk time at assumed speeds plus per-ride
-   * boarding wait, computed by the backend. Optional here (like
-   * via_stop_ids) so hand-built fixtures don't all need updating; the
-   * display code falls back to summing leg estimates. Always shown as an
-   * estimate, never as a definitive ETA, and never as an OSRM
-   * driving-profile time. */
+  /** Whole-trip estimate: ride/walk time at assumed speeds (over each
+   * leg's distance on the same basis as total_cost) plus per-ride boarding
+   * wait, computed by the backend. Optional here (like via_stop_ids) so
+   * hand-built fixtures don't all need updating; the display code falls
+   * back to summing leg estimates. Always shown as an estimate, never as a
+   * definitive ETA, and never as an OSRM driving-profile time. */
   total_estimated_duration_s?: number | null;
   /** Machine-readable reason this result was chosen as the primary; the UI
    * should translate it into a concise, truthful explanation. Optional so

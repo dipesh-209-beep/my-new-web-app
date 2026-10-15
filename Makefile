@@ -37,7 +37,7 @@ export
 endif
 
 .PHONY: setup data validate env backend-env db-up backend-env-check migrate import \
-        seed-admin osrm osrm-up backend-build up down logs psql \
+        seed-admin osrm osrm-up osrm-route-distances backend-build up down logs psql \
         test test-backend test-frontend lint frontend-install \
         nginx-check prod-check up-prod down-prod backup restore-backup \
         certs renew-certs
@@ -109,6 +109,16 @@ osrm:
 ## Bring up the OSRM routers once their .osrm files exist.
 osrm-up: osrm
 	$(COMPOSE) up -d osrm osrm-foot
+
+## Populate routes.osrm_distance_km (whole-route road distance) by calling
+## OSRM over each active route's full stop sequence. Safe to re-run; only
+## fills routes that are still null. Needs the OSRM routers up
+## (`make osrm-up`) and the backend image built (`make up` once, or
+## `make backend-build`). Pass FORCE=1 to recompute every active route
+## (e.g. after a stop-coordinate correction). Invalidates the routes /
+## route_detail caches only when a stored value actually changes.
+osrm-route-distances: db-up
+	$(COMPOSE) run --rm --no-deps backend python3 -m scripts.compute_osrm_route_distances $(if $(FORCE),--force,)
 
 ## ---------------------------------------------------------------------------
 ## Development
