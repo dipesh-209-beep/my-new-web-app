@@ -261,13 +261,13 @@ def count_routes(session: Session, status: str = "active", q: Optional[str] = No
 # the only two entry points that ever touch it.
 
 
-# Weight given to each new real sample in the exponential moving average
-# (see record_congestion_sample). Higher = the average tracks recent
-# conditions faster but is noisier; lower = smoother but slower to react
-# to a real change (new road, monsoon season, etc). 0.2 means one sample
-# moves the average a fifth of the way from where it was to the new
-# reading -- roughly a 5-sample "effective memory", tunable here only,
-# every consumer just reads avg_duration_s off the row.
+# Weight given to each new non-seeded sample in the exponential moving
+# average (see record_congestion_sample). Higher = the average tracks
+# recent readings faster but is noisier; lower = smoother but slower to
+# react (new road, monsoon season, etc). 0.2 means one sample moves the
+# average a fifth of the way from where it was to the new reading --
+# roughly a 5-sample "effective memory", tunable here only, every consumer
+# just reads avg_duration_s off the row.
 CONGESTION_EMA_ALPHA = 0.2
 
 
@@ -282,8 +282,14 @@ def record_congestion_sample(
     duration_s: float,
     distance_m: float,
 ) -> None:
-    """Upsert one real (organic) OSRM observation into this segment/time-
+    """Upsert one non-seeded congestion observation into this segment/time-
     bucket's running average.
+
+    The value is normally an OSRM routing-engine duration recorded from a
+    /route-finder response, but scripts/seed_demo_congestion.py writes
+    fabricated values through this same path -- so is_seeded=False here is
+    a seed-vs-upsert marker, NOT a claim that the value is measured (see
+    app/routing/congestion_provenance.py).
 
     Blends via an exponential moving average (see CONGESTION_EMA_ALPHA)
     rather than an unweighted lifetime mean -- a segment with hundreds of
@@ -291,11 +297,11 @@ def record_congestion_sample(
     change, instead of the average being permanently diluted toward its
     long-run history.
 
-    If the existing row is still just the synthetic seed written by
+    If the existing row is still just the seeded baseline written by
     scripts/seed_congestion_stats.py (is_seeded and sample_count <= 1),
-    this sample REPLACES it outright rather than blending in -- so one
-    guessed baseline doesn't bias the average at all once real traffic
-    data starts arriving.
+    this sample REPLACES it outright rather than blending in -- so the one
+    seeded baseline doesn't bias the average at all once non-seeded samples
+    start arriving.
     """
     table = SegmentCongestionStat.__table__
     stmt = pg_insert(table).values(
@@ -350,16 +356,17 @@ def seed_congestion_baseline(
     duration_s: float,
     distance_m: float,
 ) -> None:
-    """Write a synthetic baseline into all 8 hour buckets for every day of
-    the week, so the congestion map isn't empty before real traffic
-    accumulates. Used by scripts/seed_congestion_stats.py. A no-op (does
-    nothing, doesn't overwrite) for any bucket that already has organic
+    """Write a baseline into all 8 hour buckets for every day of the week,
+    so the congestion map isn't empty before non-seeded samples accumulate.
+    The duration passed in is an OSRM free-flow estimate, not measured
+    traffic. Used by scripts/seed_congestion_stats.py. A no-op (does
+    nothing, doesn't overwrite) for any bucket that already has non-seeded
     data, so re-running the seed script is always safe.
 
     Also anchors free_flow_duration_s to this same OSRM duration -- at
     seed time this segment has zero recorded congestion by construction,
-    so it's a genuine free-driving estimate, independent of whatever
-    avg_duration_s drifts to later via real samples.
+    so it's a free-driving estimate, independent of whatever avg_duration_s
+    drifts to later via non-seeded samples.
     """
     table = SegmentCongestionStat.__table__
     rows = [

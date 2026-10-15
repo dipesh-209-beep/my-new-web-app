@@ -3,9 +3,18 @@
 import { LayersIcon } from "@/components/icons/TransitIcons";
 import { CONGESTION_COLORS } from "@/lib/constants";
 import LayerToggle from "@/components/ui/LayerToggle";
+import { CongestionProvenance } from "@/types/route";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HOUR_BUCKETS = [0, 3, 6, 9, 12, 15, 18, 21];
+
+// Shown when the API didn't send a provenance note (e.g. an older cached
+// response). Kept here so the disclosure can never be silently absent.
+const FALLBACK_PROVENANCE_NOTE =
+  "Estimated, not measured. Congestion values are derived from OSRM free-flow " +
+  "durations and a static severity table whose origin is not recorded — there " +
+  "is no live or real-time traffic feed, and a green segment does not guarantee " +
+  "a clear road.";
 
 function formatHour(hour: number): string {
   const period = hour < 12 ? "AM" : "PM";
@@ -25,6 +34,12 @@ interface CongestionPanelProps {
   loading?: boolean;
   segmentCount: number;
   hasSeededOnly: boolean;
+  /** True when the last load failed; distinct from "no data", so an empty
+   * overlay never reads as "checked, roads clear". */
+  error?: boolean;
+  /** API-reported provenance (derived/not-live). Falls back to a constant
+   * honest note when absent. */
+  provenance?: CongestionProvenance | null;
 }
 
 export default function CongestionPanel({
@@ -37,8 +52,25 @@ export default function CongestionPanel({
   loading,
   segmentCount,
   hasSeededOnly,
+  error = false,
+  provenance = null,
 }: CongestionPanelProps) {
   const isCustomTime = dayOfWeek !== null || hourBucket !== null;
+  const provenanceNote = provenance?.note?.trim() || FALLBACK_PROVENANCE_NOTE;
+
+  let summary: string;
+  if (loading) {
+    summary = "Loading…";
+  } else if (segmentCount === 0) {
+    summary = error
+      ? "Couldn't load congestion estimates. The overlay may be incomplete."
+      : "No congestion estimate for this time.";
+  } else {
+    const noun = segmentCount === 1 ? "segment estimate" : "segment estimates";
+    const baseline = hasSeededOnly ? " All are free-flow baseline (OSRM), not reported congestion." : "";
+    const refresh = error ? " Couldn't refresh; showing an earlier estimate." : "";
+    summary = `${segmentCount} ${noun}.${baseline}${refresh}`;
+  }
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-route-line bg-surface-raised p-4 shadow-card">
@@ -49,16 +81,19 @@ export default function CongestionPanel({
         activeBgClass="bg-accent-orange"
         hoverClass="hover:border-accent-orange hover:text-accent-orange"
         title="Traffic"
-        subtitle="Traffic conditions overlay"
+        subtitle="Estimated congestion overlay"
         enabled={enabled}
         onToggle={onToggle}
       />
 
       {enabled && (
         <>
-          <p className="text-xs text-ink-secondary">
-            Historical traffic pattern by segment. Shown as an overlay only -- routes below aren&apos;t
-            re-ranked by it.
+          <p className="text-xs text-ink-secondary">{provenanceNote}</p>
+
+          <p className="text-xs text-ink-tertiary">
+            Shown as an overlay only — it doesn&apos;t re-rank the routes below. Lines are drawn
+            straight between each segment&apos;s two stops, not along roads; route search
+            (&ldquo;Avoid congested routes&rdquo;) also uses area zones that aren&apos;t drawn here.
           </p>
 
           <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -123,15 +158,7 @@ export default function CongestionPanel({
             </div>
           </div>
 
-          <p className="font-mono text-xs text-ink-secondary">
-            {loading
-              ? "Loading…"
-              : segmentCount === 0
-              ? "No congestion data for this segment/time yet."
-              : `${segmentCount} segment${segmentCount === 1 ? "" : "s"} with data.${
-                  hasSeededOnly ? " (baseline estimate, not yet confirmed by real traffic)" : ""
-                }`}
-          </p>
+          <p className="font-mono text-xs text-ink-secondary">{summary}</p>
         </>
       )}
     </div>

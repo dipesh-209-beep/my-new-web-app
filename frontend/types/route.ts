@@ -102,6 +102,10 @@ export interface RouteFinderResult {
    * estimate, never as a definitive ETA, and never as an OSRM
    * driving-profile time. */
   total_estimated_duration_s?: number | null;
+  /** Machine-readable reason this result was chosen as the primary; the UI
+   * should translate it into a concise, truthful explanation. Optional so
+   * existing fixtures and responses without this field still work. */
+  rank_reason?: "only_option" | "fewest_transfers" | "shortest_distance" | "avoids_congestion" | "best_overall" | "via_stops" | null;
 }
 
 // Frontend-only wrapper: the backend signals "not found" via HTTP 404,
@@ -149,10 +153,25 @@ export interface CongestionSegment {
   is_seeded: boolean;
 }
 
+/** Mirrors CongestionProvenance in backend/app/schemas.py. Everything the
+ * congestion feature serves is derived, never observed: `is_live` and
+ * `is_measured` are false by construction, and the backing severity table's
+ * origin is not recorded (see backend/app/routing/congestion_provenance.py).
+ * The UI must render `note` (or its own constant fallback) so congestion is
+ * never presented as live/measured. */
+export interface CongestionProvenance {
+  is_live: boolean;
+  is_measured: boolean;
+  note: string;
+}
+
 export interface CongestionResponse {
   day_of_week: number;
   hour_bucket: number;
   segments: CongestionSegment[];
+  /** Optional: a cache entry written before this field existed omits it, so
+   * the UI falls back to a constant honest note. */
+  provenance?: CongestionProvenance | null;
 }
 
 // Mirrors RouteOut / RouteStopOut / RouteListOut in backend/app/schemas.py.
@@ -184,6 +203,20 @@ export interface RouteSummary {
    * Source-supplied and often absent -- null when there's no estimate.
    * A planning estimate for the full route, never a live ETA. */
   estimated_duration_min: number | null;
+  /** Scheduled headway in whole minutes between departures (mirrors
+   * RouteOut.frequency_min in backend/app/schemas.py). A scheduled/estimated
+   * figure from route data, NOT a live arrival countdown. The backend
+   * normalizes unusable values (missing/zero/negative/malformed) to null, so
+   * a number here is always positive; absent means unknown, not "no service". */
+  frequency_min?: number | null;
+  /** Scheduled service window as "HH:MM" (mirrors
+   * RouteOut.service_start_time / service_end_time). The backend drops a
+   * one-sided or reversed window to null on BOTH ends, so they are present
+   * together or absent together. Typical hours for the route, not real-time
+   * status -- a bus isn't necessarily running just because the clock is
+   * inside the window. */
+  service_start_time?: string | null;
+  service_end_time?: string | null;
   has_ac?: boolean;
   is_express?: boolean;
   status: string;

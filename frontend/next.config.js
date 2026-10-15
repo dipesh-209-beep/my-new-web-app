@@ -115,9 +115,9 @@ const nextConfig = {
   // The `next dev -H 0.0.0.0` in package.json already binds to all interfaces;
   // this prevents Next.js from blocking the cross-origin WebSocket upgrade.
   allowedDevOrigins: [
-    'http://localhost:*',
-    'http://127.0.0.1:*',
-    '192.168.1.73',
+    'localhost',
+    '127.0.0.1',
+    '192.168.1.7',
   ],
 
   async headers() {

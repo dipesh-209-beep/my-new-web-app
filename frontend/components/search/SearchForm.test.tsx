@@ -84,3 +84,53 @@ describe("SearchForm avoid-congestion control", () => {
     expect(onSearch).toHaveBeenCalledWith("S0001", "S0002", ["S0003"], true);
   });
 });
+
+describe("SearchForm stop-list availability", () => {
+  function renderWithStops(
+    stops: Stop[],
+    onSearch: (o: string, d: string, v: string[], a: boolean) => void,
+    stopsLoading = false
+  ) {
+    return render(
+      <SearchForm
+        stops={stops}
+        stopsLoading={stopsLoading}
+        originText="Ratnapark"
+        destinationText="Sundhara"
+        onOriginTextChange={() => {}}
+        onDestinationTextChange={() => {}}
+        viaStops={[]}
+        onViaStopsChange={() => {}}
+        pickTarget={null}
+        onPickTargetChange={() => {}}
+        onUseMyLocation={() => {}}
+        onSearch={onSearch}
+      />
+    );
+  }
+
+  it("disables search while the stop list is unavailable", () => {
+    renderWithStops([], vi.fn(), true);
+    expect(screen.getByRole("button", { name: /find route/i })).toBeDisabled();
+  });
+
+  it("blocks submission with an accurate message when stops are unavailable", () => {
+    const onSearch = vi.fn();
+    const { container } = renderWithStops([], onSearch);
+
+    fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+
+    expect(onSearch).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/stop list/i);
+  });
+
+  it("enables search once the stop list is available", () => {
+    const onSearch = vi.fn();
+    renderWithStops([makeStop("S0001", "Ratnapark"), makeStop("S0002", "Sundhara")], onSearch);
+
+    const button = screen.getByRole("button", { name: /find route/i });
+    expect(button).toBeEnabled();
+    submit();
+    expect(onSearch).toHaveBeenCalledWith("S0001", "S0002", [], false);
+  });
+});

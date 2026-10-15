@@ -216,6 +216,9 @@ export default function RouteDetailPage() {
 
       <RouteEstimates
         durationMinutes={route.estimated_duration_min}
+        frequencyMinutes={route.frequency_min}
+        serviceStartTime={route.service_start_time}
+        serviceEndTime={route.service_end_time}
         fare={fare}
         fareLoading={fareLoading}
       />

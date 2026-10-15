@@ -5,10 +5,12 @@ GET /congestion — historical congestion stats for a given day-of-week /
 hour-bucket, defaulting to "right now" in Nepal time.
 
 Data comes from segment_congestion_stats, an aggregate table upserted by
-api/routing.py on real traffic (see _record_leg_congestion) and optionally
-pre-populated by scripts/seed_congestion_stats.py. This endpoint is pure
-read: it classifies each row's congestion_ratio into a CongestionLevel and
-returns it, no writes.
+api/routing.py with OSRM-derived durations (see _record_leg_congestion) and
+optionally pre-populated by scripts/seed_congestion_stats.py. These are
+routing-engine estimates, not measured traffic -- see
+app/routing/congestion_provenance.py. This endpoint is pure read: it
+classifies each row's congestion_ratio into a CongestionLevel and returns
+it, plus a provenance block describing what the numbers are not, no writes.
 """
 
 from fastapi import APIRouter, Query, Depends
@@ -18,8 +20,14 @@ from app.core.config import get_settings
 from app.core.response_cache import cached_response
 from app.db import queries
 from app.db.session import get_db
+from app.routing.congestion_provenance import PROVENANCE_NOTE
 from app.routing.time_buckets import HOUR_BUCKETS, day_and_bucket_for, hour_bucket_start, now_in_nepal
-from app.schemas import CongestionLevel, CongestionResponse, CongestionSegmentOut
+from app.schemas import (
+    CongestionLevel,
+    CongestionProvenance,
+    CongestionResponse,
+    CongestionSegmentOut,
+)
 
 router = APIRouter(tags=["congestion"])
 settings = get_settings()
@@ -30,6 +38,18 @@ settings = get_settings()
 # consumer reads the classification off the API, not the raw ratio.
 _MODERATE_RATIO = 1.15
 _HEAVY_RATIO = 1.5
+
+# The disclosure served with every response. The note text lives in
+# app/routing/congestion_provenance.py so the API and its tests share one
+# string. The flags are hardcoded False because no producer in this
+# repository emits a live or measured source (see PRODUCER_SOURCES there);
+# if one ever does, it must change both places together.
+# See CongestionProvenance in app/schemas.py for the response-shape rationale.
+_PROVENANCE = CongestionProvenance(
+    is_live=False,
+    is_measured=False,
+    note=PROVENANCE_NOTE,
+)
 
 
 def _classify(ratio: float) -> CongestionLevel:
@@ -84,7 +104,12 @@ def get_congestion(
             )
         )
 
-    return CongestionResponse(day_of_week=day_of_week, hour_bucket=hour_bucket, segments=segments)
+    return CongestionResponse(
+        day_of_week=day_of_week,
+        hour_bucket=hour_bucket,
+        segments=segments,
+        provenance=_PROVENANCE,
+    )
 
 
 @router.get("/congestion/buckets")

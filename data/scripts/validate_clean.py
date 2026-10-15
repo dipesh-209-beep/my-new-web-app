@@ -46,6 +46,60 @@ def to_array_literal(val: object) -> object:
     return "{" + ",".join(parts) + "}"
 
 
+def route_service_checks(routes: pd.DataFrame) -> dict[str, int]:
+    """Read-only checks for routes.frequency_min and the service window.
+
+    Mirrors the read-time normalization RouteOut applies (app/schemas.py):
+    a frequency must be a positive whole number of minutes, and a service
+    window is only meaningful when both bounds are present, parse as
+    HH:MM[:SS], and start before end -- the schema has no overnight
+    semantics. Anything failing a check is surfaced to the API/UI as
+    "unknown", not repaired here; this only flags it for a human. Columns
+    absent from the frame are skipped, so a fixture without service columns
+    still validates.
+
+    Returns a {check_name: failing_row_count} mapping; all-zero is healthy.
+    """
+    checks: dict[str, int] = {}
+
+    if "frequency_min" in routes.columns:
+        raw = routes["frequency_min"]
+        present = raw.notna() & (raw.astype(str).str.strip() != "")
+        numeric = pd.to_numeric(raw, errors="coerce")
+        # Whole minutes only: 15 is fine, "15.5", "abc", 0 and -5 are not.
+        bad_freq = present & (numeric.isna() | (numeric <= 0) | (numeric % 1 != 0))
+        checks["routes.frequency_min non-positive or non-integer"] = int(bad_freq.sum())
+
+    def bad_time_count(col: str) -> int:
+        raw = routes[col]
+        present = raw.notna() & (raw.astype(str).str.strip() != "")
+        text = raw.astype(str).str.strip()
+        shape_ok = text.str.match(r"^\d{2}:\d{2}(:\d{2})?$")
+        hour = pd.to_numeric(text.str.slice(0, 2), errors="coerce")
+        minute = pd.to_numeric(text.str.slice(3, 5), errors="coerce")
+        in_range = hour.between(0, 23) & minute.between(0, 59)
+        return int((present & (~shape_ok | ~in_range)).sum())
+
+    if "service_start_time" in routes.columns:
+        checks["routes.service_start_time invalid"] = bad_time_count("service_start_time")
+    if "service_end_time" in routes.columns:
+        checks["routes.service_end_time invalid"] = bad_time_count("service_end_time")
+
+    if {"service_start_time", "service_end_time"}.issubset(routes.columns):
+        start = routes["service_start_time"].astype(str).str.strip()
+        end = routes["service_end_time"].astype(str).str.strip()
+        both_present = (
+            routes["service_start_time"].notna() & (start != "")
+            & routes["service_end_time"].notna() & (end != "")
+        )
+        # Zero-padded HH:MM[:SS] sorts lexicographically the same as it does
+        # chronologically, so this catches a missing, equal, or reversed end.
+        ordered = start < end
+        checks["routes.service window start >= end"] = int((both_present & ~ordered).sum())
+
+    return checks
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", type=Path, default=Path("data/processed"))
@@ -138,6 +192,8 @@ def main() -> int:
     fr_sorted = fare_rules.assign(_lo=fr_min, _hi=fr_max).sort_values("_lo")
     overlaps = (fr_sorted["_lo"].shift(-1) < fr_sorted["_hi"]).sum()
     checks["fare_rules overlapping distance bands"] = int(overlaps)
+
+    checks.update(route_service_checks(routes))
 
     ok = True
     print(f"{'CHECK':<62}{'COUNT':>8}  STATUS")

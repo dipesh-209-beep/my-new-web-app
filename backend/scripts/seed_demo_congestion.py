@@ -2,13 +2,24 @@
 scripts/seed_demo_congestion.py
 
 Seeds peak-hour congestion samples on real segments departing every stop
-listed in data/stop_congestion_scores.csv -- a manifest of real, measured
-Kathmandu congestion severity (source: data/congestion_loss_table.csv, a
-91-location traffic study) matched against this project's actual stops,
-plus a small number of stops not covered by that study (marked
-"fallback_average" in the manifest -- see there for exactly which ones
-and why), so avoid_congestion=true on /route-finder has real data to
-route around instead of an empty table.
+listed in data/stop_congestion_scores.csv -- a manifest that matches this
+project's actual stops to a static per-intersection severity score from
+data/congestion_loss_table.csv. That severity table's origin is NOT
+recorded in this repository (no author, date, method or citation), so the
+scores are unverified estimates, not measurements; the manifest's "source"
+column labels each row "severity_table_unverified" (matched to the table)
+or "fallback_average" (the table's own mean, used for the couple of stops
+it does not cover -- see there for exactly which ones and why). This lets
+avoid_congestion=true on /route-finder have data to route around instead
+of an empty table.
+
+The durations this script writes are SYNTHETIC: a free-flow guess (the
+segment distance / an assumed city-bus speed) scaled by the score-derived
+ratio -- not observed traffic. They go through the normal
+record_congestion_sample upsert with is_seeded=False, so at the row level
+they are indistinguishable from the OSRM-derived durations /route-finder
+records. is_seeded is a seed-vs-upsert flag, NOT a provenance field -- see
+app/routing/congestion_provenance.py.
 
 For each stop in the manifest, this DISCOVERS a real departing segment at
 runtime from the live routing graph (the longest "ride" edge leaving that

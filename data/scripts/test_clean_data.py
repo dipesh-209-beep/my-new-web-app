@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from clean_data import CleaningStats, clean_route_stops, clean_routes, clean_stops, dedup_stops, dedup_routes, _stop_set_similarity
+from validate_clean import route_service_checks
 
 
 @pytest.fixture
@@ -221,3 +222,67 @@ def test_dedup_routes_warns_and_skips_unknown_route_id(tmp_path, caplog):
     assert list(new_routes["route_id"]) == ["R1"]  # nothing dropped, R1 untouched
     assert stats.route_dedup_merged == []
     assert dropped_route_ids == set()
+
+
+# ---------------------------------------------------------------------------
+# route_service_checks (validate_clean.py) — the R4 frequency/service-hours
+# integrity checks that guard what RouteOut will expose to the API/UI.
+# ---------------------------------------------------------------------------
+
+def _routes_with_service(rows):
+    return pd.DataFrame(rows)
+
+
+def test_route_service_checks_flags_unusable_frequency():
+    routes = _routes_with_service([
+        {"frequency_min": "15"},    # ok
+        {"frequency_min": "30"},    # ok
+        {"frequency_min": ""},      # unknown, not a failure
+        {"frequency_min": "0"},     # non-positive
+        {"frequency_min": "-5"},    # negative
+        {"frequency_min": "12.5"},  # fractional
+        {"frequency_min": "often"}, # non-numeric
+    ])
+    checks = route_service_checks(routes)
+    assert checks["routes.frequency_min non-positive or non-integer"] == 4
+
+
+def test_route_service_checks_flags_malformed_times():
+    routes = _routes_with_service([
+        {"service_start_time": "06:00:00", "service_end_time": "20:00:00"},  # ok
+        {"service_start_time": "6:00",     "service_end_time": "20:00:00"},  # unpadded
+        {"service_start_time": "06:60:00", "service_end_time": "20:00:00"},  # minute range
+        {"service_start_time": "24:00:00", "service_end_time": "20:00:00"},  # hour range
+        {"service_start_time": "",         "service_end_time": ""},          # empty, ok
+    ])
+    checks = route_service_checks(routes)
+    assert checks["routes.service_start_time invalid"] == 3
+    assert checks["routes.service_end_time invalid"] == 0
+
+
+def test_route_service_checks_flags_reversed_or_equal_window():
+    routes = _routes_with_service([
+        {"service_start_time": "06:00:00", "service_end_time": "20:00:00"},  # ok
+        {"service_start_time": "20:00:00", "service_end_time": "06:00:00"},  # reversed
+        {"service_start_time": "06:00:00", "service_end_time": "06:00:00"},  # equal
+        {"service_start_time": "06:00:00", "service_end_time": ""},          # one-sided
+    ])
+    checks = route_service_checks(routes)
+    # One-sided windows are handled at read time (dropped to unknown), not
+    # flagged here — only complete-but-unordered windows fail this check.
+    assert checks["routes.service window start >= end"] == 2
+
+
+def test_route_service_checks_passes_on_clean_data():
+    routes = _routes_with_service([
+        {"frequency_min": "15", "service_start_time": "06:00:00", "service_end_time": "20:00:00"},
+        {"frequency_min": "30", "service_start_time": "06:00:00", "service_end_time": "19:00:00"},
+        {"frequency_min": "",   "service_start_time": "",         "service_end_time": ""},
+    ])
+    checks = route_service_checks(routes)
+    assert all(count == 0 for count in checks.values())
+
+
+def test_route_service_checks_skips_absent_columns():
+    # A fixture/frame without the service columns must not raise.
+    assert route_service_checks(pd.DataFrame([{"route_id": "R1"}])) == {}

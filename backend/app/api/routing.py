@@ -244,11 +244,15 @@ def _ride_only_distance_m(legs: list[RouteLeg]) -> float:
 def _record_leg_congestion(legs: list[RouteLeg]) -> None:
     """Runs after the response is already sent (see BackgroundTasks in
     find_route below), so this never adds latency to a user's search. Each
-    ride leg with real OSRM road_geometry becomes one upsert into
+    ride leg with OSRM road_geometry becomes one upsert into
     segment_congestion_stats, bucketed by "now" in Nepal time -- an
     approximation of when the underlying trip would actually happen, good
     enough for an aggregate stat that only needs day-of-week/3-hour
     resolution.
+
+    The duration recorded is OSRM's routing-engine estimate for the leg,
+    not a measured traffic observation -- see
+    app/routing/congestion_provenance.py.
 
     Opens its own DB session rather than reusing the request's, since the
     request's session is closed by the get_db dependency once the response
@@ -383,13 +387,14 @@ def find_route(
     avoid_congestion: bool = Query(
         False,
         description=(
-            "When true, direct and transfer candidates are compared on "
-            "the same congestion-aware cost (congestion-inflated ride "
-            "distance plus the per-boarding transfer penalty), so a "
-            "heavily congested direct route can lose to a "
-            "less-congested transfer path. When false, a direct route "
-            "always wins and the transfer fallback ranks by raw "
-            "distance alone."
+            "When true, each ride edge's distance is inflated by its "
+            "congestion ratio before direct and transfer candidates are "
+            "scored, so a heavily congested direct route can lose to a "
+            "less-congested transfer path. When false (the default), "
+            "every candidate is scored congestion-free on the same "
+            "distance-plus-transfer-penalty basis, so a discernibly "
+            "shorter or lower-transfer option wins on its own merits. "
+            "Either way, `rank_reason` on the response explains the pick."
         ),
     ),
     include_alternatives: bool = Query(
@@ -550,4 +555,5 @@ def find_route(
         fare=fare,
         alternatives=alternatives,
         total_estimated_duration_s=_total_estimated_duration_s(legs),
+        rank_reason=result.rank_reason,
     )

@@ -36,7 +36,7 @@ def test_score_to_ratio_endpoints():
 
 
 def test_radius_for_score_endpoints():
-    """200m for negligible, 500m for the worst measured score."""
+    """200m for negligible, 500m for the worst (score 10) severity."""
     assert cz.radius_for_score(0) == pytest.approx(200)
     assert cz.radius_for_score(10) == pytest.approx(500)
 
@@ -45,7 +45,7 @@ def test_load_zones_reads_csv(tmp_path, monkeypatch):
     csv_path = tmp_path / "congestion_zones.csv"
     csv_path.write_text(
         "stop_id,stop_name,lat,lng,score,radius_m,source,real_location_name\n"
-        "S0056,Tripureshwor,27.694418,85.314128,10.0,500,measured,Tripureshwor\n"
+        "S0056,Tripureshwor,27.694418,85.314128,10.0,500,severity_table_unverified,Tripureshwor\n"
     )
     monkeypatch.setattr(cz, "ZONES_PATH", csv_path)
 
@@ -55,6 +55,56 @@ def test_load_zones_reads_csv(tmp_path, monkeypatch):
     assert zone.stop_id == "S0056"
     assert zone.radius_m == pytest.approx(500)
     assert zone.ratio == pytest.approx(cz.score_to_ratio(10.0))
+
+
+def test_load_zones_marks_provenance_as_unverified(tmp_path, monkeypatch):
+    """Every loaded zone must carry the unverified provenance label.
+
+    The severity scores come from a static table whose origin is not
+    recorded in this repo; carrying the label on the object (rather than
+    only in a docstring) means a caller or test can see it without having
+    to know that, and a future change that starts loading measured zones
+    has to do so deliberately. See app/routing/congestion_provenance.py."""
+    from app.routing.congestion_provenance import (
+        CongestionSource,
+        is_measured,
+    )
+
+    csv_path = tmp_path / "congestion_zones.csv"
+    csv_path.write_text(
+        "stop_id,stop_name,lat,lng,score,radius_m,source,real_location_name\n"
+        "S1,A,27.7,85.3,5.0,300,severity_table_unverified,A\n"
+        "S2,B,27.8,85.4,2.17,265,fallback_average,not surveyed\n"
+    )
+    monkeypatch.setattr(cz, "ZONES_PATH", csv_path)
+
+    zones = cz.load_zones()
+    assert len(zones) == 2
+    for zone in zones:
+        assert zone.provenance == CongestionSource.SEVERITY_TABLE_UNVERIFIED.value
+        assert is_measured(zone.provenance) is False
+
+
+def test_shipped_zones_csv_has_no_measured_source():
+    """The shipped CSV must not label any row's source "measured".
+
+    This is the data-level guard for the provenance fix: it caught the
+    project's own files calling a static, unrecorded-origin severity table
+    "measured". source is the match/fallback distinction
+    (severity_table_unverified vs fallback_average); neither is a
+    measurement, and the literal "measured" must not reappear."""
+    from app.core.config import get_settings
+
+    path = Path(get_settings().CONGESTION_ZONES_PATH)
+    assert path.is_file()
+    with path.open(encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) > 0
+    sources = {r["source"] for r in rows}
+    assert "measured" not in sources, f"a zone row is still labelled measured: {path}"
+    assert sources <= {"severity_table_unverified", "fallback_average"}, (
+        f"unexpected zone source values: {sources}"
+    )
 
 
 def test_load_zones_missing_file_returns_empty(tmp_path, monkeypatch, caplog):
@@ -174,7 +224,7 @@ def test_zones_path_is_env_overridable(monkeypatch, tmp_path):
     csv_path = tmp_path / "elsewhere.csv"
     csv_path.write_text(
         "stop_id,stop_name,lat,lng,score,radius_m,source,real_location_name\n"
-        "S1,A,27.7,85.3,5.0,300,measured,A\n"
+        "S1,A,27.7,85.3,5.0,300,severity_table_unverified,A\n"
     )
     monkeypatch.setenv("CONGESTION_ZONES_PATH", str(csv_path))
 
@@ -211,7 +261,7 @@ def test_load_zones_is_cached_until_reset(tmp_path, monkeypatch):
     csv_path = tmp_path / "congestion_zones.csv"
     csv_path.write_text(
         "stop_id,stop_name,lat,lng,score,radius_m,source,real_location_name\n"
-        "S1,A,27.7,85.3,5.0,300,measured,A\n"
+        "S1,A,27.7,85.3,5.0,300,severity_table_unverified,A\n"
     )
     monkeypatch.setattr(cz, "ZONES_PATH", csv_path)
 
@@ -222,8 +272,8 @@ def test_load_zones_is_cached_until_reset(tmp_path, monkeypatch):
     # should keep returning the stale, already-cached result.
     csv_path.write_text(
         "stop_id,stop_name,lat,lng,score,radius_m,source,real_location_name\n"
-        "S1,A,27.7,85.3,5.0,300,measured,A\n"
-        "S2,B,27.8,85.4,9.0,450,measured,B\n"
+        "S1,A,27.7,85.3,5.0,300,severity_table_unverified,A\n"
+        "S2,B,27.8,85.4,9.0,450,severity_table_unverified,B\n"
     )
     assert cz.load_zones() is first
     assert len(cz.load_zones()) == 1

@@ -1,6 +1,6 @@
 # Data Licensing and Provenance
 
-**Last reviewed: 2026-09-27**
+**Last reviewed: 2026-10-15**
 
 The project's *code* is MIT licensed (see the root `LICENSE`). The *data* is
 not, entirely, and this file exists because those are two separate questions
@@ -17,7 +17,7 @@ attributing the project.
 | Yatayat (Kathmandu University Geomatics / Monsoon Collective) | Community project built on OSM data — **inherits ODbL**; the site's own terms are unverified | As above, plus check the source's terms |
 | Nepal DOTM registration records | Government records, presumed open for reuse — **terms unverified** | Verify before redistributing |
 | Fares | **Desk estimates by this project, not field-verified** | Must be labelled as estimates |
-| Congestion tables in this repo | Derived/authored by this project | No external terms |
+| Congestion tables in this repo | Derived by this project; the underlying per-intersection severity table (`congestion_loss_table.csv`) has an **unrecorded origin** | Must be labelled as unverified estimates; do not present as measured or as an external study |
 
 **The obligation that matters:** because most of the dataset derives from
 OpenStreetMap, the derived database is ODbL. Publishing a modified/derived
@@ -58,6 +58,15 @@ audit found them:
 - **Fares are estimates.** The `fare_rules` table is a desk estimate, not
   field-verified (see the audit note in `data/README.md`). Do not present
   fares as authoritative; label them as estimates.
+- **Congestion severity origin.** `congestion_loss_table.csv` (and the
+  `congestion_zones.csv` / `stop_congestion_scores.csv` files derived from
+  it) carry no author, date, method or citation in this repository, and no
+  `data/raw/README.md` entry. Earlier in-code notes described it as a
+  "real, measured" study; that could not be substantiated, so it is treated
+  as an unverified table and labelled `severity_table_unverified`. Do not
+  present these scores as measured or attribute them to an external study
+  without first recording the real source. See
+  `backend/app/routing/congestion_provenance.py`.
 
 ## Provenance
 

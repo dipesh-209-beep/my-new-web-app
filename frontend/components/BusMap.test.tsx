@@ -438,6 +438,75 @@ describe("BusMap", () => {
       // this can't go stale again if the gradient stops are retuned.
       expect(leafletState.polylines[0].options.color).toBe(getCongestionColor(2));
     });
+
+    it("labels a recorded segment as estimated, not as measured traffic", () => {
+      const stops = [
+        makeStop({ stop_id: "S0001", stop_name: "A", lat: 27.7, lng: 85.3 }),
+        makeStop({ stop_id: "S0002", stop_name: "B", lat: 27.71, lng: 85.31 }),
+      ];
+
+      render(
+        <BusMap
+          allStops={stops}
+          congestionSegments={[
+            {
+              route_id: "R0001",
+              from_stop_id: "S0001",
+              to_stop_id: "S0002",
+              avg_duration_s: 600,
+              avg_distance_m: 2000,
+              free_flow_duration_s: 300,
+              congestion_ratio: 2,
+              congestion_level: "heavy",
+              sample_count: 5,
+              is_seeded: false,
+            },
+          ]}
+        />
+      );
+
+      const popup = leafletState.polylines[0].popup?.content ?? "";
+      // The drawn line is straight between stops, not the road -- say so.
+      expect(popup).toContain("straight line");
+      expect(popup).toContain("estimated");
+      expect(popup).toContain("not a measured traffic count");
+      // "typical"/"sample" both read as measured traffic; neither must appear.
+      expect(popup).not.toContain("typical");
+      expect(popup.toLowerCase()).not.toContain("sample");
+    });
+
+    it("labels a seeded segment as a free-flow baseline without implying pending collection", () => {
+      const stops = [
+        makeStop({ stop_id: "S0001", stop_name: "A", lat: 27.7, lng: 85.3 }),
+        makeStop({ stop_id: "S0002", stop_name: "B", lat: 27.71, lng: 85.31 }),
+      ];
+
+      render(
+        <BusMap
+          allStops={stops}
+          congestionSegments={[
+            {
+              route_id: "R0001",
+              from_stop_id: "S0001",
+              to_stop_id: "S0002",
+              avg_duration_s: 300,
+              avg_distance_m: 2000,
+              free_flow_duration_s: 300,
+              congestion_ratio: 1,
+              congestion_level: "free_flow",
+              sample_count: 1,
+              is_seeded: true,
+            },
+          ]}
+        />
+      );
+
+      const popup = leafletState.polylines[0].popup?.content ?? "";
+      expect(popup).toContain("Free-flow baseline");
+      // "yet"/"confirmed traffic" imply live collection is happening.
+      expect(popup).not.toContain("yet");
+      expect(popup.toLowerCase()).not.toContain("confirmed traffic");
+    });
   });
 
   describe("keyboard accessibility", () => {

@@ -171,3 +171,44 @@ def test_route_finder_exposes_estimated_time_and_per_option_fare(client):
         assert "fare" in alt
         for leg in alt["legs"]:
             assert leg["estimated_duration_s"] is not None
+
+
+def test_route_finder_exposes_rank_reason(client):
+    """
+    The response must explain why the primary was chosen, using only codes
+    the frontend knows how to translate. S0384 -> S0408 is a transfer-only
+    path (no route connects the stops directly), so the reason is
+    only_option; the key must always be present so the UI never has to
+    guess.
+    """
+    from app.routing.ranking import RANK_REASONS
+
+    resp = client.get("/route-finder", params={"origin": "S0384", "destination": "S0408"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "rank_reason" in body
+    assert body["rank_reason"] in RANK_REASONS
+    assert body["rank_reason"] == "only_option"
+
+
+def test_route_finder_reason_never_contradicts_alternatives(client):
+    """
+    rank_reason must be consistent with what the response actually shows:
+    'only_option' is only truthful when there is a single option, so a
+    non-empty alternatives list can never come with it. S0384 -> S0408 is
+    the live transfer-only case that used to regress here.
+    """
+    from app.routing.ranking import RANK_REASONS
+
+    resp = client.get(
+        "/route-finder",
+        params={"origin": "S0384", "destination": "S0408", "include_alternatives": "true"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["rank_reason"] in RANK_REASONS
+    if body["alternatives"]:
+        assert body["rank_reason"] != "only_option", (
+            "only_option contradicts the surfaced alternatives: "
+            f"{[a['label'] for a in body['alternatives']]}"
+        )

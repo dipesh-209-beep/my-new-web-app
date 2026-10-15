@@ -39,8 +39,8 @@ Verified by reading the source, not by audit:
 - **Congestion is not encoded by colour alone at the point of reading.**
   Segment popups pair the colour with a text label ("Free-flow", "Moderate
   congestion", "Heavy congestion"), a numeric ratio (`2.4x free-flow`), and a
-  sample count — so a user who cannot distinguish the gradient colours still
-  gets the information.
+  recorded-estimate count — so a user who cannot distinguish the gradient
+  colours still gets the information.
 - **Automated checks in CI.** `jsx-a11y` rules are errors in
   `eslint.config.mjs`, not warnings: `label-has-associated-control`,
   `click-events-have-key-events`, `no-static-element-interactions`,

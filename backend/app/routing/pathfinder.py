@@ -3,13 +3,19 @@ routing/pathfinder.py
 
 Route finding logic:
 
-1. Look for an active route containing both origin and destination.
-2. By default (avoid_congestion=False), if a viable direct route
-   exists it is used directly.
-3. With avoid_congestion=True the NetworkX shortest-path search also
-   runs when a direct route exists, so a transfer route can win based
-   on congestion-aware cost. If no viable option exists, the search
-   uses NetworkX shortest-path search to find transfer routes.
+1. Enumerate every active route containing both origin and destination
+   (direct candidates) and the multi-transfer path the NetworkX
+   shortest-path search finds.
+2. Score every candidate on the SAME basis -- the graph's straight-line
+   (haversine) stop-to-stop distance plus a fixed per-boarding transfer
+   penalty, with congestion inflation only when avoid_congestion=True
+   (see app/routing/ranking.py for the heuristic and its limits; the
+   distance is not OSRM road distance) -- and return the lowest-scoring
+   one. A viable direct route usually wins (it boards fewer buses) but is
+   no longer preferred by fiat, so a much shorter or less-congested
+   transfer can take the top spot.
+3. Each returned result carries a machine-readable rank_reason
+   explaining which factor decided the choice.
 
 Loop routes are handled correctly even when the same physical stop occurs
 multiple times in the same route.
@@ -25,6 +31,7 @@ from sqlalchemy.orm import Session
 from app.db.queries import get_congestion_ratios
 from app.routing import graph_builder as gb
 from app.routing import congestion_zones
+from app.routing import ranking
 from app.routing.constants import (
     BOARD_WAIT_S,
     BUS_AVG_SPEED_MPS,
@@ -68,6 +75,10 @@ class RouteFinderResult:
     transfer_count: int
     stop_sequence: List[str]
     alternatives: List[RouteAlternative] = field(default_factory=list)
+    # Why this primary/result was chosen over the other candidates, as a
+    # machine-readable code (see app/routing/ranking.py). None when no
+    # comparison was made (e.g. a same-stop request).
+    rank_reason: Optional[str] = None
 
 
 def _build_direct_route_result(
@@ -419,16 +430,12 @@ def _congestion_aware_cost(
 
     With a free-flow or empty lookup every ride edge's inflation factor
     is 1.0 and the score collapses to the plain distance-plus-boarding
-    cost the default (avoid_congestion=False) Dijkstra ranks by, which
-    is what keeps route choice stable when congestion data provides no
-    distinction.
+    cost the default Dijkstra ranks by, which is what keeps route choice
+    stable when congestion data provides no distinction. That collapse is
+    exactly app/routing/ranking.py:static_ranking_score, the documented
+    ranking policy every candidate is scored on.
     """
-    boardings = (
-        result.transfer_count + 1
-        if any(segment.route_id is not None for segment in result.segments)
-        else 0
-    )
-    total = TRANSFER_PENALTY * boardings
+    total = TRANSFER_PENALTY * ranking.boardings(result)
     for segment in result.segments:
         if segment.route_id is None:
             total += segment.weight  # walk/interchange leg
@@ -800,6 +807,10 @@ def find_route_via_stops(
         total_distance_m=total_distance_m,
         transfer_count=transfer_count,
         stop_sequence=stop_sequence,
+        # A via search always honours the rider's explicitly requested
+        # intermediate stops; that, not a distance/transfer comparison,
+        # is why this result is shaped the way it is.
+        rank_reason=ranking.VIA_STOPS,
     )
 
 
@@ -812,17 +823,23 @@ def find_shortest_path(
     max_transfers: Optional[int] = None,
 ) -> RouteFinderResult:
     """
-    avoid_congestion: when True, direct and transfer candidates are both
-    scored on the same congestion-aware cost basis -- ridden distance
-    inflated per ride edge by the blended organic/zone ratio (see
-    _congestion_weight_fn and _congestion_aware_cost) plus
-    TRANSFER_PENALTY once per boarding -- and the cheaper winner is
-    returned. A congested direct route can therefore lose to a
-    less-congested transfer path, and multiple direct routes resolve by
-    congested cost rather than raw distance. Defaults to False and keeps
-    the historical behavior exactly: a direct route wins outright (STEP 2
-    below), and the Dijkstra transfer fallback ranks by raw distance plus
-    the static boarding penalty alone.
+    Ranking: see app/routing/ranking.py for the full policy. Every
+    eligible candidate -- each active route connecting the stops directly,
+    and the multi-transfer path the Dijkstra search finds -- is scored on
+    the SAME basis: distance plus TRANSFER_PENALTY per bus boarded. The
+    lowest score wins, so a viable direct route is compared against
+    transfer options rather than winning unconditionally; it usually still
+    wins, because it boards fewer buses, but a much shorter or
+    less-congested transfer can take the top spot. Direct-only was the
+    historical behavior and is no longer applied by fiat.
+
+    avoid_congestion: when True, the shared score is additionally
+    congestion-aware -- each ride edge's distance is inflated by the
+    blended organic/zone ratio (see _congestion_weight_fn and
+    _congestion_aware_cost) -- so a heavily congested direct route can lose
+    to a less-congested transfer even when it is shorter. Defaults to
+    False, which scores every candidate congestion-free (every ratio is
+    1.0); congestion never influences ranking unless the caller asks.
 
     include_alternatives: when True, populates the returned result's
     `.alternatives` with up to 2 additional options -- see
@@ -832,10 +849,11 @@ def find_shortest_path(
     alternatives is extra Dijkstra work this skips when unused.
 
     max_transfers: maximum number of transfers allowed (0 = direct only,
-    1 = one transfer, etc.). Applies to the Dijkstra transfer search,
-    which runs when no direct route exists, and also under
-    avoid_congestion=True even when a direct route exists. It does not
-    cap a single direct ride. Defaults to None (no limit).
+    1 = one transfer, etc.). Applied to the Dijkstra transfer search, which
+    now always runs so the transfer option is available for comparison. It
+    does not cap a single direct ride, and a failed (over-capped) transfer
+    search never removes a viable direct route. Defaults to None (no
+    limit).
     """
 
     graph = gb.get_cached_graph(session)
@@ -862,7 +880,12 @@ def find_shortest_path(
         )
 
     # ------------------------------------------------------------
-    # STEP 1: DIRECT ROUTE
+    # STEP 1: ENUMERATE EVERY ELIGIBLE CANDIDATE
+    #
+    # Every direct route connecting the stops, PLUS the multi-transfer
+    # path (if any) the Dijkstra search finds. Both kinds are then scored
+    # on one basis (app/routing/ranking.py), so a direct route is
+    # compared against transfers instead of winning by fiat.
     # ------------------------------------------------------------
     direct_candidates = _find_direct_route_candidates(
         session,
@@ -871,49 +894,22 @@ def find_shortest_path(
         destination_stop_id,
     )
 
-    # ------------------------------------------------------------
-    # STEP 2 (default): DIRECT ROUTE ALWAYS WINS
-    # ------------------------------------------------------------
-    if direct_candidates and not avoid_congestion:
-        primary = direct_candidates[0]
-        if include_alternatives:
-            primary = RouteFinderResult(
-                segments=primary.segments,
-                total_distance_m=primary.total_distance_m,
-                transfer_count=primary.transfer_count,
-                stop_sequence=primary.stop_sequence,
-                alternatives=_alternatives_from_direct_candidates(direct_candidates),
-            )
-        return primary
-
-    # ------------------------------------------------------------
-    # STEP 3: DIJKSTRA FALLBACK (always, under avoid_congestion=True)
-    #
-    # With avoidance on, a direct route is NOT returned early: the
-    # transfer fallback is still searched and both candidate types are
-    # scored on the same congestion-aware cost basis, so a heavily
-    # congested direct route can lose to a less-congested transfer.
-    # ------------------------------------------------------------
+    # Congestion is opt-in. Without it every ratio is 1.0 and the score
+    # collapses to plain distance plus a penalty per boarding.
     congestion_lookup = None
     if avoid_congestion:
         day_of_week, hour_bucket = day_and_bucket_for(now_in_nepal())
         congestion_lookup = get_congestion_ratios(
             session, day_of_week=day_of_week, hour_bucket=hour_bucket
         )
+    zones = congestion_zones.load_zones() if avoid_congestion else []
+    ranking_lookup = congestion_lookup if congestion_lookup is not None else {}
 
     weight_arg = (
         _congestion_weight_fn(graph, congestion_lookup)
         if congestion_lookup is not None
         else "weight"
     )
-
-    zones = congestion_zones.load_zones() if avoid_congestion else []
-    best_direct = None
-    if direct_candidates:
-        best_direct = min(
-            direct_candidates,
-            key=lambda r: _congestion_aware_cost(graph, zones, congestion_lookup, r),
-        )
 
     try:
         transfer = _find_with_dijkstra(
@@ -923,59 +919,142 @@ def find_shortest_path(
             weight=weight_arg,
             max_transfers=max_transfers,
         )
-    except NoRouteFoundError as exc:
-        # A viable direct route must not disappear because a transfer
-        # search failed (e.g. an overly tight max_transfers cap). If
-        # there is no direct fallback, re-raise the original error so
-        # callers keep the exact message (incl. the "with max N
-        # transfers" suffix).
-        if not best_direct:
-            raise exc
+    except NoRouteFoundError:
+        # No transfer path (disconnected, or the max_transfers cap is
+        # tighter than the network requires). That is only fatal when no
+        # direct route exists either -- a viable direct route must not
+        # disappear because the transfer search failed.
+        if not direct_candidates:
+            raise
         transfer = None
 
-    # Pick the winner on a single comparable cost basis. When avoidance
-    # is off there is no direct candidate here (STEP 2 returned), so
-    # this reduces to the unchanged Dijkstra result.
-    if best_direct is not None and transfer is not None:
-        direct_cost = _congestion_aware_cost(graph, zones, congestion_lookup, best_direct)
-        transfer_cost = _congestion_aware_cost(graph, zones, congestion_lookup, transfer)
-        if direct_cost <= transfer_cost:
-            primary = best_direct
-        else:
-            primary = transfer
-    elif transfer is not None:
-        primary = transfer
-    elif best_direct is not None:
-        primary = best_direct
-    else:
+    # Deduplicate by physical stop sequence: a transfer path that resolves
+    # to the exact same stop-for-stop corridor as a direct route is the
+    # same option to a rider, not two.
+    candidates: list[RouteFinderResult] = []
+    seen_sequences: set[tuple] = set()
+    for candidate in [
+        *direct_candidates,
+        *([transfer] if transfer is not None else []),
+    ]:
+        if not candidate.segments:
+            continue
+        key = tuple(candidate.stop_sequence)
+        if key in seen_sequences:
+            continue
+        seen_sequences.add(key)
+        candidates.append(candidate)
+
+    if not candidates:
         raise NoRouteFoundError(
             f"No route found between '{origin_stop_id}' "
             f"and '{destination_stop_id}'"
         )
 
+    def _score(candidate: RouteFinderResult) -> float:
+        return _congestion_aware_cost(graph, zones, ranking_lookup, candidate)
+
+    def _ordered(items: list[RouteFinderResult]) -> list[RouteFinderResult]:
+        # Deterministic: score, then fewer transfers, then shorter
+        # distance, then the stop sequence itself, so two otherwise
+        # identical options always resolve the same way.
+        return sorted(
+            items,
+            key=lambda candidate: (
+                _score(candidate),
+                candidate.transfer_count,
+                candidate.total_distance_m,
+                tuple(candidate.stop_sequence),
+            ),
+        )
+
+    ordered = _ordered(candidates)
+    primary = ordered[0]
+    runner = ordered[1] if len(ordered) > 1 else None
+
+    # ------------------------------------------------------------
+    # STEP 2: ALTERNATIVES
+    #
+    # Computed before the explanation so the reason can account for them.
+    # On a transfer-only origin/destination the ranked candidate set holds
+    # just the single weight-optimal transfer path, yet this pass can
+    # still surface genuinely different routes. The primary is not the
+    # "only option" when the response tells the rider about others, so
+    # the reason must see them.
+    # ------------------------------------------------------------
+    alternatives: list[RouteAlternative] = []
     if include_alternatives:
-        alternatives = (
-            # _alternatives_from_direct_candidates assumes candidates[0]
-            # is the primary result; the congestion-aware winner is not
-            # necessarily the shortest-by-distance candidate, so reorder
-            # so the chosen direct route leads the list.
-            _alternatives_from_direct_candidates(
-                [best_direct]
-                + [c for c in direct_candidates if c is not best_direct]
+        primary_is_direct = any(
+            primary is candidate for candidate in direct_candidates
+        )
+        if primary_is_direct:
+            # The primary is a direct route; the other direct routes are
+            # its alternatives. Reorder so the chosen one leads (it is
+            # not necessarily the shortest-by-distance direct candidate
+            # once congestion is in play).
+            alternatives = _alternatives_from_direct_candidates(
+                [primary]
+                + [c for c in direct_candidates if c is not primary]
             )
-            if primary is best_direct
-            else _alternatives_from_dijkstra(
-                graph, origin_stop_id, destination_stop_id, primary,
+        elif direct_candidates:
+            # The primary is a transfer but direct routes exist (they
+            # lost the fair comparison). Surface them as direct
+            # alternatives so a real direct bus is never hidden just
+            # because a shorter transfer took the top spot.
+            alternatives = _alternatives_from_direct_candidates(
+                [primary] + direct_candidates
+            )
+        else:
+            alternatives = _alternatives_from_dijkstra(
+                graph,
+                origin_stop_id,
+                destination_stop_id,
+                primary,
                 congestion_lookup=congestion_lookup,
                 max_transfers=max_transfers,
             )
-        )
-        primary = RouteFinderResult(
-            segments=primary.segments,
-            total_distance_m=primary.total_distance_m,
-            transfer_count=primary.transfer_count,
-            stop_sequence=primary.stop_sequence,
-            alternatives=alternatives,
-        )
 
-    return primary
+    # The reason compares the primary against the next genuinely
+    # different option the response describes. The next-best ranked
+    # candidate is the natural runner-up; when the ranking only ever
+    # considered one path (transfer-only), the best alternative stands in
+    # so "only_option" is said only when the response really shows a
+    # single option.
+    explanation_runner = runner
+    if explanation_runner is None and alternatives:
+        explanation_runner = min(alternatives, key=_score)
+
+    # Did congestion actually change the winner vs the congestion-free
+    # basis? Only meaningful when the caller opted in AND there was a
+    # choice; drives the "avoids_congestion" explanation. The comparison
+    # pool is whatever the runner-up came from, so a reason that compares
+    # against an alternative is checked on the same static basis.
+    congestion_flipped = False
+    if explanation_runner is not None and congestion_lookup is not None:
+        pool = candidates if runner is not None else [primary, explanation_runner]
+        static_ordered = sorted(
+            pool,
+            key=lambda candidate: (
+                ranking.static_ranking_score(candidate),
+                candidate.transfer_count,
+                candidate.total_distance_m,
+                tuple(candidate.stop_sequence),
+            ),
+        )
+        congestion_flipped = static_ordered[0] is not primary
+
+    rank_reason = ranking.explain_primary(
+        primary,
+        explanation_runner,
+        congestion_aware=congestion_lookup is not None,
+        congestion_flipped=congestion_flipped,
+    )
+
+    return RouteFinderResult(
+        segments=primary.segments,
+        total_distance_m=primary.total_distance_m,
+        transfer_count=primary.transfer_count,
+        stop_sequence=primary.stop_sequence,
+        alternatives=alternatives,
+        rank_reason=rank_reason,
+    )

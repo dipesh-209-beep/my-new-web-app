@@ -26,6 +26,46 @@ const ALTERNATIVE_LABELS: Record<RouteAlternative["label"], string> = {
   fastest_estimated: "Fastest (est.)",
 };
 
+// Why the primary ("Recommended") option was chosen. Each string states
+// only what the backend's ranking actually compared (straight-line
+// stop-to-stop distance and number of transfers, plus congestion only when
+// the user opted in) -- the UI must never upgrade these into
+// "fastest"/"cheapest"/"most frequent" claims, because time and fare never
+// drive the ranking, and never imply the distance is a measured road
+// distance or a journey time. Unknown/missing reasons render no
+// explanation at all rather than a guess.
+const RANK_REASON_TEXT: Record<string, string> = {
+  only_option: "Only one route was found between these stops.",
+  fewest_transfers: "Fewer transfers than the other options.",
+  shortest_distance: "Shortest stop-to-stop distance among the options.",
+  avoids_congestion: "Scores better once current congestion is factored in.",
+  best_overall: "Matches the other options on distance and transfers; shown first by a fixed tie-break.",
+  via_stops: "Includes the stops you asked to travel through.",
+};
+
+// These three reasons compare the primary against another candidate, so the
+// wording above says "the other options". That is only accurate when the
+// response actually shows them: with include_alternatives=false the rider sees
+// the primary alone, so the same reason is worded to say the comparison
+// happened without implying the compared routes are visible. Reasons that do
+// not reference other options (only_option, avoids_congestion, via_stops) have
+// no variant.
+const RANK_REASON_TEXT_NO_ALTERNATIVES: Record<string, string> = {
+  fewest_transfers: "Fewer transfers than the other routes the search compared.",
+  shortest_distance: "Shortest stop-to-stop distance of the routes the search compared.",
+  best_overall:
+    "Matches another route the search compared on distance and transfers; shown first by a fixed tie-break.",
+};
+
+// Pick the wording that matches what the rider can see. An unknown reason has
+// no entry in either map and renders nothing, rather than a guessed claim.
+function rankReasonText(reason: string, hasVisibleAlternatives: boolean): string | undefined {
+  if (!hasVisibleAlternatives && reason in RANK_REASON_TEXT_NO_ALTERNATIVES) {
+    return RANK_REASON_TEXT_NO_ALTERNATIVES[reason];
+  }
+  return RANK_REASON_TEXT[reason];
+}
+
 // Format a compact summary for alternative tooltips
 function formatAltSummary(alt: RouteAlternative): string {
   const altRideLegs = alt.legs.filter((leg) => leg.route_id !== TRANSFER_ROUTE_ID);
@@ -155,6 +195,18 @@ export default function RouteResultPanel({
       : "Recommended"
     : ALTERNATIVE_LABELS[activeAlt!.label];
 
+  // Only the primary carries a rank_reason. Show it when a genuine choice
+  // was made (there were alternatives) or when the primary is a transfer --
+  // exactly the case the bare "Recommended" label failed to explain. A lone
+  // direct route needs no explanation beyond "Direct".
+  const primaryReason =
+    isPrimary && result.rank_reason
+      ? rankReasonText(result.rank_reason, result.alternatives.length > 0)
+      : undefined;
+  const showPrimaryReason =
+    primaryReason !== undefined &&
+    (result.alternatives.length > 0 || active.transfer_count > 0);
+
   return (
     <div
       aria-live="polite"
@@ -196,6 +248,16 @@ export default function RouteResultPanel({
 
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-accent-purple">{cardLabel}</p>
+
+        {showPrimaryReason && (
+          <>
+            <p className="mt-1 text-xs text-ink-secondary">{primaryReason}</p>
+            <p className="mt-0.5 text-xs text-ink-tertiary">
+              Ranked by straight-line stop-to-stop distance and number of transfers; frequency and
+              fare are shown for information only and are not used to rank.
+            </p>
+          </>
+        )}
 
         <div className="mt-1.5 flex items-baseline gap-2">
           <span className="text-3xl font-bold leading-none tracking-tight text-ink">{duration.value}</span>

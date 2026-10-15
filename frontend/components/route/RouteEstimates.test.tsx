@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import RouteEstimates, { formatDurationMinutes, formatFareRange } from "./RouteEstimates";
+import RouteEstimates, {
+  formatDurationMinutes,
+  formatFareRange,
+  formatFrequencyInterval,
+  formatServiceHours,
+} from "./RouteEstimates";
 import { FareOut } from "@/types/route";
 
 const NOTE =
@@ -72,6 +77,43 @@ describe("formatFareRange", () => {
 
   it("returns null for a negative amount (invalid per the >= 0 contract)", () => {
     expect(formatFareRange(makeFare({ fare_npr_min: -1 }))).toBeNull();
+  });
+});
+
+describe("formatFrequencyInterval", () => {
+  it("renders a positive headway as an estimate, reusing the duration units", () => {
+    expect(formatFrequencyInterval(15)).toBe("Every ~15 min");
+    expect(formatFrequencyInterval(60)).toBe("Every ~1 hr");
+    expect(formatFrequencyInterval(90)).toBe("Every ~1h 30m");
+  });
+
+  it("returns null for missing or unusable values", () => {
+    expect(formatFrequencyInterval(null)).toBeNull();
+    expect(formatFrequencyInterval(undefined)).toBeNull();
+    expect(formatFrequencyInterval(0)).toBeNull();
+    expect(formatFrequencyInterval(-5)).toBeNull();
+    expect(formatFrequencyInterval(NaN)).toBeNull();
+    expect(formatFrequencyInterval(Infinity)).toBeNull();
+  });
+});
+
+describe("formatServiceHours", () => {
+  it("renders an ordered window with an en dash", () => {
+    expect(formatServiceHours("06:00", "20:00")).toBe("06:00 – 20:00");
+  });
+
+  it("returns null unless both bounds are valid HH:MM", () => {
+    expect(formatServiceHours(null, "20:00")).toBeNull();
+    expect(formatServiceHours("06:00", null)).toBeNull();
+    expect(formatServiceHours(undefined, undefined)).toBeNull();
+    expect(formatServiceHours("6:00", "20:00")).toBeNull();
+    expect(formatServiceHours("06:00", "24:00")).toBeNull();
+    expect(formatServiceHours("06:00", "06:60")).toBeNull();
+  });
+
+  it("returns null for a reversed or equal window (no overnight semantics)", () => {
+    expect(formatServiceHours("20:00", "06:00")).toBeNull();
+    expect(formatServiceHours("06:00", "06:00")).toBeNull();
   });
 });
 
@@ -204,5 +246,70 @@ describe("RouteEstimates", () => {
 
     expect(screen.getByText("Unavailable for this route.")).toBeInTheDocument();
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+  });
+
+  it("shows scheduled frequency and service hours, labelled as estimates not live data", () => {
+    render(
+      <RouteEstimates
+        durationMinutes={66}
+        frequencyMinutes={15}
+        serviceStartTime="06:00"
+        serviceEndTime="20:00"
+        fare={makeFare()}
+        fareLoading={false}
+      />
+    );
+
+    expect(screen.getByText("Every ~15 min")).toBeInTheDocument();
+    expect(
+      screen.getByText("Estimated interval between departures from route data — not a live arrival time.")
+    ).toBeInTheDocument();
+    expect(screen.getByText("06:00 – 20:00")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Scheduled operating hours recorded for this route — not real-time, and a bus isn't necessarily running right now."
+      )
+    ).toBeInTheDocument();
+    // Never assert live/confirmed status.
+    expect(screen.queryByText(/arriving now/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/confirmed schedule/i)).not.toBeInTheDocument();
+  });
+
+  it("shows honest unavailable states when frequency or hours are missing", () => {
+    render(<RouteEstimates durationMinutes={66} fare={makeFare()} fareLoading={false} />);
+
+    expect(screen.getByText("Frequency unavailable for this route.")).toBeInTheDocument();
+    expect(screen.getByText("Service hours unavailable for this route.")).toBeInTheDocument();
+    expect(screen.queryByText(/^Every /)).not.toBeInTheDocument();
+  });
+
+  it("treats a one-sided or reversed window as unavailable rather than printing it", () => {
+    render(
+      <RouteEstimates
+        durationMinutes={66}
+        frequencyMinutes={15}
+        serviceStartTime="20:00"
+        serviceEndTime="06:00"
+        fare={makeFare()}
+        fareLoading={false}
+      />
+    );
+
+    expect(screen.getByText("Service hours unavailable for this route.")).toBeInTheDocument();
+    expect(screen.queryByText(/20:00/)).not.toBeInTheDocument();
+  });
+
+  it("does not print a fabricated frequency for a non-positive value", () => {
+    render(
+      <RouteEstimates
+        durationMinutes={66}
+        frequencyMinutes={0}
+        fare={makeFare()}
+        fareLoading={false}
+      />
+    );
+
+    expect(screen.getByText("Frequency unavailable for this route.")).toBeInTheDocument();
+    expect(screen.queryByText(/^Every /)).not.toBeInTheDocument();
   });
 });

@@ -24,7 +24,10 @@ data/
 ├── congestion_loss_table.csv    congestion/duration edge-weight
 ├── stop_congestion_scores.csv   functions behind `avoid_congestion`
 │                                  and `fastest_estimated` (see
-│                                  backend/app/routing/graph_builder.py)
+│                                  backend/app/routing/graph_builder.py).
+│                                  Provenance of the severity scores is
+│                                  UNRECORDED — see "Congestion data
+│                                  provenance" below
 │
 └── scripts/      Data-cleaning and validation pipeline — see
                     data/scripts/README.md for the full file list
@@ -32,6 +35,34 @@ data/
                     fix_compound_csv_fields.py, verify_stop_coordinates.py,
                     dedup override YAML files, tests, requirements.txt)
 ```
+
+## Congestion data provenance
+
+The three congestion files are **not** part of the raw→clean→import pipeline:
+`scripts/clean_data.py` and `scripts/validate_clean.py` never read them, and
+`data/raw/README.md` has no entry for them. They sit beside the pipeline, not
+inside it.
+
+- `congestion_loss_table.csv` is a static per-intersection severity table
+  (107 rows; `Rank` values run to 91) with a `Score` column. Its **origin is
+  not recorded anywhere in this repository** — no author, publisher, date,
+  method, citation or license, and no `raw/` counterpart. Treat the scores
+  as unverified estimates.
+- `stop_congestion_scores.csv` and `congestion_zones.csv` are derived from
+  it: each row matches one of the table's locations to a stop in this
+  project's `stops` data. Their `source` column is
+  `severity_table_unverified` (matched to the table's location) or
+  `fallback_average` (the table's own mean, for the couple of stops it does
+  not cover) — both **not** measurements. There is no live or real-time
+  traffic feed anywhere in this project; every congestion value the app
+  serves is derived from OSRM durations and/or this table.
+- `is_seeded = false` on a `segment_congestion_stats` row does **not** mean
+  "measured": the demo seeder writes synthetic values through the same path.
+  See `backend/app/routing/congestion_provenance.py` for the single registry
+  of congestion sources.
+
+Do not describe these tables as a "study" or as "measured" without first
+recording their real source in `raw/README.md` (and updating `LICENSING.md`).
 
 ## Pipeline order
 

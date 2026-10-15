@@ -96,3 +96,12 @@ read `0` except `fare_rules row count`, which should read `5`.
 - **`fare_rules.verification_note`** flags the fare figures as a
   2026-08 desk estimate, pending confirmation against the official Bagmati
   Province gazette notice — not yet independently verified.
+- **`routes.frequency_min` / `service_start_time` / `service_end_time`** are
+  **scheduled/estimated figures from the source data, not operator-confirmed
+  and not live**, and have no documented provenance beyond that. The shipped
+  data repeats a near-uniform headway (whole minutes: 15 or 30) and a single
+  typical-day window (start always `06:00`; end `19:00` or `20:00`) across
+  routes, so treat them as rough planning cues. A blank cell means *unknown*,
+  not "no service". `validate_clean.py` flags malformed values, and the API
+  (`RouteOut` in `backend/app/schemas.py`) surfaces any unusable value as
+  `null` rather than presenting it as a schedule.

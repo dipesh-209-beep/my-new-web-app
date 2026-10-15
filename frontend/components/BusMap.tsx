@@ -40,10 +40,10 @@ interface BusMapProps {
   /** Walking directions from userLocation to the nearest stop. */
   walkingRoute?: WalkingRoute | null;
   nearestStop?: Stop | null;
-  /** Historical congestion overlay -- straight lines between board/alight
-   * stops (no road geometry available at this granularity), colored by
-   * congestion_level. Independent of `result`; shows regardless of
-   * whether a route is currently searched. */
+  /** Estimated congestion overlay (not measured/live traffic) -- straight
+   * lines between board/alight stops (no road geometry available at this
+   * granularity), colored by congestion_level. Independent of `result`;
+   * shows regardless of whether a route is currently searched. */
   congestionSegments?: CongestionSegment[];
   /** Route browser overlay: whichever route is toggled visible via the eye
    * toggle on /routes (or a route/stop detail page embed), drawn as

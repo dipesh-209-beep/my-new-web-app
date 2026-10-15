@@ -1,44 +1,44 @@
 stop_id,stop_name,lat,lng,score,radius_m,source,real_location_name
-S0056,Tripureshwor,27.694418,85.314128,10.0,500,measured,Tripureshwor
-S0107,Koteshwor Stop,27.6802001,85.3494489,10.0,500,measured,Koteshwor
-S0020,Gwarko Chowk Stop,27.6705,85.334,7.5,425,measured,Gwarko
-S0097,Maitighar,27.693965,85.320962,7.5,425,measured,Maitighar
-S0159,Jadibuti,27.675459,85.3516,7.5,425,measured,Jadibuti
-S0304,Naya Baneshwor Chowk,27.691512,85.333065,7.5,425,measured,Naya Baneshwor
-S0076,Sundhara Stop,27.700542,85.313503,7.5,425,measured,Sundhara
-S0011,Satdobato Chowk Stop,27.6656,85.3283,5.0,350,measured,Satdobato
-S0023,Kalimati,27.69843,85.29944,5.0,350,measured,Kalimati-1
-S0204,Gaushala Chowk Stop,27.7082,85.3485,5.0,350,measured,Gaushala
-S0130,Kalanki,27.6938,85.2818,5.0,350,measured,Kalanki
-S0185,Thapathali,27.691767,85.318016,5.0,350,measured,Thapathali
-S0036,Singha Durbar West Stop,27.69659,85.321228,5.0,350,measured,Singha Durbar
-S0195,Chabahil चाबाहील,27.717,85.3465,5.0,350,measured,Chabahil
-S0017,Tinkune Stop,27.6835,85.3486,5.0,350,measured,Tinkune2
-S0135,Jorpati,27.721763,85.372632,5.0,350,measured,Jorpati
-S0214,Ekantakuna,27.6667865,85.308215,5.0,350,measured,Ekantakuna2
-S0087,Lainchaur stop,27.718757,85.317697,5.0,350,measured,Lainchaur
-S0110,Thimi Stop,27.673336,85.386293,2.5,275,measured,Thimi
-S0230,Balkhu,27.6823,85.2985,2.5,275,measured,Balkhu2
-S0022,Lokanthali North,27.674829,85.359862,2.5,275,measured,Lokanthali
-S0152,Jamal,27.708829,85.315292,2.5,275,measured,Jamal
-S0171,Bir Hospital,27.705723,85.314074,2.5,275,measured,Bir Hospital
-S0092,Gathaghar,27.674014,85.373177,2.5,275,measured,Gathaghar
-S0004,Kaushaltar,27.674541,85.364349,2.5,275,measured,Kaushaltar
-S0148,Sinamangal,27.698432,85.348521,0.0,200,measured,Sinamangal
-S0181,SanoThimi,27.682682,85.37234,0.0,200,measured,Sanothimi
-S0088,Bhadrakali,27.699352,85.317713,0.0,200,measured,Bhadrakali
-S0013,Ratna Park,27.706705,85.315249,0.0,200,measured,Ratnapark
-S0019,Barahi Movies,27.665917,85.421493,0.0,200,measured,Suryabinayak
-S0380,Padmodaya,27.7015,85.318,0.0,200,measured,Padmodaya1
-S0035,Maiti Devi chowk,27.703944,85.332682,0.0,200,measured,Maitidevi2
-S0338,Kamalpokhari,27.7107,85.3252,0.0,200,measured,Kamal Pokhari
-S0083,Gyaneshwor Chowk,27.708687,85.331826,0.0,200,measured,Gyaneshwor
-S0339,Hattisar,27.7095,85.3238,0.0,200,measured,Hattisar
-S0014,Sallaghari North,27.674055,85.409969,0.0,200,measured,Sallaghari East
-S0188,Gairidhara,27.717774,85.327892,0.0,200,measured,Gairidhara
-S0068,Baluwatar,27.724427,85.331034,0.0,200,measured,Baluwatar1
-S0051,Tangal,27.717202,85.330449,0.0,200,measured,Tangal
-S0123,Naxal Bhagwati,27.712698,85.328691,0.0,200,measured,Naxal Bhagwati
-S0196,Anamnagar Stop,27.699488,85.3286,0.0,200,measured,Anamnagar
+S0056,Tripureshwor,27.694418,85.314128,10.0,500,severity_table_unverified,Tripureshwor
+S0107,Koteshwor Stop,27.6802001,85.3494489,10.0,500,severity_table_unverified,Koteshwor
+S0020,Gwarko Chowk Stop,27.6705,85.334,7.5,425,severity_table_unverified,Gwarko
+S0097,Maitighar,27.693965,85.320962,7.5,425,severity_table_unverified,Maitighar
+S0159,Jadibuti,27.675459,85.3516,7.5,425,severity_table_unverified,Jadibuti
+S0304,Naya Baneshwor Chowk,27.691512,85.333065,7.5,425,severity_table_unverified,Naya Baneshwor
+S0076,Sundhara Stop,27.700542,85.313503,7.5,425,severity_table_unverified,Sundhara
+S0011,Satdobato Chowk Stop,27.6656,85.3283,5.0,350,severity_table_unverified,Satdobato
+S0023,Kalimati,27.69843,85.29944,5.0,350,severity_table_unverified,Kalimati-1
+S0204,Gaushala Chowk Stop,27.7082,85.3485,5.0,350,severity_table_unverified,Gaushala
+S0130,Kalanki,27.6938,85.2818,5.0,350,severity_table_unverified,Kalanki
+S0185,Thapathali,27.691767,85.318016,5.0,350,severity_table_unverified,Thapathali
+S0036,Singha Durbar West Stop,27.69659,85.321228,5.0,350,severity_table_unverified,Singha Durbar
+S0195,Chabahil चाबाहील,27.717,85.3465,5.0,350,severity_table_unverified,Chabahil
+S0017,Tinkune Stop,27.6835,85.3486,5.0,350,severity_table_unverified,Tinkune2
+S0135,Jorpati,27.721763,85.372632,5.0,350,severity_table_unverified,Jorpati
+S0214,Ekantakuna,27.6667865,85.308215,5.0,350,severity_table_unverified,Ekantakuna2
+S0087,Lainchaur stop,27.718757,85.317697,5.0,350,severity_table_unverified,Lainchaur
+S0110,Thimi Stop,27.673336,85.386293,2.5,275,severity_table_unverified,Thimi
+S0230,Balkhu,27.6823,85.2985,2.5,275,severity_table_unverified,Balkhu2
+S0022,Lokanthali North,27.674829,85.359862,2.5,275,severity_table_unverified,Lokanthali
+S0152,Jamal,27.708829,85.315292,2.5,275,severity_table_unverified,Jamal
+S0171,Bir Hospital,27.705723,85.314074,2.5,275,severity_table_unverified,Bir Hospital
+S0092,Gathaghar,27.674014,85.373177,2.5,275,severity_table_unverified,Gathaghar
+S0004,Kaushaltar,27.674541,85.364349,2.5,275,severity_table_unverified,Kaushaltar
+S0148,Sinamangal,27.698432,85.348521,0.0,200,severity_table_unverified,Sinamangal
+S0181,SanoThimi,27.682682,85.37234,0.0,200,severity_table_unverified,Sanothimi
+S0088,Bhadrakali,27.699352,85.317713,0.0,200,severity_table_unverified,Bhadrakali
+S0013,Ratna Park,27.706705,85.315249,0.0,200,severity_table_unverified,Ratnapark
+S0019,Barahi Movies,27.665917,85.421493,0.0,200,severity_table_unverified,Suryabinayak
+S0380,Padmodaya,27.7015,85.318,0.0,200,severity_table_unverified,Padmodaya1
+S0035,Maiti Devi chowk,27.703944,85.332682,0.0,200,severity_table_unverified,Maitidevi2
+S0338,Kamalpokhari,27.7107,85.3252,0.0,200,severity_table_unverified,Kamal Pokhari
+S0083,Gyaneshwor Chowk,27.708687,85.331826,0.0,200,severity_table_unverified,Gyaneshwor
+S0339,Hattisar,27.7095,85.3238,0.0,200,severity_table_unverified,Hattisar
+S0014,Sallaghari North,27.674055,85.409969,0.0,200,severity_table_unverified,Sallaghari East
+S0188,Gairidhara,27.717774,85.327892,0.0,200,severity_table_unverified,Gairidhara
+S0068,Baluwatar,27.724427,85.331034,0.0,200,severity_table_unverified,Baluwatar1
+S0051,Tangal,27.717202,85.330449,0.0,200,severity_table_unverified,Tangal
+S0123,Naxal Bhagwati,27.712698,85.328691,0.0,200,severity_table_unverified,Naxal Bhagwati
+S0196,Anamnagar Stop,27.699488,85.3286,0.0,200,severity_table_unverified,Anamnagar
 S0044,Narayan Gopal Chowk,27.740022,85.337201,2.17,265,fallback_average,not surveyed
 S0252,Gongabu Bus Park,27.7331364,85.3083967,2.17,265,fallback_average,not surveyed

@@ -44,7 +44,7 @@ interface SearchFormProps {
   onUseMyLocation: () => void;
 }
 
-type FieldError = "origin" | "destination" | "both" | "via" | null;
+type FieldError = "origin" | "destination" | "both" | "via" | "stops" | null;
 
 export default function SearchForm({
   stops,
@@ -113,6 +113,18 @@ export default function SearchForm({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    // Stop resolution needs the loaded stop list (resolveStop matches
+    // against labelToStop built from `stops`), so with none loaded no
+    // typed/picked label can ever resolve -- fail with an accurate reason
+    // instead of the misleading "pick from the suggestions" below. The
+    // submit button is disabled in this state too, but an implicit form
+    // submission (e.g. Enter in a text field) can still reach here.
+    if (stops.length === 0) {
+      setFieldError("stops");
+      return;
+    }
+
     const origin = resolveStop(originText);
     const destination = resolveStop(destinationText);
 
@@ -334,7 +346,9 @@ export default function SearchForm({
 
       {fieldError && (
         <p className="text-xs text-accent-red" role="alert">
-          {fieldError === "via"
+          {fieldError === "stops"
+            ? "Stops haven't loaded yet, so route search isn't available. Retry loading the stop list to continue."
+            : fieldError === "via"
             ? "Pick a valid, unique stop from the suggestions for each via stop."
             : fieldError === "both" && originText.trim() && originText === destinationText
             ? "Origin and destination can't be the same stop."
@@ -370,8 +384,8 @@ export default function SearchForm({
 
       <button
         type="submit"
-        disabled={loading}
-        className="mt-1 min-h-11 rounded-md bg-brand py-2.5 text-sm font-semibold tracking-wide text-ink transition-colors hover:bg-brand-dark disabled:opacity-50"
+        disabled={loading || stops.length === 0}
+        className="mt-1 min-h-11 rounded-md bg-brand py-2.5 text-sm font-semibold tracking-wide text-ink transition-colors hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
       >
         {loading ? "Searching…" : "Find route"}
       </button>

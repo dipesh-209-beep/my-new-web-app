@@ -60,14 +60,21 @@ export function useCongestionLayer({
           : seg.congestion_level === "moderate"
           ? "Moderate congestion"
           : "Heavy congestion";
+      // Every value here is derived, never observed (see the panel's
+      // provenance note), so the popup must not say "typical" or "samples" --
+      // both read as measured traffic. The straight-line caveat is included
+      // because the drawn line is NOT the road geometry.
+      const basis = seg.is_seeded
+        ? "Free-flow baseline (OSRM); no reported congestion recorded."
+        : `Estimated from route data — not a measured traffic count (${seg.sample_count} recorded estimate${
+            seg.sample_count === 1 ? "" : "s"
+          }).`;
       line.bindPopup(
-        `<strong>${escapeHtml(from.stop_name)} \u2192 ${escapeHtml(to.stop_name)}</strong>${
-          seg.route_id ? `<br/>${escapeHtml(seg.route_id)}` : ""
-        }<br/>${label} (${seg.congestion_ratio.toFixed(1)}x free-flow)` +
-          `<br/>~${minutes} min typical, ${freeFlowMinutes} min free-flow` +
-          (seg.is_seeded
-            ? "<br/><em>Estimated baseline -- no confirmed traffic data yet</em>"
-            : `<br/>Based on ${seg.sample_count} sample${seg.sample_count === 1 ? "" : "s"}`)
+        `<strong>${escapeHtml(from.stop_name)} \u2192 ${escapeHtml(to.stop_name)}</strong> (straight line)` +
+          (seg.route_id ? `<br/>${escapeHtml(seg.route_id)}` : "") +
+          `<br/>${label} (${seg.congestion_ratio.toFixed(1)}x free-flow)` +
+          `<br/>~${minutes} min estimated, ${freeFlowMinutes} min free-flow` +
+          `<br/>${basis}`
       );
       layer.addLayer(line);
     });

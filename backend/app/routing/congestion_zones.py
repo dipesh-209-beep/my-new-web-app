@@ -1,25 +1,31 @@
 """
 routing/congestion_zones.py
 
-Geographic congestion zones: fixed points (real measured Kathmandu
-intersections, see data/congestion_zones.csv) each with a radius and a
-severity-derived ratio, affecting ANY ride edge whose endpoint stop falls
-within that radius -- regardless of which route it belongs to.
+Geographic congestion zones: fixed points (Kathmandu intersections, see
+data/congestion_zones.csv) each with a radius and a severity-derived
+ratio, affecting ANY ride edge whose endpoint stop falls within that
+radius -- regardless of which route it belongs to.
 
 This is a different mechanism from app/db/queries.py's
-segment_congestion_stats (the organic, time-bucketed, per-route-segment
-system from Day 1/2): zones are static structural risk ("this
-intersection is chronically bad") derived from a real traffic study,
-while segment_congestion_stats is dynamic organic risk that accumulates
-from real ride samples over time. pathfinder.py's weight function
-combines both -- see _congestion_weight_fn's use of max(), so a segment
-gets whichever signal is currently worse rather than double-penalizing.
+segment_congestion_stats (the time-bucketed, per-route-segment system):
+zones are static structural risk ("this intersection is chronically bad")
+derived from a static severity table, while segment_congestion_stats is
+per-segment risk that accumulates from OSRM-derived durations over time.
+pathfinder.py's weight function combines both -- see
+_congestion_weight_fn's use of max(), so a segment gets whichever signal
+is currently worse rather than double-penalizing.
 
-Why radius-based rather than per-(route, segment) like the organic
-system: a real traffic jam at an intersection affects every bus passing
-through it, not just one operator's route. Tying severity to a specific
-route_id (as the organic system necessarily does, since it learns from
-observed ride durations per route) can't express that -- a zone can.
+Provenance: the severity scores come from data/congestion_loss_table.csv,
+a static per-intersection table whose origin is *not recorded in this
+repository* (no author, date, method or citation). They are unverified
+estimates, not field measurements -- see
+app/routing/congestion_provenance.py, and CongestionZone.provenance below.
+
+Why radius-based rather than per-(route, segment) like the segment system:
+a traffic jam at an intersection affects every bus passing through it,
+not just one operator's route. Tying severity to a specific route_id
+(which the segment system must, since it is keyed per route) can't express
+that -- a zone can.
 """
 
 import csv
@@ -29,6 +35,7 @@ from pathlib import Path
 from typing import Sequence
 
 from app.core.config import get_settings
+from app.routing.congestion_provenance import CongestionSource
 from app.routing.graph_builder import haversine_distance_m
 
 logger = logging.getLogger(__name__)
@@ -53,24 +60,32 @@ class CongestionZone:
     lng: float
     radius_m: float
     ratio: float
+    # Where this zone's severity came from. Always
+    # SEVERITY_TABLE_UNVERIFIED today: the scores derive from a static
+    # table whose origin is not recorded in this repo, and are not field
+    # measurements. Carried on the loaded object so callers/tests can see
+    # the provenance rather than having to infer it. Defaulted so the
+    # many direct constructions in tests stay valid.
+    provenance: str = CongestionSource.SEVERITY_TABLE_UNVERIFIED.value
 
 
 def score_to_ratio(score: float) -> float:
-    """Linear map from a real study's 0-10 Score to a congestion ratio
-    (avg_duration_s / free_flow_duration_s). 0 -> ~1.05 (essentially
+    """Linear map from the severity table's 0-10 Score to a congestion
+    ratio (avg_duration_s / free_flow_duration_s). 0 -> ~1.05 (essentially
     free-flow); 10 -> 4.2 (severe, comfortably past the "heavy" >=1.5
     threshold in app/api/congestion.py). Shared with
     scripts/seed_demo_congestion.py so both mechanisms agree on what a
-    given Score means in practice."""
+    given Score means in practice. The score itself is an unverified
+    estimate -- see this module's docstring."""
     return 1.05 + (score / 10.0) * 3.15
 
 
 def radius_for_score(score: float) -> float:
-    """200m for a negligible spot up to 500m for the worst measured
-    (score 10) -- real intersections back up traffic further into
-    surrounding streets the more severe they are. Matches
-    data/congestion_zones.csv's own radius_m column, kept here too so a
-    caller can derive a radius for a score that isn't in the CSV."""
+    """200m for a negligible spot up to 500m for the most severe
+    (score 10) -- worse intersections back up traffic further into
+    surrounding streets. Matches data/congestion_zones.csv's own radius_m
+    column, kept here too so a caller can derive a radius for a score that
+    isn't in the CSV."""
     return 200 + (score / 10.0) * 300
 
 
@@ -110,6 +125,12 @@ def load_zones() -> list[CongestionZone]:
                         lng=float(row["lng"]),
                         radius_m=float(row["radius_m"]),
                         ratio=score_to_ratio(score),
+                        # Both CSV "source" values (severity_table_unverified
+                        # and fallback_average) derive from the same static,
+                        # unrecorded-origin table, so the zone provenance is
+                        # the same either way. The source column is kept in
+                        # the CSV for the match/fallback distinction.
+                        provenance=CongestionSource.SEVERITY_TABLE_UNVERIFIED.value,
                     )
                 )
     elif ZONES_PATH.exists():

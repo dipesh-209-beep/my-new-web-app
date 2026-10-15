@@ -78,7 +78,7 @@ components/
   BusMap.tsx      imperative Leaflet map: colored polylines per route leg
                     (dashed for walking transfers), distinct origin/
                     destination/transfer markers, road-following geometry
-                    from OSRM when available, the historical congestion
+                    from OSRM when available, the estimated congestion
                     overlay, and a legend
   CongestionPanel.tsx   toggle + day-of-week/hour-bucket pickers for the
                           congestion overlay (defaults to "now" in Nepal

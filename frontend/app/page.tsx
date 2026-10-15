@@ -18,7 +18,7 @@ import { ChevronIcon, LayersIcon } from "@/components/icons/TransitIcons";
 import { useSheet } from "@/hooks/useSheet";
 import { MapErrorBoundary } from "@/components/MapErrorBoundary";
 import LayerToggle from "@/components/ui/LayerToggle";
-import InlineAlert from "@/components/ui/InlineAlert";
+import StopsLoadError from "@/components/search/StopsLoadError";
 
 // Leaflet touches `window`, so the map must load client-side only.
 const BusMap = dynamic(() => import("@/components/BusMap"), {
@@ -43,7 +43,7 @@ export default function Home() {
 }
 
 function HomeInner() {
-  const { stops, loading: stopsLoading, error: stopsError } = useStops();
+  const { stops, loading: stopsLoading, error: stopsError, reload: reloadStops } = useStops();
 
   // Origin/destination text lives here (not inside SearchForm) so both the
   // form and a map click can write to it.
@@ -258,13 +258,7 @@ const congestion = useCongestion();
             />
 
             {stopsError && (
-              <InlineAlert
-                variant="warning"
-                action={{ label: "Retry", onClick: () => window.location.reload() }}
-              >
-                Couldn&apos;t load the stop list from the server. You can still search if you know
-                exact stop names, but suggestions won&apos;t be available.
-              </InlineAlert>
+              <StopsLoadError hasStaleStops={stops.length > 0} onRetry={reloadStops} />
             )}
 
             <div className="rounded-xl border border-route-line bg-surface-raised p-4 shadow-card">
@@ -291,6 +285,8 @@ const congestion = useCongestion();
               loading={congestion.loading}
               segmentCount={congestion.segments.length}
               hasSeededOnly={congestion.hasSeededOnly}
+              error={congestion.error}
+              provenance={congestion.provenance}
             />
 
             {visibleRouteId && (

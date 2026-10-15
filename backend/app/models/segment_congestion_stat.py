@@ -13,17 +13,24 @@ fill up with enough samples to be statistically meaningful sooner -- the
 whole point of "historical stats" over a cold, sparse table.
 
 Populated two ways:
-  1. Organically, via a FastAPI BackgroundTask on every /route-finder
-     request that got real OSRM road_geometry for a leg (see
-     app/api/routing.py::_record_leg_congestion). Doesn't add latency to
-     the user-facing response.
+  1. Via a FastAPI BackgroundTask on every /route-finder request that got
+     OSRM road_geometry for a leg (see
+     app/api/routing.py::_record_leg_congestion). The value recorded is the
+     OSRM routing-engine duration, not observed traffic. Doesn't add
+     latency to the user-facing response.
   2. Proactively, via scripts/seed_congestion_stats.py, which walks every
      active route's consecutive stop pairs once and seeds all 8 buckets
      with a baseline OSRM duration (is_seeded=True, sample_count=1) so the
-     map isn't blank before real traffic accumulates. The first *real*
-     sample for a seeded row overwrites the baseline outright instead of
-     averaging into it (see record_congestion_sample) so one synthetic
-     guess doesn't permanently bias the average.
+     map isn't blank before data accumulates. The first *non-seeded* sample
+     for a seeded row overwrites the baseline outright instead of averaging
+     into it (see record_congestion_sample) so the one seeded guess doesn't
+     permanently bias the average.
+
+`is_seeded` records how a row was first written (a pre-seeded baseline vs a
+later upsert); it is NOT a provenance field. The demo seeder
+(scripts/seed_demo_congestion.py) also writes is_seeded=False synthetic
+values, so a False here does not mean "measured" or even "OSRM-derived" --
+see app/routing/congestion_provenance.py.
 """
 from sqlalchemy import (
     Boolean,
@@ -72,9 +79,11 @@ class SegmentCongestionStat(Base):
     # see queries.get_congestion_stats.
     free_flow_duration_s = Column(Float, nullable=True)
 
-    # True until the first organic sample overwrites it -- lets
-    # record_congestion_sample distinguish "one synthetic guess" from
-    # "one real observation" when deciding whether to average or replace.
+    # True until the first non-seeded sample overwrites it -- lets
+    # record_congestion_sample distinguish the single seeded baseline from
+    # later upserts when deciding whether to average or replace. This is a
+    # seed-vs-upsert flag, not a provenance field: the demo seeder writes
+    # is_seeded=False too (see app/routing/congestion_provenance.py).
     is_seeded = Column(Boolean, nullable=False, server_default=text("false"))
 
     updated_at = Column(

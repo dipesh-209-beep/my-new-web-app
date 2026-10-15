@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CongestionSegment } from "@/types/route";
+import { CongestionProvenance, CongestionSegment } from "@/types/route";
 import { getCongestion } from "@/lib/api";
 
 interface UseCongestionResult {
@@ -11,6 +11,12 @@ interface UseCongestionResult {
   setHourBucket: (v: number | null) => void;
   segments: CongestionSegment[];
   loading: boolean;
+  /** True when the most recent load failed. Distinct from "no data": a
+   * failure must not read as "we checked and the roads are clear". */
+  error: boolean;
+  /** Provenance reported by the API (derived/not-live). Null until a
+   * response arrives or when the API omitted it. */
+  provenance: CongestionProvenance | null;
   hasSeededOnly: boolean;
 }
 
@@ -29,6 +35,8 @@ export function useCongestion(): UseCongestionResult {
   const [hourBucket, setHourBucket] = useState<number | null>(null);
   const [segments, setSegments] = useState<CongestionSegment[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  const [provenance, setProvenance] = useState<CongestionProvenance | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
@@ -42,11 +50,19 @@ export function useCongestion(): UseCongestionResult {
           day_of_week: dayOfWeek ?? undefined,
           hour: hourBucket ?? undefined,
         });
-        if (!cancelled) setSegments(data.segments);
+        if (!cancelled) {
+          setSegments(data.segments);
+          setProvenance(data.provenance ?? null);
+          setError(false);
+        }
       } catch {
-        // Congestion is a nice-to-have overlay -- fail silently and just
-        // leave whatever was last successfully loaded (or empty) rather
-        // than surfacing an error banner for a non-critical layer.
+        // Congestion is a nice-to-have overlay, so we don't raise an error
+        // banner -- but we DO record the failure, because an unlabelled
+        // empty overlay would falsely read as "no congestion". Keep any
+        // last-good segments and let the panel say the refresh failed.
+        if (!cancelled) {
+          setError(true);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -76,6 +92,8 @@ export function useCongestion(): UseCongestionResult {
     setHourBucket,
     segments,
     loading,
+    error,
+    provenance,
     hasSeededOnly,
   };
 }

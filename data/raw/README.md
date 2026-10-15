@@ -52,6 +52,19 @@ Collective, built on OSM data with a Leaflet routing UI and fare reference page.
   been deleted; `clean_data.py`'s `RAW_FILENAMES` map never referenced
   them, so removing them doesn't change what the pipeline reads.
 
+## Congestion severity tables — origin NOT recorded here
+
+`../congestion_loss_table.csv`, `../congestion_zones.csv` and
+`../stop_congestion_scores.csv` are **not** parts of this raw set: there is no
+raw counterpart for them, `clean_data.py` never reads them, and no export,
+transcription date, author/publisher, method or license for the severity
+scores is recorded here (or anywhere else in the repo). Earlier code described
+the table as a "real, measured" study; that could not be substantiated and has
+been corrected. If you know the real source, record it here and update
+`../LICENSING.md`. Until then these are treated as unverified estimates — see
+`../README.md` ("Congestion data provenance") and
+`backend/app/routing/congestion_provenance.py`.
+
 ## Notes
 - Files above are the pre-cleaning originals. See `../processed/report.md` for
   the orphan-pair audit and cleanup applied to produce `../processed/*_clean.csv`.

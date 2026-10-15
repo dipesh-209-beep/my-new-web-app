@@ -1,8 +1,60 @@
-from datetime import datetime
+import math
+from datetime import datetime, time
 from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 from pydantic import ValidationError
+
+
+def _coerce_positive_minutes(value: object) -> Optional[int]:
+    """Normalize a `frequency_min` value to a positive whole number of
+    minutes, or None ("unknown").
+
+    `frequency_min` is a scheduled headway, so only a positive whole-minute
+    interval is usable. Zero, negative, fractional, non-numeric, boolean, and
+    non-finite values are not a real interval; they are represented as
+    unknown rather than surfaced to a rider as a schedule.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        return None
+    # int() truncates a float like 15.5 -- refuse to round a partial minute
+    # into a "real" headway.
+    if isinstance(value, float) and value != minutes:
+        return None
+    if minutes <= 0:
+        return None
+    return minutes
+
+
+def _format_service_time(value: object) -> Optional[str]:
+    """Normalize a service time-of-day to "HH:MM", or None ("unknown").
+
+    Accepts a `datetime.time` (what the ORM yields for a TIME column) or a
+    string in "HH:MM"/"HH:MM:SS" form (what a Redis cache round trip yields).
+    Anything else -- including an out-of-range clock value -- is unknown.
+    """
+    if value is None:
+        return None
+    if isinstance(value, time):
+        return value.strftime("%H:%M")
+    if isinstance(value, str):
+        parts = value.strip().split(":")
+        if len(parts) < 2:
+            return None
+        try:
+            hour, minute = int(parts[0]), int(parts[1])
+        except ValueError:
+            return None
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return None
+        return f"{hour:02d}:{minute:02d}"
+    return None
 
 
 class StopOut(BaseModel):
@@ -61,6 +113,20 @@ class RouteOut(BaseModel):
     # supplied by the source data. Null where the source left it blank. A
     # planning estimate for the full route, never a live ETA.
     estimated_duration_min: Optional[float] = None
+    # Scheduled headway in whole minutes (Route.frequency_min), i.e. the
+    # interval between departures, NOT a live arrival countdown. The source
+    # data uses a small set of near-uniform values, so this is presented as a
+    # scheduled/estimated figure, never as an operator-confirmed one. Null
+    # when the source has no usable value (missing, zero, negative, or
+    # malformed).
+    frequency_min: Optional[int] = None
+    # Scheduled service window as "HH:MM" (Route.service_start_time /
+    # service_end_time). Both are null together when the window is missing or
+    # can't be interpreted reliably (see the validator below), so a caller
+    # never sees a half-window. Merely being inside this window does not mean
+    # a bus is running now -- it is a planning figure, not a live status.
+    service_start_time: Optional[str] = None
+    service_end_time: Optional[str] = None
     status: str
     # Whether the return leg exists as a distinct travel direction (see
     # Route.is_bidirectional) -- the frontend uses this to decide whether
@@ -74,6 +140,32 @@ class RouteOut(BaseModel):
     operator: Optional[OperatorOut] = Field(
         default=None, validation_alias="operator_ref", serialization_alias="operator"
     )
+
+    @field_validator("frequency_min", mode="before")
+    @classmethod
+    def _normalize_frequency_min(cls, value: object) -> Optional[int]:
+        return _coerce_positive_minutes(value)
+
+    @field_validator("service_start_time", "service_end_time", mode="before")
+    @classmethod
+    def _normalize_service_time(cls, value: object) -> Optional[str]:
+        return _format_service_time(value)
+
+    @model_validator(mode="after")
+    def _drop_unreliable_service_window(self) -> "RouteOut":
+        """Only a complete, ordered window is trustworthy.
+
+        A one-sided window (only a start or only an end) or one whose start
+        is not before its end can't be read as a same-day service window --
+        the schema has no overnight/cross-midnight semantics (see
+        models/route.py), so rather than invent one we drop both bounds and
+        let the UI show "unknown".
+        """
+        start, end = self.service_start_time, self.service_end_time
+        if start is None or end is None or start >= end:
+            self.service_start_time = None
+            self.service_end_time = None
+        return self
 
 
 class RouteStopOut(BaseModel):
@@ -217,6 +309,22 @@ class RouteFinderResult(BaseModel):
     # private car at free-flow speed would take). A labeled estimate,
     # never a live ETA; the frontend must show it as one.
     total_estimated_duration_s: float
+    # Machine-readable reason this result was chosen as the primary, so the
+    # UI can explain the pick instead of showing a bare "Recommended". One
+    # of app/routing/ranking.py's codes; the frontend maps it to honest
+    # copy and invents nothing outside it. Optional with a None default on
+    # purpose: hand-built fixtures and cached/older payloads stay valid,
+    # and the UI simply shows no explanation then.
+    rank_reason: Optional[
+        Literal[
+            "only_option",
+            "fewest_transfers",
+            "shortest_distance",
+            "avoids_congestion",
+            "best_overall",
+            "via_stops",
+        ]
+    ] = None
 
 
 # ---------------------------------------------------------------------------
@@ -390,10 +498,39 @@ class CongestionSegmentOut(BaseModel):
     is_seeded: bool
 
 
+class CongestionProvenance(BaseModel):
+    """Machine-readable statement of what the congestion numbers are not.
+
+    Every value behind GET /congestion is derived, never observed: the
+    segment rows are OSRM free-flow durations (a routing-engine estimate,
+    seeded or recorded from /route-finder geometry) and the demo seeder
+    fabricates ratios from a static severity score. That severity table's
+    origin is not recorded in this repository. There is no live probe fleet
+    and no measured real-time traffic feed, so both flags are False by
+    construction. See app/routing/congestion_provenance.py for the registry
+    of sources. Consumers (the frontend) must read these rather than assume,
+    and must not label the data as "live", "real-time", or "measured" on
+    their own.
+    """
+
+    # No live/real-time traffic feed exists -- always False.
+    is_live: bool = False
+    # No field-measured traffic counts back these values -- always False.
+    is_measured: bool = False
+    # Human-readable caveat shown in the UI. Required so a consumer can't
+    # silently drop the disclosure.
+    note: str
+
+
 class CongestionResponse(BaseModel):
     day_of_week: int
     hour_bucket: int
     segments: list[CongestionSegmentOut]
+    # Optional with a default so a cache entry written before this field
+    # existed (the response cache stores plain dicts that FastAPI
+    # re-validates) still deserializes instead of 500ing; the frontend has
+    # its own honest fallback text when this is null/absent.
+    provenance: Optional[CongestionProvenance] = None
 
 
 # ---------------------------------------------------------------------------

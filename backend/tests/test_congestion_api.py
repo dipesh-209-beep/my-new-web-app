@@ -174,3 +174,92 @@ def test_congestion_buckets_endpoint(client):
     # The fixed 3-hour bucket starts, in order -- the frontend time picker
     # reads this instead of hardcoding it.
     assert resp.json() == {"hour_buckets": [0, 3, 6, 9, 12, 15, 18, 21]}
+
+
+# --- GET /congestion: provenance disclosure ---
+
+
+def test_congestion_response_declares_derived_not_live_provenance(client, monkeypatch):
+    """Every /congestion response must state what the data is not: there is
+    no live or measured traffic feed, so the flags are False and the note
+    says so. This is the label the frontend is required to surface."""
+    monkeypatch.setattr(queries, "get_congestion_stats", lambda db, day_of_week, hour_bucket: [])
+    resp = client.get("/congestion", params={"day_of_week": 4, "hour": 6})
+    assert resp.status_code == 200
+    body = resp.json()
+
+    provenance = body["provenance"]
+    assert provenance is not None
+    assert provenance["is_live"] is False
+    assert provenance["is_measured"] is False
+    note = provenance["note"].lower()
+    assert "estimated" in note
+    assert "not measured" in note
+    # The disclosure must explicitly rule out the live/real-time reading.
+    assert "no live" in note
+    # ...and name the real, weaker origin rather than implying a study:
+    # the severity table's provenance is not recorded in this repository.
+    assert "severity table" in note
+    assert "origin" in note and "not recorded" in note
+
+
+def test_congestion_provenance_note_never_claims_a_measured_study(client, monkeypatch):
+    """The served note must not present the congestion data as measured, as
+    live, or as the output of a named study. R3's flags already say False;
+    this pins the prose that reaches the user, so a future edit cannot
+    quietly reintroduce "real-measured" framing. See
+    app/routing/congestion_provenance.py."""
+    monkeypatch.setattr(queries, "get_congestion_stats", lambda db, day_of_week, hour_bucket: [])
+    resp = client.get("/congestion", params={"day_of_week": 2, "hour": 9})
+    assert resp.status_code == 200
+    note = resp.json()["provenance"]["note"].lower()
+
+    assert "measured" in note  # only ever in the negation "not measured"
+    assert note.count("measured") == note.count("not measured"), (
+        "the note may only use 'measured' to deny it"
+    )
+    for overclaim in ("real-time feed", "live feed", "traffic study", "of 91"):
+        assert overclaim not in note, f"provenance note overclaims: {overclaim!r}"
+
+
+def test_congestion_provenance_present_even_when_no_segments(client, monkeypatch):
+    """An empty segment list is still an answer about *estimated* coverage,
+    not "live traffic checked and clear" -- so the provenance travels with
+    it and the frontend can keep the caveat visible."""
+    monkeypatch.setattr(queries, "get_congestion_stats", lambda db, day_of_week, hour_bucket: [])
+    resp = client.get("/congestion", params={"day_of_week": 5, "hour": 20})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["segments"] == []
+    assert body["provenance"] is not None
+    assert body["provenance"]["is_live"] is False
+
+
+def test_congestion_response_tolerates_a_cached_payload_without_provenance():
+    """The response cache stores plain dicts that FastAPI re-validates, so a
+    cache entry written before `provenance` existed (or by an older worker)
+    must still deserialize rather than fail validation. The field is
+    optional-by-default for exactly this reason."""
+    from app.schemas import CongestionResponse
+
+    stale = {
+        "day_of_week": 1,
+        "hour_bucket": 9,
+        "segments": [
+            {
+                "route_id": "R1",
+                "from_stop_id": "S1",
+                "to_stop_id": "S2",
+                "avg_duration_s": 100.0,
+                "avg_distance_m": 1200.0,
+                "free_flow_duration_s": 100.0,
+                "congestion_ratio": 1.0,
+                "congestion_level": "free_flow",
+                "sample_count": 1,
+                "is_seeded": True,
+            }
+        ],
+    }
+    parsed = CongestionResponse.model_validate(stale)
+    assert parsed.provenance is None
+    assert len(parsed.segments) == 1

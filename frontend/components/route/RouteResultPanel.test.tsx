@@ -204,6 +204,217 @@ describe("RouteResultPanel time and fare honesty", () => {
   });
 });
 
+describe("RouteResultPanel recommendation explanation", () => {
+  function makeTransferLeg(): RouteLeg {
+    return makeLeg({
+      route_id: "TRANSFER",
+      route_name: "Transfer (walk)",
+      estimated_duration_s: 60,
+    });
+  }
+
+  const directAlt: RouteAlternative = {
+    label: "alternate_direct_route",
+    total_cost: 1200,
+    transfer_count: 0,
+    legs: [makeLeg()],
+    fare: null,
+    total_estimated_duration_s: 600,
+  };
+
+  it("explains a transfer primary using the backend's rank_reason", () => {
+    renderPanel(
+      makeResult({
+        transfer_count: 1,
+        legs: [makeLeg(), makeTransferLeg()],
+        alternatives: [directAlt],
+        rank_reason: "avoids_congestion",
+      })
+    );
+    expect(screen.getByText("Scores better once current congestion is factored in.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Ranked by straight-line stop-to-stop distance and number of transfers; frequency and fare are shown for information only and are not used to rank."
+      )
+    ).toBeTruthy();
+  });
+
+  it("explains a direct primary with alternatives", () => {
+    renderPanel(
+      makeResult({
+        transfer_count: 0,
+        alternatives: [directAlt],
+        rank_reason: "shortest_distance",
+      })
+    );
+    expect(screen.getByText("Shortest stop-to-stop distance among the options.")).toBeTruthy();
+  });
+
+  it("uses the visible-alternatives wording for fewest_transfers when alternatives are shown", () => {
+    renderPanel(
+      makeResult({
+        transfer_count: 0,
+        alternatives: [directAlt],
+        rank_reason: "fewest_transfers",
+      })
+    );
+    expect(screen.getByText("Fewer transfers than the other options.")).toBeTruthy();
+    expect(
+      screen.queryByText("Fewer transfers than the other routes the search compared.")
+    ).toBeNull();
+  });
+
+  it("uses the visible-alternatives wording for best_overall when alternatives are shown", () => {
+    renderPanel(
+      makeResult({
+        transfer_count: 0,
+        alternatives: [directAlt],
+        rank_reason: "best_overall",
+      })
+    );
+    expect(
+      screen.getByText(
+        "Matches the other options on distance and transfers; shown first by a fixed tie-break."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Matches another route the search compared on distance and transfers; shown first by a fixed tie-break."
+      )
+    ).toBeNull();
+  });
+
+  it("shows an honest only-option explanation for a lone transfer", () => {
+    renderPanel(
+      makeResult({
+        transfer_count: 1,
+        legs: [makeLeg(), makeTransferLeg()],
+        alternatives: [],
+        rank_reason: "only_option",
+      })
+    );
+    expect(screen.getByText("Only one route was found between these stops.")).toBeTruthy();
+  });
+
+  it("does not add an explanation to a lone direct route", () => {
+    renderPanel(makeResult({ transfer_count: 0, alternatives: [], rank_reason: "only_option" }));
+    expect(screen.getAllByText("Direct").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Only one route was found between these stops.")).toBeNull();
+  });
+
+  it("shows no explanation when the backend sent no rank_reason", () => {
+    renderPanel(
+      makeResult({
+        transfer_count: 1,
+        legs: [makeLeg(), makeTransferLeg()],
+        alternatives: [directAlt],
+      })
+    );
+    expect(screen.queryByText(/Ranked by straight-line stop-to-stop distance/)).toBeNull();
+  });
+
+  it("ignores an unknown rank_reason rather than inventing a claim", () => {
+    renderPanel(
+      makeResult({
+        transfer_count: 1,
+        legs: [makeLeg(), makeTransferLeg()],
+        alternatives: [directAlt],
+        // A code the UI doesn't know (e.g. from a newer backend).
+        rank_reason: "made_up_code" as unknown as RouteFinderResult["rank_reason"],
+      })
+    );
+    expect(screen.queryByText(/Ranked by straight-line stop-to-stop distance/)).toBeNull();
+  });
+
+  it("never claims fastest/cheapest/most frequent, which the data can't support", () => {
+    renderPanel(
+      makeResult({
+        transfer_count: 1,
+        legs: [makeLeg(), makeTransferLeg()],
+        alternatives: [directAlt],
+        rank_reason: "shortest_distance",
+      })
+    );
+    expect(screen.queryByText(/fastest/i)).toBeNull();
+    expect(screen.queryByText(/cheapest/i)).toBeNull();
+    expect(screen.queryByText(/most frequent/i)).toBeNull();
+  });
+
+  // When the response shows no alternatives, "the other options" would
+  // reference options the rider cannot see. The comparison still happened, so
+  // the reason is shown with wording that says so without implying visibility.
+  describe("wording when no alternatives are displayed", () => {
+    const transferPrimary = {
+      transfer_count: 1,
+      legs: [makeLeg(), makeTransferLeg()],
+      alternatives: [] as RouteAlternative[],
+    };
+
+    it("words fewest_transfers without implying the compared options are visible", () => {
+      renderPanel(makeResult({ ...transferPrimary, rank_reason: "fewest_transfers" }));
+      expect(
+        screen.getByText("Fewer transfers than the other routes the search compared.")
+      ).toBeTruthy();
+      expect(screen.queryByText("Fewer transfers than the other options.")).toBeNull();
+    });
+
+    it("words shortest_distance without implying the compared options are visible", () => {
+      renderPanel(makeResult({ ...transferPrimary, rank_reason: "shortest_distance" }));
+      expect(
+        screen.getByText("Shortest stop-to-stop distance of the routes the search compared.")
+      ).toBeTruthy();
+      expect(screen.queryByText("Shortest stop-to-stop distance among the options.")).toBeNull();
+    });
+
+    it("words best_overall without implying the compared options are visible", () => {
+      renderPanel(makeResult({ ...transferPrimary, rank_reason: "best_overall" }));
+      expect(
+        screen.getByText(
+          "Matches another route the search compared on distance and transfers; shown first by a fixed tie-break."
+        )
+      ).toBeTruthy();
+      expect(
+        screen.queryByText(
+          "Matches the other options on distance and transfers; shown first by a fixed tie-break."
+        )
+      ).toBeNull();
+    });
+
+    it("keeps avoids_congestion wording truthful with or without visible alternatives", () => {
+      renderPanel(makeResult({ ...transferPrimary, rank_reason: "avoids_congestion" }));
+      expect(
+        screen.getByText("Scores better once current congestion is factored in.")
+      ).toBeTruthy();
+    });
+
+    it("keeps via_stops wording accurate", () => {
+      renderPanel(
+        makeResult({
+          transfer_count: 1,
+          legs: [makeLeg(), makeTransferLeg()],
+          alternatives: [directAlt],
+          rank_reason: "via_stops",
+        })
+      );
+      expect(
+        screen.getByText("Includes the stops you asked to travel through.")
+      ).toBeTruthy();
+    });
+
+    it("renders no variant for an unknown reason code", () => {
+      renderPanel(
+        makeResult({
+          ...transferPrimary,
+          // A code the UI doesn't know (e.g. from a newer backend).
+          rank_reason: "made_up_code" as unknown as RouteFinderResult["rank_reason"],
+        })
+      );
+      expect(screen.queryByText(/the search compared/)).toBeNull();
+      expect(screen.queryByText(/the other options/)).toBeNull();
+    });
+  });
+});
+
 describe("RouteResultPanel announces async outcomes", () => {
   // Each async outcome (loading, found, not-found, error) replaces the
   // previous one without a page navigation, so it has to land in a live
