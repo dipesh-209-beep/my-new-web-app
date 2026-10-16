@@ -49,6 +49,21 @@ function withinOneEdit(a: string, b: string): boolean {
   return prev[b.length] <= 1;
 }
 
+/**
+ * True when `query` is within one edit of `text` either as a whole, or of
+ * any individual token in it. The whole-field comparison alone misses the
+ * dataset's suffixed names: a query like "koteshwar" is one edit from the
+ * token "koteshwor" in "Koteshwor Stop", but several edits from the whole
+ * normalized "koteshworstop", so the token check is what lets a real
+ * spelling variant reach the stop. Tokens are normalized the same way as
+ * fields (see normalizeText), so diacritics/case still don't matter.
+ */
+function fuzzyMatchesText(query: string, text: string): boolean {
+  if (!text) return false;
+  if (withinOneEdit(query, normalizeText(text))) return true;
+  return wordsOf(text).some((word) => withinOneEdit(query, normalizeText(word)));
+}
+
 type SearchField = "name" | "alias" | "landmark";
 
 /** What a stop matched on, plus its rank score. */
@@ -130,11 +145,13 @@ export function searchStops(query: string, stops: Stop[]): StopMatch[] {
       matchedField = aliases.includes(q) ? "alias" : "landmark";
     } else if (
       q.length >= MIN_QUERY_FOR_FUZZY &&
-      (withinOneEdit(q, name) || withinOneEdit(q, aliases) || withinOneEdit(q, landmark))
+      (fuzzyMatchesText(q, stop.stop_name ?? "") ||
+        fuzzyMatchesText(q, aliasesRaw) ||
+        fuzzyMatchesText(q, landmarkRaw))
     ) {
       score = 40;
-      if (withinOneEdit(q, name)) matchedField = "name";
-      else if (withinOneEdit(q, aliases)) matchedField = "alias";
+      if (fuzzyMatchesText(q, stop.stop_name ?? "")) matchedField = "name";
+      else if (fuzzyMatchesText(q, aliasesRaw)) matchedField = "alias";
       else matchedField = "landmark";
     }
 

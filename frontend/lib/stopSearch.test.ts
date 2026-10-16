@@ -182,3 +182,64 @@ describe("case-colliding stop names", () => {
     expect(searchStops("baneshwor", [a, b]).map((r) => r.stop.stop_id)).toEqual(["S0002", "S0001"]);
   });
 });
+
+describe("real-world spelling variants (dataset stop names)", () => {
+  // The dataset spells these "Koteshwor Stop" (S0107) and "Gaushala Chowk
+  // Stop" (S0204). Riders commonly type the alternate vowel ("koteshwar")
+  // or drop one ("gausala"). The lowest fuzzy tier must still reach those
+  // stops by comparing the query against each *token* of the name, not only
+  // the whole normalized string -- which carries the "...stop"/"...chowk"
+  // suffix and so exceeds one edit. Names below are the real dataset values.
+
+  it("finds 'Koteshwor Stop' from the common 'koteshwar' spelling", () => {
+    const koteshwor = makeStop({ stop_id: "S0107", stop_name: "Koteshwor Stop" });
+    const results = searchStops("koteshwar", [koteshwor]);
+    expect(results.map((r) => r.stop.stop_id)).toEqual(["S0107"]);
+    expect(results[0]?.matchedField).toBe("name");
+    expect(results[0]?.score).toBe(40);
+  });
+
+  it("finds 'Gaushala Chowk Stop' from the 'gausala' spelling", () => {
+    const gaushala = makeStop({ stop_id: "S0204", stop_name: "Gaushala Chowk Stop" });
+    const results = searchStops("gausala", [gaushala]);
+    expect(results.map((r) => r.stop.stop_id)).toEqual(["S0204"]);
+    expect(results[0]?.matchedField).toBe("name");
+    expect(results[0]?.score).toBe(40);
+  });
+
+  it("still finds the compact exact spelling 'ratnapark' at the top tier", () => {
+    const ratna = makeStop({ stop_id: "S0013", stop_name: "Ratna Park" });
+    const results = searchStops("ratnapark", [ratna]);
+    expect(results[0]?.stop.stop_id).toBe("S0013");
+    expect(results[0]?.score).toBe(100);
+  });
+
+  it("keeps every prefix/real match above the fuzzy near-miss", () => {
+    const exact = makeStop({ stop_id: "S0107", stop_name: "Koteshwor Stop" });
+    const nearMiss = makeStop({ stop_id: "S_404", stop_name: "koteshwor west stop" });
+    // "koteshwor" is an 80 prefix for both names.
+    const byPrefix = searchStops("koteshwor", [nearMiss, exact]);
+    expect(byPrefix.every((r) => r.score === 80)).toBe(true);
+    // Shorter name wins the 80-tier tie, deterministically.
+    expect(byPrefix.map((r) => r.stop.stop_id)).toEqual(["S0107", "S_404"]);
+    // "koteshwar" drops to the fuzzy tier for both, still shorter-first.
+    const byFuzzy = searchStops("koteshwar", [nearMiss, exact]);
+    expect(byFuzzy.every((r) => r.score === 40)).toBe(true);
+    expect(byFuzzy.map((r) => r.stop.stop_id)).toEqual(["S0107", "S_404"]);
+  });
+
+  it("does not fuzzy-match a query shorter than the fuzzy minimum", () => {
+    // "chok" is one edit from the token "chowk" but is only 4 chars, below
+    // MIN_QUERY_FOR_FUZZY. No chok->chowk normalization is added here, so it
+    // must not surface a Chowk stop by fuzzy alone.
+    const chowk = makeStop({ stop_id: "S0001", stop_name: "Gwarko Chowk Stop" });
+    expect(searchStops("chok", [chowk])).toEqual([]);
+  });
+
+  it("matches a dataset alias via the token-aware fuzzy tier", () => {
+    const stop = makeStop({ stop_id: "S0071", stop_name: "पिङ्गलस्थान", aliases: "Pingalasthan" });
+    const results = searchStops("pingalasthann", [stop]); // one extra 'n'
+    expect(results.map((r) => r.stop.stop_id)).toEqual(["S0071"]);
+    expect(results[0]?.matchedField).toBe("alias");
+  });
+});

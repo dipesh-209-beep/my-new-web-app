@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useStops } from "@/hooks/useStops";
 import { buildStopLabel } from "@/lib/stopLabel";
+import { searchStops } from "@/lib/stopSearch";
 import { PinDotIcon } from "@/components/icons/TransitIcons";
 import InlineAlert from "@/components/ui/InlineAlert";
 
@@ -15,14 +16,14 @@ export default function StopsPage() {
     document.title = "All stops — Kathmandu Bus Route Finder";
   }, []);
 
+  // Same matcher the autocomplete uses, so the browse list and the search
+  // form never disagree: `ratnapark`/`koteshwar` and alias/landmark lookups
+  // behave identically in both. District is deliberately not a search field
+  // (see stopSearch.ts), which is why this no longer filters on district.
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim();
     if (!q) return stops;
-    return stops.filter(
-      (stop) =>
-        stop.stop_name.toLowerCase().includes(q) ||
-        (stop.district?.toLowerCase().includes(q) ?? false)
-    );
+    return searchStops(q, stops).map((match) => match.stop);
   }, [stops, query]);
 
   // Filtering here is client-side and instant, so a live region bound directly
@@ -59,13 +60,13 @@ export default function StopsPage() {
       </p>
 
       <label htmlFor="stops-search" className="sr-only">
-        Search by stop name or district…
+        Search stops…
       </label>
       <input
         id="stops-search"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search by stop name or district…"
+        placeholder="Search stops…"
         className="w-full rounded-md border border-route-line bg-surface-raised px-3 py-2.5 text-base text-ink outline-none focus:border-accent-blue"
       />
 
