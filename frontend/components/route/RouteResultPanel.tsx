@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef, type ReactNode } from "react";
 import { LoadingStage, RouteAlternative, RouteFinderResult, RouteSearchResult } from "@/types/route";
 import RouteTimeline from "./RouteTimeline";
 import { BusIcon, ClockIcon, TransferIcon, WalkIcon } from "@/components/icons/TransitIcons";
@@ -102,15 +103,44 @@ export default function RouteResultPanel({
   onSelectedIndexChange,
   onRetry,
 }: RouteResultPanelProps) {
+  // The panel root is the one element that is the same node in every state
+  // (loading / error / no-route / idle / found), so it is where focus can
+  // safely land when a control the user just activated disappears. Retry is
+  // the case that needs it: it lives inside the error card, which is replaced
+  // by the loading card the moment it is pressed, so without this the focused
+  // button would unmount and drop focus to <body>. The wrapper is not a tab
+  // stop (tabIndex={-1}) and keeps no visible outline, so it does not add a
+  // keyboard stop or steal focus on its own.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const withPanel = (node: ReactNode) => (
+    <div
+      ref={panelRef}
+      tabIndex={-1}
+      role="region"
+      aria-label="Route results"
+      className="outline-none"
+    >
+      {node}
+    </div>
+  );
+
+  // The loading and found states below both render a polite, screen-reader-only
+  // status as the *first child of their card*. Both cards are a root <div> with
+  // the same first child, so React reuses that status node across the
+  // loading -> found transition: the found summary is a text change in an
+  // already-mounted live region. A live region created in the same commit as
+  // its text -- which is what a per-state region did -- is not reliably
+  // announced. It is the only polite region in either state, so nothing is
+  // announced twice.
   if (loading) {
     const stageText = loadingStage === "calculating_alternatives"
       ? "Calculating alternative routes…"
       : "Finding the best routes…";
-    return (
-      <div
-        aria-live="polite"
-        className="flex flex-col gap-2 rounded-xl border border-route-line bg-surface-raised p-4 shadow-card"
-      >
+    return withPanel(
+      <div className="flex flex-col gap-2 rounded-xl border border-route-line bg-surface-raised p-4 shadow-card">
+        <p role="status" aria-live="polite" className="sr-only">
+          {stageText}
+        </p>
         <div className="h-4 w-2/3 animate-pulse rounded bg-surface-sunken" />
         <div className="h-16 animate-pulse rounded bg-surface-sunken" />
         <div className="h-16 animate-pulse rounded bg-surface-sunken" />
@@ -120,15 +150,31 @@ export default function RouteResultPanel({
   }
 
   if (error) {
-    return (
-      <InlineAlert variant="error" action={onRetry ? { label: "Retry", onClick: onRetry } : undefined}>
+    return withPanel(
+      <InlineAlert
+        variant="error"
+        action={
+          onRetry
+            ? {
+                label: "Retry",
+                onClick: () => {
+                  // This button is about to be replaced by the loading card;
+                  // move focus to the stable panel root first so it is not
+                  // dropped to <body>.
+                  onRetry();
+                  panelRef.current?.focus();
+                },
+              }
+            : undefined
+        }
+      >
         {error}
       </InlineAlert>
     );
   }
 
   if (result && !result.found) {
-    return (
+    return withPanel(
       <div
         role="status"
         aria-live="polite"
@@ -141,7 +187,7 @@ export default function RouteResultPanel({
   }
 
   if (!result) {
-    return (
+    return withPanel(
       <p className="text-sm text-ink-secondary">
         Pick a starting stop and a destination, then hit Find route to see it on the map.
       </p>
@@ -207,11 +253,23 @@ export default function RouteResultPanel({
     primaryReason !== undefined &&
     (result.alternatives.length > 0 || active.transfer_count > 0);
 
-  return (
-    <div
-      aria-live="polite"
-      className="flex flex-col gap-3 rounded-xl border border-route-line bg-surface-raised p-4 shadow-card"
-    >
+  // A concise, screen-reader-only status for the found state. The results
+  // panel itself is deliberately NOT a live region: wrapping the whole card
+  // (alternatives, timeline, fare notes) in aria-live means every re-render
+  // -- including selecting a different alternative -- replays the entire
+  // card. This one-line summary is the whole announcement; the visible
+  // content is read on demand as the user moves through it.
+  const transferSummary =
+    active.transfer_count > 0
+      ? `, ${active.transfer_count} transfer${active.transfer_count > 1 ? "s" : ""}`
+      : ", direct";
+  const statusSummary = `${cardLabel}. Estimated ${duration.value} ${duration.unit}${transferSummary}.`;
+
+  return withPanel(
+    <div className="flex flex-col gap-3 rounded-xl border border-route-line bg-surface-raised p-4 shadow-card">
+      <p role="status" aria-live="polite" className="sr-only">
+        {statusSummary}
+      </p>
       {result.alternatives.length > 0 && (
         <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5" role="group" aria-label="Route alternatives">
           <button

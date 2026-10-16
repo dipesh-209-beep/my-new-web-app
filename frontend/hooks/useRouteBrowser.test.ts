@@ -459,4 +459,37 @@ describe("useRouteBrowser", () => {
     expect(result.current.visibleRouteStops).toEqual(stopsB);
     expect(getRouteStopsSpy).toHaveBeenCalledTimes(2);
   });
+
+  it("loadMore ignores a second call while a page is already in flight", async () => {
+    const route = makeRoute({ route_id: "R1" });
+    let resolvePage2!: (v: Awaited<ReturnType<typeof api.getRoutes>>) => void;
+    const page2 = new Promise<Awaited<ReturnType<typeof api.getRoutes>>>((resolve) => {
+      resolvePage2 = resolve;
+    });
+    const getRoutesSpy = vi
+      .spyOn(api, "getRoutes")
+      .mockResolvedValueOnce({ total: 120, limit: 50, offset: 0, items: [route] })
+      .mockImplementationOnce(() => page2);
+
+    const { result } = renderHook(() => useRouteBrowser());
+    await waitFor(() => expect(result.current.routes).toHaveLength(1));
+    expect(getRoutesSpy).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      result.current.loadMore();
+    });
+    await waitFor(() => expect(result.current.loadingMore).toBe(true));
+
+    // The button uses aria-disabled while loading, so a second press still
+    // reaches loadMore; it must not start a duplicate request.
+    act(() => {
+      result.current.loadMore();
+    });
+    expect(getRoutesSpy).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      resolvePage2({ total: 120, limit: 50, offset: 50, items: [] });
+    });
+    await waitFor(() => expect(result.current.loadingMore).toBe(false));
+  });
 });

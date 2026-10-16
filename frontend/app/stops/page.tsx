@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useStops } from "@/hooks/useStops";
 import { buildStopLabel } from "@/lib/stopLabel";
@@ -10,6 +10,10 @@ import InlineAlert from "@/components/ui/InlineAlert";
 export default function StopsPage() {
   const { stops, loading, error } = useStops();
   const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    document.title = "All stops — Kathmandu Bus Route Finder";
+  }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -21,6 +25,26 @@ export default function StopsPage() {
     );
   }, [stops, query]);
 
+  // Filtering here is client-side and instant, so a live region bound directly
+  // to `filtered.length` would announce a new count on every keystroke. The
+  // query the announcement is built from lags the typed query by 300 ms (the
+  // interval the server-side route search already uses), so the status only
+  // settles once the user pauses. An empty (or not-yet-settled) query
+  // announces nothing, which also makes clearing the field silent.
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const trimmedQuery = query.trim();
+  const settled = trimmedQuery !== "" && debouncedQuery === query;
+  const filterStatus = !settled
+    ? ""
+    : filtered.length === 0
+      ? `No stops match "${trimmedQuery}".`
+      : `${filtered.length} ${filtered.length === 1 ? "stop matches" : "stops match"} "${trimmedQuery}".`;
+
   return (
     <div className="mx-auto flex h-full max-w-3xl flex-col gap-4 overflow-y-auto p-4">
       <div>
@@ -30,7 +54,15 @@ export default function StopsPage() {
         </p>
       </div>
 
+      <p role="status" aria-live="polite" className="sr-only">
+        {filterStatus}
+      </p>
+
+      <label htmlFor="stops-search" className="sr-only">
+        Search by stop name or district…
+      </label>
       <input
+        id="stops-search"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search by stop name or district…"

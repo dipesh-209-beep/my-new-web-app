@@ -103,6 +103,24 @@ export default function RouteDetailPage() {
     };
   }, [route]);
 
+  // Every state gets a title that names the route the URL asked for, so a
+  // loading, missing or errored page can never keep a previously-viewed
+  // route's name in the tab. The `route.route_id === routeId` guard makes the
+  // success title conditional on the loaded record actually matching the
+  // current id, so a stale response from a previous route cannot win.
+  useEffect(() => {
+    if (route && route.route_id === routeId) {
+      const name = route.short_name ? `${route.short_name} — ${route.route_name}` : route.route_name;
+      document.title = `${name} — Kathmandu Bus Route Finder`;
+    } else if (notFound) {
+      document.title = `Route ${routeId} not found — Kathmandu Bus Route Finder`;
+    } else if (error) {
+      document.title = `Route ${routeId} — failed to load — Kathmandu Bus Route Finder`;
+    } else {
+      document.title = `Route ${routeId} — Kathmandu Bus Route Finder`;
+    }
+  }, [route, routeId, notFound, error]);
+
   // Stops and the road-following geometry ARE direction-dependent, so
   // flipping forward/return refetches exactly these two and nothing else --
   // no re-fetch of route metadata, and no full-page skeleton flash.

@@ -20,6 +20,10 @@ interface StopAutocompleteProps {
   /** The currently selected stop (if any). Used to detect if input matches a real stop. */
   selectedStop?: Stop | null;
   invalid?: boolean;
+  /** id of an element that describes this field -- e.g. a validation
+   *  message -- forwarded to the input's aria-describedby so the field is
+   *  programmatically tied to it. Omit when there is nothing to describe. */
+  describedById?: string;
   placeholder?: string;
   /** Extra buttons rendered under the field, e.g. "Use my location". */
   footerActions?: React.ReactNode;
@@ -39,6 +43,7 @@ function StopAutocompleteImpl({
   onSelect,
   selectedStop,
   invalid,
+  describedById,
   placeholder,
   footerActions,
   debounceMs = 150,
@@ -46,6 +51,7 @@ function StopAutocompleteImpl({
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const listboxId = `${id}-listbox`;
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const [debouncedValue, setDebouncedValue] = useState(inputValue);
@@ -72,11 +78,20 @@ function StopAutocompleteImpl({
       }));
   }, [debouncedValue, stops]);
 
-  // Reset highlight to the top match whenever the candidate list changes
+  // Reset highlight to the top match whenever the query changes
   const [lastQueryForHighlight, setLastQueryForHighlight] = useState(debouncedValue);
   if (lastQueryForHighlight !== debouncedValue) {
     setLastQueryForHighlight(debouncedValue);
     if (highlightedIndex !== 0) setHighlightedIndex(0);
+  }
+
+  // The candidate list can also change without the query changing -- the
+  // stops prop loads, refreshes, or drops a stop -- so clamp the active
+  // index to the current results. Without this, aria-activedescendant could
+  // reference an option that is no longer rendered and Enter could select a
+  // stale entry.
+  if (highlightedIndex >= results.length && highlightedIndex !== 0) {
+    setHighlightedIndex(0);
   }
 
   // Close on outside click
@@ -96,6 +111,14 @@ function StopAutocompleteImpl({
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    // Escape always closes the popup if it's open, regardless of results.
+    // This must run before the results.length === 0 check below so the
+    // no-matches empty state is also dismissable.
+    if (isOpen && e.key === "Escape") {
+      setIsOpen(false);
+      return;
+    }
+
     if (!isOpen && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       setIsOpen(true);
       return;
@@ -112,12 +135,14 @@ function StopAutocompleteImpl({
       e.preventDefault();
       const result = results[highlightedIndex];
       if (result) selectStop(result.match.stop);
-    } else if (e.key === "Escape") {
-      setIsOpen(false);
     }
   }
 
   const showEmptyState = isOpen && debouncedValue.trim().length > 0 && results.length === 0;
+  // The listbox element exists only in this state, so aria-controls is set
+  // only then -- an aria-controls that points at an absent id is worse than
+  // none at all.
+  const listboxVisible = isOpen && (results.length > 0 || showEmptyState);
 
   // Check if current input matches a selected stop (for visual feedback).
   // Compare against the disambiguated label (which is what the user sees)
@@ -133,10 +158,11 @@ function StopAutocompleteImpl({
 
       <div className="relative flex items-center">
         <input
+          ref={inputRef}
           id={id}
           role="combobox"
           aria-expanded={isOpen}
-          aria-controls={listboxId}
+          aria-controls={listboxVisible ? listboxId : undefined}
           aria-autocomplete="list"
           aria-activedescendant={
             isOpen && results[highlightedIndex] ? `${id}-option-${highlightedIndex}` : undefined
@@ -151,6 +177,7 @@ function StopAutocompleteImpl({
           placeholder={stopsLoading ? "Loading stops…" : placeholder}
           autoComplete="off"
           aria-invalid={invalid}
+          aria-describedby={describedById}
           className={`w-full rounded-md border bg-surface-raised py-2.5 pl-3 pr-12 text-base text-ink outline-none transition-colors focus:border-accent-blue focus:bg-white ${
             invalid ? "border-accent-red" : isSelectedStop ? "border-accent-green" : "border-route-line"
           }`}
@@ -161,6 +188,9 @@ function StopAutocompleteImpl({
             onClick={() => {
               onInputChange("");
               setIsOpen(false);
+              // This button unmounts as soon as inputValue is empty; move
+              // focus back to the field first so it isn't dropped to <body>.
+              inputRef.current?.focus();
             }}
             aria-label={`Clear ${label.toLowerCase()}`}
             className="absolute right-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full text-ink-tertiary hover:bg-surface-sunken hover:text-ink"
@@ -169,7 +199,7 @@ function StopAutocompleteImpl({
           </button>
         )}
 
-        {isOpen && (results.length > 0 || showEmptyState) && (
+        {listboxVisible && (
           <ul
             id={listboxId}
             role="listbox"

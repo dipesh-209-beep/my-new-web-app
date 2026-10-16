@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import { LayersIcon } from "@/components/icons/TransitIcons";
 import { CONGESTION_COLORS } from "@/lib/constants";
 import LayerToggle from "@/components/ui/LayerToggle";
@@ -57,6 +58,7 @@ export default function CongestionPanel({
 }: CongestionPanelProps) {
   const isCustomTime = dayOfWeek !== null || hourBucket !== null;
   const provenanceNote = provenance?.note?.trim() || FALLBACK_PROVENANCE_NOTE;
+  const hourSelectRef = useRef<HTMLSelectElement>(null);
 
   let summary: string;
   if (loading) {
@@ -70,6 +72,28 @@ export default function CongestionPanel({
     const baseline = hasSeededOnly ? " All are free-flow baseline (OSRM), not reported congestion." : "";
     const refresh = error ? " Couldn't refresh; showing an earlier estimate." : "";
     summary = `${segmentCount} ${noun}.${baseline}${refresh}`;
+  }
+
+  // Concise text for the polite live region below. Deliberately a separate,
+  // shorter phrasing from the visible caption (mirroring RouteResultPanel's
+  // statusSummary), driven by segmentCount/error rather than `loading`: a
+  // populated overlay keeps the same message while a background refresh is
+  // in flight, so the three-minute poll does not re-announce. Only the first
+  // load -- no segments yet -- reports that loading is under way.
+  let statusMessage: string;
+  if (segmentCount === 0) {
+    if (loading) {
+      statusMessage = "Loading congestion estimates…";
+    } else if (error) {
+      statusMessage = "Congestion estimates failed to load. The overlay may be incomplete.";
+    } else {
+      statusMessage = "No congestion segments for this time.";
+    }
+  } else {
+    const noun = segmentCount === 1 ? "congestion segment" : "congestion segments";
+    const baseline = hasSeededOnly ? " Free-flow baseline only." : "";
+    const refresh = error ? " Refresh failed; showing earlier data." : "";
+    statusMessage = `${segmentCount} ${noun}.${baseline}${refresh}`;
   }
 
   return (
@@ -118,6 +142,7 @@ export default function CongestionPanel({
             </label>
             <select
               id="congestion-hour"
+              ref={hourSelectRef}
               value={hourBucket ?? "now"}
               onChange={(e) => onHourChange(e.target.value === "now" ? null : Number(e.target.value))}
               className="min-h-11 rounded-md border border-route-line bg-white px-2 py-1 text-ink"
@@ -133,6 +158,10 @@ export default function CongestionPanel({
               <button
                 type="button"
                 onClick={() => {
+                  // The Reset button unmounts with its own condition, so
+                  // focus the surviving time control while the button is
+                  // still mounted rather than letting focus fall to <body>.
+                  hourSelectRef.current?.focus();
                   onDayChange(null);
                   onHourChange(null);
                 }}
@@ -159,6 +188,15 @@ export default function CongestionPanel({
           </div>
 
           <p className="font-mono text-xs text-ink-secondary">{summary}</p>
+
+          {/* The one polite live region for this panel (D4). It stays mounted
+              for as long as the layer is on, so a changed message is a text
+              update in an already-present region rather than a region created
+              in the same commit as its text. Kept sr-only so the visible
+              caption's wording is untouched and nothing is announced twice. */}
+          <p role="status" aria-live="polite" className="sr-only">
+            {statusMessage}
+          </p>
         </>
       )}
     </div>

@@ -72,6 +72,23 @@ export default function StopDetailPage() {
     };
   }, [stopId]);
 
+  // Every state gets a title that names the stop the URL asked for, so a
+  // loading, missing or errored page can never keep a previously-viewed
+  // stop's name in the tab. The `stop.stop_id === stopId` guard makes the
+  // success title conditional on the loaded record actually matching the
+  // current id, so a stale response from a previous stop cannot win.
+  useEffect(() => {
+    if (stop && stop.stop_id === stopId) {
+      document.title = `${stop.stop_name} — Kathmandu Bus Route Finder`;
+    } else if (notFound) {
+      document.title = `Stop ${stopId} not found — Kathmandu Bus Route Finder`;
+    } else if (error) {
+      document.title = `Stop ${stopId} — failed to load — Kathmandu Bus Route Finder`;
+    } else {
+      document.title = `Stop ${stopId} — Kathmandu Bus Route Finder`;
+    }
+  }, [stop, stopId, notFound, error]);
+
   if (loading) {
     return (
       <div className="mx-auto flex h-full max-w-xl flex-col gap-3 p-4">

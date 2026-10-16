@@ -18,6 +18,7 @@ import { ChevronIcon, LayersIcon } from "@/components/icons/TransitIcons";
 import { useSheet } from "@/hooks/useSheet";
 import { MapErrorBoundary } from "@/components/MapErrorBoundary";
 import LayerToggle from "@/components/ui/LayerToggle";
+import SheetSnapControl from "@/components/ui/SheetSnapControl";
 import StopsLoadError from "@/components/search/StopsLoadError";
 
 // Leaflet touches `window`, so the map must load client-side only.
@@ -45,6 +46,10 @@ export default function Home() {
 function HomeInner() {
   const { stops, loading: stopsLoading, error: stopsError, reload: reloadStops } = useStops();
 
+  useEffect(() => {
+    document.title = "Plan your journey — Kathmandu Bus Route Finder";
+  }, []);
+
   // Origin/destination text lives here (not inside SearchForm) so both the
   // form and a map click can write to it.
   const [originText, setOriginText] = useState("");
@@ -53,7 +58,7 @@ function HomeInner() {
   const [pickTarget, setPickTarget] = useState<StopPickTarget>(null);
   const [showAllStops, setShowAllStops] = useState(true);
 
-  const { userLocation, nearestStop, walkingRoute, locating, locateError, useMyLocation } =
+  const { userLocation, nearestStop, walkingRoute, locating, locateError, locateStatus, useMyLocation } =
     useGeolocation({
       stops,
       // Offer the detected stop as the origin, but only if the user hasn't
@@ -105,6 +110,8 @@ const congestion = useCongestion();
 
   // Bottom sheet state and handlers
   const {
+    sheetSnap,
+    setSheetSnap,
     sidebarHydrated,
     dragHeightPx,
     showMinimized,
@@ -202,7 +209,7 @@ const congestion = useCongestion();
 
         <div className="flex items-center justify-between gap-2">
           {!showMinimized && (
-            <div>
+            <div className="min-w-0">
               <h1 className="text-xl font-semibold leading-tight tracking-tight text-ink">
                 Plan your journey
               </h1>
@@ -211,12 +218,24 @@ const congestion = useCongestion();
               </p>
             </div>
           )}
+          {/* Mobile: three named snap positions as a keyboard-operable radio
+              group, so the intermediate "half" position is reachable without
+              a pointer drag. "Min"/"Full" reproduce the old toggle's two
+              states, so the separate button is desktop-only below. */}
+          <SheetSnapControl
+            value={sheetSnap}
+            onChange={setSheetSnap}
+            className="flex-shrink-0 md:hidden"
+          />
+          {/* Desktop keeps the plain minimize/restore toggle: the sidebar has
+              no meaningful "half" (md:max-h-none makes it identical to
+              "full"), so a third position would lie. */}
           <button
             type="button"
             onClick={toggleSidebarMinimized}
             aria-label={showMinimized ? "Restore search panel" : "Minimize search panel"}
             title={showMinimized ? "Restore search panel" : "Minimize search panel"}
-            className="flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center gap-1 rounded p-2 text-ink-secondary hover:text-ink"
+            className="hidden min-h-11 min-w-11 flex-shrink-0 items-center justify-center gap-1 rounded p-2 text-ink-secondary hover:text-ink md:flex"
           >
             <ChevronIcon direction={showMinimized ? "down" : "up"} />
           </button>
@@ -239,6 +258,7 @@ const congestion = useCongestion();
               onPickTargetChange={setPickTarget}
               locating={locating}
               locateError={locateError}
+              locateStatus={locateStatus}
               onUseMyLocation={useMyLocation}
             />
 

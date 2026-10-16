@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import RouteResultPanel from "@/components/route/RouteResultPanel";
 import {
   FareOut,
@@ -445,6 +445,160 @@ describe("RouteResultPanel announces async outcomes", () => {
         onSelectedIndexChange={() => {}}
       />
     );
-    expect(screen.getByText("Finding the best routes…").closest("[aria-live='polite']")).not.toBeNull();
+    const status = screen.getByRole("status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveTextContent("Finding the best routes…");
+    // The same words are also shown in the visible card (once in the sr-only
+    // status, once as the visual caption).
+    expect(screen.getAllByText("Finding the best routes…")).toHaveLength(2);
+  });
+
+  // The bug this guards: the found summary used to be announced from a live
+  // region that was created in the same commit as its text, which assistive
+  // tech does not reliably speak. Both the loading and found cards now put the
+  // status region in the same position, so React reuses the node and the
+  // summary is a text change in a region that already existed.
+  it("carries the found announcement in the live region loading already mounted", () => {
+    const result = { found: true, ...makeResult() } as RouteSearchResult;
+    const { rerender } = render(
+      <RouteResultPanel
+        result={null}
+        loading
+        error={null}
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+      />
+    );
+    const loadingRegion = screen.getByRole("status");
+    expect(loadingRegion).toHaveTextContent("Finding the best routes…");
+
+    rerender(
+      <RouteResultPanel
+        result={result}
+        loading={false}
+        error={null}
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+      />
+    );
+
+    const foundRegion = screen.getByRole("status");
+    expect(foundRegion).toBe(loadingRegion);
+    expect(foundRegion).toHaveTextContent("Direct. Estimated 10 min, direct.");
+  });
+
+  // The found panel used to wrap the ENTIRE card (alternatives, timeline,
+  // fare notes) in aria-live="polite", so every re-render -- including just
+  // picking a different alternative -- replayed the whole card. It now
+  // carries a single concise screen-reader-only status; the visible content
+  // is read on demand.
+  it("announces the found state through one concise status, not the whole panel", () => {
+    const { container } = renderPanel(makeResult());
+    const liveRegions = container.querySelectorAll("[aria-live]");
+    expect(liveRegions).toHaveLength(1);
+    const status = screen.getByRole("status");
+    expect(liveRegions[0]).toBe(status);
+    expect(status).toHaveTextContent("Direct. Estimated 10 min, direct.");
+  });
+
+  it("re-announces the selected alternative through the concise status", () => {
+    const alternative: RouteAlternative = {
+      label: "fastest_estimated",
+      total_cost: 900,
+      transfer_count: 0,
+      legs: [makeLeg()],
+      fare: null,
+      total_estimated_duration_s: 900,
+    };
+    const result = makeResult({ alternatives: [alternative] });
+    const { rerender } = render(
+      <RouteResultPanel
+        result={{ found: true, ...result }}
+        loading={false}
+        error={null}
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+      />
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Direct. Estimated 10 min, direct.");
+
+    rerender(
+      <RouteResultPanel
+        result={{ found: true, ...result }}
+        loading={false}
+        error={null}
+        selectedIndex={0}
+        onSelectedIndexChange={() => {}}
+      />
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Fastest (est.). Estimated 15 min, direct.");
+  });
+
+  it("keeps an error assertively announced and silent to the polite status", () => {
+    render(
+      <RouteResultPanel
+        result={null}
+        loading={false}
+        error="Could not reach the routing service."
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+      />
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not reach the routing service.");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("keeps the error Retry wired without adding a polite announcement", () => {
+    const onRetry = vi.fn();
+    render(
+      <RouteResultPanel
+        result={null}
+        loading={false}
+        error="Could not reach the routing service."
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+        onRetry={onRetry}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("moves focus to the stable panel region when Retry is pressed, and it survives error -> loading", () => {
+    const onRetry = vi.fn();
+    const { rerender } = render(
+      <RouteResultPanel
+        result={null}
+        loading={false}
+        error="Could not reach the routing service."
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+        onRetry={onRetry}
+      />
+    );
+
+    const retryButton = screen.getByRole("button", { name: "Retry" });
+    retryButton.focus();
+    expect(retryButton).toHaveFocus();
+
+    // Pressing Retry swaps the error card (and the button with it) for the
+    // loading card; focus must not be dropped to <body>.
+    fireEvent.click(retryButton);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("region", { name: "Route results" })).toHaveFocus();
+
+    rerender(
+      <RouteResultPanel
+        result={null}
+        loading
+        error={null}
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+        onRetry={onRetry}
+      />
+    );
+    // Same node across the state change, so focus is preserved.
+    expect(screen.getByRole("region", { name: "Route results" })).toHaveFocus();
   });
 });

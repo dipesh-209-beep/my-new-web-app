@@ -1,5 +1,7 @@
 "use client";
 
+import { useId } from "react";
+
 interface LayerToggleProps {
   icon: React.ReactNode;
   /** Tailwind text-color class for the icon chip, e.g. "text-accent-orange". */
@@ -38,6 +40,13 @@ export default function LayerToggle({
   enabled,
   onToggle,
 }: LayerToggleProps) {
+  // The pill's only visible text is "On"/"Off", which names the state, not
+  // the layer. Name the control after the layer it toggles via the visible
+  // title instead, so a screen reader announces "Traffic, toggle button,
+  // pressed" rather than an unlabelled "On". aria-pressed still carries the
+  // state, so the visible "On"/"Off" text is left exactly as-is.
+  const titleId = useId();
+
   return (
     <div className="flex items-center justify-between gap-2">
       <div className="flex min-w-0 items-center gap-2">
@@ -45,7 +54,9 @@ export default function LayerToggle({
           {icon}
         </span>
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">{title}</p>
+          <p id={titleId} className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">
+            {title}
+          </p>
           <p className="text-sm text-ink">{subtitle}</p>
         </div>
       </div>
@@ -53,6 +64,7 @@ export default function LayerToggle({
         type="button"
         onClick={onToggle}
         aria-pressed={enabled}
+        aria-labelledby={titleId}
         className={`inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md px-3 text-xs font-medium transition-colors ${
           enabled ? `${activeBgClass} text-white` : `border border-route-line text-ink-secondary ${hoverClass}`
         }`}

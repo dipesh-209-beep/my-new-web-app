@@ -142,6 +142,10 @@ export function useRouteBrowser(): UseRouteBrowserResult {
   }, [searchQuery]);
 
   async function loadMore() {
+    // The Load more button uses aria-disabled (not disabled) while a page is
+    // in flight so it does not drop focus when pressed, which means a click
+    // can still reach here. Guard rather than fetch the same page twice.
+    if (loadingMore) return;
     setLoadingMore(true);
     try {
       const data = await getRoutes({

@@ -1,3 +1,7 @@
+export const metadata = {
+  title: "Offline — Kathmandu Bus Route Finder",
+};
+
 export default function OfflinePage() {
   return (
     <div className="mx-auto flex h-full max-w-md flex-col items-center justify-center gap-3 p-4 text-center">

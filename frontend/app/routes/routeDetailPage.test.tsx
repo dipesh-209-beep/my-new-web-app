@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import RouteDetailPage from "@/app/routes/[routeId]/page";
-import { getFare, getRoute, getRouteGeometry, getRouteStops } from "@/lib/api";
+import { ApiError, getFare, getRoute, getRouteGeometry, getRouteStops } from "@/lib/api";
 import { FareOut, RouteSummary } from "@/types/route";
 
+const navParams = vi.hoisted(() => ({ routeId: "R0001" }));
+
 vi.mock("next/navigation", () => ({
-  useParams: () => ({ routeId: "R0001" }),
+  useParams: () => ({ routeId: navParams.routeId }),
 }));
 
 vi.mock("next/dynamic", () => ({
@@ -75,6 +77,8 @@ function makeFare(overrides: Partial<FareOut> = {}): FareOut {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  navParams.routeId = "R0001";
+  document.title = "";
   mockedGetRouteStops.mockResolvedValue([]);
   mockedGetRouteGeometry.mockResolvedValue({
     geometry: { type: "LineString", coordinates: [] },
@@ -95,7 +99,9 @@ describe("RouteDetailPage distance disclosure", () => {
     expect(await screen.findByText(/5\.2 km/)).toBeInTheDocument();
     expect(screen.queryByText(/approx\./)).not.toBeInTheDocument();
     expect(screen.queryByText(/approximate distance/)).not.toBeInTheDocument();
-    expect(mockedGetFare).toHaveBeenCalledWith(5.2);
+    // The fare lookup runs in a passive effect after the distance commits, so
+    // wait for it rather than asserting immediately after findByText.
+    await waitFor(() => expect(mockedGetFare).toHaveBeenCalledWith(5.2));
   });
 
   it("marks an approximate distance and discloses the approximate fare input", async () => {
@@ -107,7 +113,7 @@ describe("RouteDetailPage distance disclosure", () => {
     expect(
       await screen.findByText(/estimated from the route's approximate distance/)
     ).toBeInTheDocument();
-    expect(mockedGetFare).toHaveBeenCalledWith(4.8);
+    await waitFor(() => expect(mockedGetFare).toHaveBeenCalledWith(4.8));
   });
 
   it("shows no distance and no fare when every value is invalid", async () => {
@@ -119,5 +125,73 @@ describe("RouteDetailPage distance disclosure", () => {
     expect(screen.queryByText(/\d+\.\d km/)).not.toBeInTheDocument();
     expect(screen.queryByText(/approximate distance/)).not.toBeInTheDocument();
     expect(mockedGetFare).not.toHaveBeenCalled();
+  });
+});
+
+describe("RouteDetailPage document title", () => {
+  it("identifies the requested route while loading", () => {
+    mockedGetRoute.mockReturnValue(new Promise(() => {}));
+
+    render(<RouteDetailPage />);
+
+    expect(document.title).toBe("Route R0001 — Kathmandu Bus Route Finder");
+  });
+
+  it("uses the short and long name once the route has loaded", async () => {
+    mockedGetRoute.mockResolvedValue(makeRoute({ short_name: "26", route_name: "Ring Road" }));
+
+    render(<RouteDetailPage />);
+
+    expect(await screen.findByText(/Ring Road/)).toBeInTheDocument();
+    // findByText resolves on the DOM commit; the passive title effect may not
+    // have flushed yet under load, so wait for it.
+    await waitFor(() => expect(document.title).toBe("26 — Ring Road — Kathmandu Bus Route Finder"));
+  });
+
+  it("falls back to the long name when there is no short name", async () => {
+    mockedGetRoute.mockResolvedValue(makeRoute({ short_name: null, route_name: "Test Route" }));
+
+    render(<RouteDetailPage />);
+
+    expect(await screen.findByText("Test Route")).toBeInTheDocument();
+    await waitFor(() => expect(document.title).toBe("Test Route — Kathmandu Bus Route Finder"));
+  });
+
+  it("marks a missing route as not found", async () => {
+    mockedGetRoute.mockRejectedValue(new ApiError("not found", "http", 404));
+
+    render(<RouteDetailPage />);
+
+    expect(await screen.findByText(/doesn't exist/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(document.title).toBe("Route R0001 not found — Kathmandu Bus Route Finder")
+    );
+  });
+
+  it("marks a failed load", async () => {
+    mockedGetRoute.mockRejectedValue(new ApiError("network down", "network"));
+
+    render(<RouteDetailPage />);
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(document.title).toBe("Route R0001 — failed to load — Kathmandu Bus Route Finder")
+    );
+  });
+
+  it("does not keep a previous route's title when the id changes", async () => {
+    mockedGetRoute.mockResolvedValue(
+      makeRoute({ route_id: "R0001", short_name: "26", route_name: "Ring Road" })
+    );
+
+    const { rerender } = render(<RouteDetailPage />);
+    expect(await screen.findByText(/Ring Road/)).toBeInTheDocument();
+    await waitFor(() => expect(document.title).toBe("26 — Ring Road — Kathmandu Bus Route Finder"));
+
+    mockedGetRoute.mockReturnValue(new Promise(() => {}));
+    navParams.routeId = "R0002";
+    rerender(<RouteDetailPage />);
+
+    await waitFor(() => expect(document.title).toBe("Route R0002 — Kathmandu Bus Route Finder"));
   });
 });

@@ -41,10 +41,17 @@ interface SearchFormProps {
   onPickTargetChange: (target: StopPickTarget) => void;
   locating?: boolean;
   locateError?: string | null;
+  locateStatus?: string | null;
   onUseMyLocation: () => void;
 }
 
 type FieldError = "origin" | "destination" | "both" | "via" | "stops" | null;
+
+// Stable id for the shared validation summary. An invalid field points its
+// aria-describedby here so the message is programmatically tied to it, while
+// the summary stays the single visible role="alert" announcement -- no
+// duplicated message text and no second live region.
+const FIELD_ERROR_ID = "search-form-error";
 
 export default function SearchForm({
   stops,
@@ -61,6 +68,7 @@ export default function SearchForm({
   onPickTargetChange,
   locating = false,
   locateError = null,
+  locateStatus = null,
   onUseMyLocation,
 }: SearchFormProps) {
   const [fieldError, setFieldError] = useState<FieldError>(null);
@@ -79,6 +87,8 @@ export default function SearchForm({
     viaIdCounterRef.current += 1;
     return `via-${viaIdCounterRef.current}`;
   }
+  // Focus fallback for a via row's remove button, which unmounts on click.
+  const addStopRef = useRef<HTMLButtonElement>(null);
 
   // See lib/stopLabel.ts -- must stay identical to how the parent labels a
   // picked Stop (map click, geolocation, "use my location"), or typed
@@ -104,6 +114,9 @@ export default function SearchForm({
   function removeViaStop(id: string) {
     onViaStopsChange(viaStops.filter((v) => v.id !== id));
     if (fieldError === "via") setFieldError(null);
+    // The remove button unmounts with its own row; move focus to the
+    // always-present "Add a stop" control so it is not dropped to <body>.
+    addStopRef.current?.focus();
   }
 
   function updateViaStop(id: string, text: string) {
@@ -113,6 +126,13 @@ export default function SearchForm({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    // The submit button stays focusable while a search is in flight (it uses
+    // aria-disabled, not disabled -- see the button) so focus is not dropped
+    // when it is pressed. That means an implicit submission (Enter in a
+    // field) or a second press can still reach here; ignore it rather than
+    // firing a duplicate search.
+    if (loading) return;
 
     // Stop resolution needs the loaded stop list (resolveStop matches
     // against labelToStop built from `stops`), so with none loaded no
@@ -228,14 +248,17 @@ export default function SearchForm({
             }}
             selectedStop={originSelectedStop}
             invalid={originInvalid}
+            describedById={originInvalid ? FIELD_ERROR_ID : undefined}
             placeholder="From: search starting stop…"
             footerActions={
               <>
                 <button
                   type="button"
-                  onClick={onUseMyLocation}
-                  disabled={locating}
-                  className="inline-flex min-h-11 items-center gap-1 text-xs text-accent-blue hover:underline disabled:opacity-50"
+                  onClick={() => {
+                    if (!locating) onUseMyLocation();
+                  }}
+                  aria-disabled={locating}
+                  className="inline-flex min-h-11 items-center gap-1 text-xs text-accent-blue hover:underline aria-disabled:opacity-50"
                 >
                   <LocationIcon size={12} />
                   {locating ? "Locating…" : "Use my location"}
@@ -272,6 +295,7 @@ export default function SearchForm({
             }}
             selectedStop={destinationSelectedStop}
             invalid={destinationInvalid}
+            describedById={destinationInvalid ? FIELD_ERROR_ID : undefined}
             placeholder="To: search destination…"
             footerActions={
               <button
@@ -316,10 +340,11 @@ export default function SearchForm({
                   stopsLoading={stopsLoading}
                   inputValue={via.text}
                   onInputChange={(v) => updateViaStop(via.id, v)}
-                  onSelect={(stop) => updateViaStop(via.id, buildStopLabel(stop, stops))}
-                  invalid={fieldError === "via"}
-                  placeholder={`Via stop ${i + 1}…`}
-                />
+                   onSelect={(stop) => updateViaStop(via.id, buildStopLabel(stop, stops))}
+                   invalid={fieldError === "via"}
+                   describedById={fieldError === "via" ? FIELD_ERROR_ID : undefined}
+                   placeholder={`Via stop ${i + 1}…`}
+                 />
               </div>
               <button
                 type="button"
@@ -336,16 +361,17 @@ export default function SearchForm({
       )}
 
       <button
+        ref={addStopRef}
         type="button"
         onClick={addViaStop}
-        disabled={viaStops.length >= 3}
-        className="inline-flex min-h-11 items-center self-start text-xs font-medium text-accent-blue hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
+        aria-disabled={viaStops.length >= 3}
+        className="inline-flex min-h-11 items-center self-start text-xs font-medium text-accent-blue hover:underline aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:no-underline"
       >
         + Add a stop along the way
       </button>
 
       {fieldError && (
-        <p className="text-xs text-accent-red" role="alert">
+        <p id={FIELD_ERROR_ID} className="text-xs text-accent-red" role="alert">
           {fieldError === "stops"
             ? "Stops haven't loaded yet, so route search isn't available. Retry loading the stop list to continue."
             : fieldError === "via"
@@ -360,6 +386,15 @@ export default function SearchForm({
           {locateError}
         </p>
       )}
+      {/* A successful "Use my location" otherwise only moves the map marker
+          and (only if "From" is empty) fills that field -- neither is a live
+          region, so a screen-reader user gets no confirmation. Kept mounted
+          whether empty or not, so the message is a change to an existing
+          region rather than a region rendered together with its text. The
+          failure path stays the separate role="alert" above. */}
+      <p role="status" aria-live="polite" className="sr-only">
+        {locateStatus}
+      </p>
 
       <div className="flex flex-col gap-1 border-t border-route-line pt-3">
         <label
@@ -384,8 +419,9 @@ export default function SearchForm({
 
       <button
         type="submit"
-        disabled={loading || stops.length === 0}
-        className="mt-1 min-h-11 rounded-md bg-brand py-2.5 text-sm font-semibold tracking-wide text-ink transition-colors hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={stops.length === 0}
+        aria-disabled={loading || stops.length === 0}
+        className="mt-1 min-h-11 rounded-md bg-brand py-2.5 text-sm font-semibold tracking-wide text-ink transition-colors hover:bg-brand-dark aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
       >
         {loading ? "Searching…" : "Find route"}
       </button>

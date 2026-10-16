@@ -14,6 +14,11 @@ interface UseGeolocationResult {
   walkingRoute: WalkingRoute | null;
   locating: boolean;
   locateError: string | null;
+  // Polite success message ("Nearest stop found: X.") for a screen reader to
+  // announce -- the nearest stop is otherwise only shown on the map and
+  // written into the "From" field, neither of which is a live region. Null
+  // while a request is in flight, on failure, or before the first success.
+  locateStatus: string | null;
   useMyLocation: () => void;
 }
 
@@ -32,6 +37,7 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
   const [walkingRoute, setWalkingRoute] = useState<WalkingRoute | null>(null);
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
+  const [locateStatus, setLocateStatus] = useState<string | null>(null);
 
   // Guard against a slow earlier geolocation request overwriting a
   // faster later one if the user taps "Use my location" twice quickly.
@@ -50,6 +56,13 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
         }
         const stop = nearby[0];
         setNearestStop(stop);
+        // Announce the outcome in terms the app actually knows: the nearest
+        // stop's name. No distance -- /stops/nearby returns no distance and
+        // the walking distance (walkingRoute.distance_m) is optional, so it
+        // would be a misleading "nearest" figure when the foot route is down.
+        // This is also why it does not claim it filled the "From" field: the
+        // caller only offers the stop as the origin when that field is empty.
+        setLocateStatus(`Nearest stop found: ${stop.stop_name}.`);
         onStopFound?.(buildStopLabel(stop, stops));
 
         try {
@@ -93,6 +106,10 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
     }
     setLocating(true);
     setLocateError(null);
+    // Clear any previous success so a repeat request announces again even if
+    // it resolves to the same nearest stop (a live region only speaks a
+    // change, and the text would otherwise be identical).
+    setLocateStatus(null);
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         await locateNearestStop(position.coords.latitude, position.coords.longitude);
@@ -120,5 +137,5 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
     );
   }
 
-  return { userLocation, nearestStop, walkingRoute, locating, locateError, useMyLocation };
+  return { userLocation, nearestStop, walkingRoute, locating, locateError, locateStatus, useMyLocation };
 }

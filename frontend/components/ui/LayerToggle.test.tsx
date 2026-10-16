@@ -26,7 +26,7 @@ describe("LayerToggle", () => {
     renderToggle();
     expect(screen.getByText("Traffic")).toBeInTheDocument();
     expect(screen.getByText("Show live traffic overlay")).toBeInTheDocument();
-    const button = screen.getByRole("button");
+    const button = screen.getByRole("button", { name: "Traffic" });
     expect(button).toHaveTextContent("Off");
     expect(button).toHaveAttribute("aria-pressed", "false");
   });
@@ -34,11 +34,25 @@ describe("LayerToggle", () => {
   it("mirrors the on state and reports presses", async () => {
     const { onToggle } = renderToggle(true);
     const user = userEvent.setup();
-    const button = screen.getByRole("button");
+    const button = screen.getByRole("button", { name: "Traffic" });
     expect(button).toHaveTextContent("On");
     expect(button).toHaveAttribute("aria-pressed", "true");
     await user.click(button);
     expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  // The pill's visible text is only "On"/"Off"; the accessible name must be
+  // the layer it controls (the visible title), or a screen-reader user hears
+  // an unlabelled "On" with no idea what it turns on.
+  it("names the toggle after the layer it controls, not the On/Off state", () => {
+    renderToggle();
+    expect(screen.getByRole("button", { name: "Traffic" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Off" })).toBeNull();
+  });
+
+  it("keeps the layer name as the enabled state changes", () => {
+    renderToggle(true);
+    expect(screen.getByRole("button", { name: "Traffic" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("activates with the keyboard", async () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { axe } from "vitest-axe";
 import RouteResultPanel from "./RouteResultPanel";
-import { RouteFinderResult, RouteLeg } from "@/types/route";
+import { RouteFinderResult, RouteLeg, RouteSearchResult } from "@/types/route";
 
 function makeLeg(overrides: Partial<RouteLeg> = {}): RouteLeg {
   return {
@@ -31,6 +31,9 @@ function makeResult(overrides: Partial<RouteFinderResult> = {}): RouteFinderResu
   };
 }
 
+// Each async outcome renders its own live region; axe checks the markup of
+// all four (loading / found / no-route / error). It cannot verify what a
+// screen reader actually announces.
 describe("RouteResultPanel a11y", () => {
   it("has no axe violations in found state", async () => {
     const { container } = render(
@@ -38,6 +41,48 @@ describe("RouteResultPanel a11y", () => {
         result={{ found: true, ...makeResult() }}
         loading={false}
         error={null}
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+      />,
+    );
+    const results = await axe(container);
+    expect(results.violations).toHaveLength(0);
+  });
+
+  it("has no axe violations in loading state", async () => {
+    const { container } = render(
+      <RouteResultPanel
+        result={null}
+        loading
+        error={null}
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+      />,
+    );
+    const results = await axe(container);
+    expect(results.violations).toHaveLength(0);
+  });
+
+  it("has no axe violations in no-route state", async () => {
+    const { container } = render(
+      <RouteResultPanel
+        result={{ found: false } as RouteSearchResult}
+        loading={false}
+        error={null}
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+      />,
+    );
+    const results = await axe(container);
+    expect(results.violations).toHaveLength(0);
+  });
+
+  it("has no axe violations in error state", async () => {
+    const { container } = render(
+      <RouteResultPanel
+        result={null}
+        loading={false}
+        error="Could not reach the routing service."
         selectedIndex={-1}
         onSelectedIndexChange={() => {}}
       />,

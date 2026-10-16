@@ -50,7 +50,9 @@ describe("StopAutocomplete a11y", () => {
     const combobox = screen.getByRole("combobox", { name: "From" });
     expect(combobox).toHaveAttribute("aria-expanded", "false");
     expect(combobox).toHaveAttribute("aria-autocomplete", "list");
-    expect(combobox).toHaveAttribute("aria-controls");
+    // aria-controls is only set while the listbox it points at is mounted,
+    // so a collapsed combobox with no listbox in the DOM has none.
+    expect(combobox).not.toHaveAttribute("aria-controls");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
 
     const results = await axe(container);

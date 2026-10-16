@@ -90,6 +90,10 @@ export default function AdminPage() {
   const [token, setTokenState] = useState<string | null>(null);
 
   useEffect(() => {
+    document.title = "Admin — Kathmandu Bus Route Finder";
+  }, []);
+
+  useEffect(() => {
     const timer = setTimeout(() => {
       const stored = getAdminToken();
       setTokenState(stored);

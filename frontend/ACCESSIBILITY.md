@@ -1,6 +1,6 @@
 # Accessibility
 
-**Last reviewed: 2026-10-13**
+**Last reviewed: 2026-10-16**
 
 This is an honest assessment, not a conformance claim. **This application has
 not been audited against WCAG** and no conformance level (A, AA, or AAA) is
@@ -21,14 +21,28 @@ Verified by reading the source, not by audit:
 - **Form controls are labelled.** Inputs are wrapped in `<label>` elements
   with visible text, or given an `sr-only` `<label htmlFor>`. Accessible names
   are provided by real markup, not by `placeholder`.
+- **The map-layer toggles are named for the layer they control**
+  (`components/ui/LayerToggle.tsx`). The pill's only visible text is
+  "On"/"Off" — a state, not a name — so the control is labelled with
+  `aria-labelledby` pointing at the visible layer title, and `aria-pressed`
+  carries the state: "Traffic, toggle button, pressed", never an unlabelled
+  "On".
+- **The sign-in control is a disclosure**
+  (`components/layout/NavBar.tsx`). `aria-expanded` tracks the popup,
+  `aria-controls` points at it only while open, Escape closes it and returns
+  focus to the trigger, and an outside click closes it. It deliberately does
+  **not** claim `aria-haspopup`, because the popup holds a login form or a
+  sign-out action rather than a menu or a dialog.
 - **Decorative icons are `aria-hidden`** (`components/icons/TransitIcons.tsx`),
   so they are not announced as unlabelled graphics.
 - **A single, consistent focus indicator** (`:focus-visible`, 2px solid
-  `#e0a614` with 2px offset) rather than relying on per-browser defaults that
+  `#B9860B` with 2px offset) rather than relying on per-browser defaults that
   are easy to lose against a light theme.
 - **Landmarks**: `nav` in `NavBar.tsx`, and one `main#main-content` in
   `app/layout.tsx` that every page renders into (so `/stops` and `/routes`
-  share it).
+  share it). Two named `role="region"` landmarks exist as focus targets: the
+  route results (`components/route/RouteResultPanel.tsx`, "Route results") and
+  the routes list (`app/routes/page.tsx`, "Routes").
 - **A skip link** to `#main-content`, first in the tab order, visually hidden
   until focused. Without it a keyboard user traverses the whole nav bar on
   every page load.
@@ -56,15 +70,17 @@ Verified by reading the source, not by audit:
   origin/destination swap, "use my location"/"pick on map"/"+ Add a stop",
   the via-stop remove button, the Submit button, the map-layer and traffic
   toggle pills, the congestion day/hour selects and "Reset to now", the route
-  alternative pills, the bottom-sheet toggle, the map's zoom and recenter
+  alternative pills, the bottom-sheet position selector, the map's zoom and
+  recenter
   controls, and the all-stops cluster bubbles. Markers draw at their natural
   size but are wrapped in a transparent hit box at least 44×44 px — centered
   (`withHitArea`) or bottom-anchored so a pin's tip stays on its coordinate
   (`withBottomAnchoredHitArea`) — in `components/map/markerKit.ts`, so the
   drawn marker keeps its shape while the tappable area meets the goal. The
   authored controls and cluster bubbles were measured in a headless Chromium
-  pass at 320/360/390 px; the marker hit boxes (stop tag, route pin,
-  user-location) are verified by unit tests asserting `iconSize`/`iconAnchor`
+  pass at 320/360/390 px (a one-off manual run; no reproducible probe script is
+  checked in); the marker hit boxes (stop tag, route pin, user-location) are
+  verified by unit tests asserting `iconSize`/`iconAnchor`
   (`BusMap.test.tsx`), not yet measured in a browser. Leaflet's own attribution
   is inline text (exempt under 2.5.5).
 - **Map markers are keyboard-operable where they do something.** Cluster
@@ -85,19 +101,67 @@ Verified by reading the source, not by audit:
   hover icon swap is re-decorated by the layer hook itself (`decorateStop()` in
   `components/map/useAllStopsLayer.ts`), not by `bindMarkerLifecycle`. Cluster
   keyboard operability was checked in a headless Chromium pass at 320/360/390
-  px; the route-pin and user-location keyboard activation are verified by unit
+  px (a one-off manual run; no reproducible probe script is checked in); the
+  route-pin and user-location keyboard activation are verified by unit
   tests (`BusMap.test.tsx`), not yet measured in a browser.
-- **Asynchronous route-search outcomes are announced.** The loading, found,
-  no-route and error states each render inside an `aria-live` region (the
-  loading and found panels use `aria-live="polite"`; the error uses
-  `role="alert"`; the "No bus route found" panel uses `role="status"`), so a
-  screen-reader user hears the result of a search without a page change.
+- **Asynchronous route-search outcomes are announced.** The loading state and
+  the "No bus route found" state use `role="status"` (polite); the error uses
+  `role="alert"`. The found state deliberately does **not** wrap the whole
+  results card in a live region — doing so replayed the entire card
+  (alternatives, timeline, fare notes) on every re-render, including simply
+  picking a different alternative. It instead exposes one concise
+  screen-reader-only `role="status"` summary ("Recommended. Estimated 12 min,
+  1 transfer.") that also updates when a different alternative is selected. The
+  found summary is written into the same status region the loading card already
+  rendered — the two cards put it in the same position, so React reuses that
+  node across the transition — so the result is spoken as an update to a region
+  that already existed rather than one that appears together with its text. A
+  screen-reader user hears the result of a search without a page change, and
+  without the whole card being re-read.
+- **Route- and stop-list updates are announced.** `/routes` and `/stops` each
+  render one screen-reader-only `role="status"` region. It reports the settled
+  match count (with `, N shown` while `/routes` still has pages to load), the
+  "Load more" progress, or the no-match message — so filtering and pagination
+  no longer change the visible list silently. `/stops` filters client-side and
+  instantly, so its announcement is debounced by 300 ms (the interval the
+  `/routes` server-side search already uses) to avoid a new count on every
+  keystroke; an empty query announces nothing, and neither does clearing it.
+  The region is always present but kept empty until a change is worth
+  announcing, because a live region rendered at the same moment as its text is
+  often not spoken. This is a markup/behaviour assertion in
+  `app/routes/page.test.tsx` and `app/stops/page.test.tsx`, not a spoken pass.
+- **Controls that disappear or become busy do not drop keyboard focus.** A
+  control removed from the DOM takes focus with it, so the three that unmount on
+  activation move focus to a survivor first: the via-stop remove button
+  (`SearchForm.tsx`) to the always-present "+ Add a stop along the way", the
+  error card's Retry button (`RouteResultPanel.tsx`) to the panel root, which is
+  the same node in every state so focus also survives the error → loading →
+  found transition, and the congestion panel's "Reset to now"
+  (`CongestionPanel.tsx`) to the time select that stays mounted beside it.
+  Controls that are only *temporarily* unavailable keep focus instead of being
+  natively `disabled`: "Find route", "Use my location",
+  "+ Add a stop" (at the 3-stop limit) and `/routes` "Load more" use
+  `aria-disabled` and guard their own action, and when the final page arrives
+  the `Load more` button hands focus to the routes list rather than letting it
+  fall to `<body>`. When a `Load more` page finishes with more pages remaining,
+  the button stays mounted and focus stays on it. The focus moves and the
+  "an aria-disabled control does nothing" behaviour are asserted in
+  `components/search/SearchForm.test.tsx`,
+  `components/route/RouteResultPanel.test.tsx`, `app/routes/page.test.tsx`,
+  `hooks/useRouteBrowser.test.ts` and `components/CongestionPanel.test.tsx`.
+  This is a DOM assertion — jsdom drops focus to `<body>` on removal but does
+  not blur a disabled element, so the disabled-vs-focus interaction itself is
+  a browser behaviour, not a measured one here.
 - **Reflow at 320 px and at 200% text.** The page lays out without horizontal
   scrolling down to 320 CSS px wide (checked at 320/360/390 px, including with
   the traffic and via-stop panels expanded). It also holds at 200% browser text
   scaling: a headless Chromium probe measured no horizontal overflow in the
-  sidebar at 320/360/390 px and at a 1280 px desktop. The header collapses to a
-  single row and its wordmark drops to the "K" mark below the `sm` breakpoint.
+  sidebar at 320/360/390 px and at a 1280 px desktop (a one-off manual run; no
+  reproducible probe script is checked in). The wordmark drops to the
+  "K" mark below the `sm` breakpoint, and the sign-in popup is capped to the
+  viewport width (`max-w-[calc(100vw-1rem)]`, with `max-sm:ml-auto` on its
+  actions group) so the login form stays on-screen even when the narrow header
+  wraps the actions onto a second row.
 
 ## Known gaps
 
@@ -113,17 +177,19 @@ with no key handler — which made the all-stops layer hundreds of unactivatable
 tab stops — is disabled (`keyboard: false`) and replaced by explicit,
 per-marker affordances.
 
-The map as a whole is still not keyboard-navigable, though. There is no
-keyboard panning, no way to move focus from one marker to the next with arrow
-keys, and individual stop markers only enter the tab order while map-picking
-is armed. Leaflet's polyline layers remain non-interactive for keyboard users,
-so a route cannot be traced through the map itself.
+The map container itself is keyboard-focusable and Leaflet's default keyboard
+handling is left enabled, so while it has focus the arrow keys pan and `+`/`-`
+zoom the map. What is still missing is marker-to-marker movement: there is no
+way to step focus from one marker to the next with the keyboard (the arrow keys
+pan the map instead), individual stop markers enter the tab order only while
+map-picking is armed, and Leaflet's polyline layers are not focusable, so a
+route cannot be traced through the map by keyboard.
 
-The fix is not a Leaflet setting; it needs a non-map equivalent (a list of
-stops/routes that can be tabbed through and expanded) alongside the map. The
-route results, stop details and fare information are already rendered as text
-in the surrounding panel, so the information is reachable — the exploration
-experience is what remains weak.
+Panning and zooming are already provided by Leaflet; what still needs building
+is a non-map equivalent — a list of stops/routes that can be tabbed through and
+expanded — alongside the map. The route results, stop details and fare
+information are already rendered as text in the surrounding panel, so the
+information is reachable — the exploration experience is what remains weak.
 
 ### 2. The congestion legend is in the panel, not on the map
 
@@ -138,14 +204,18 @@ at-a-glance key is not always visible next to the overlay.
 ### 3. Automated runtime testing covers structure, not appearance
 
 `axe-core` runs through `vitest-axe`, registered in `vitest.setup.ts` and run
-by `npm test`. It currently checks the rendered DOM of four files:
+by `npm test`. It currently checks the rendered DOM of five files:
 
-- `NavBar.a11y.test.tsx` — the default expanded nav bar.
-- `RouteResultPanel.a11y.test.tsx` — the "found" result state.
+- `NavBar.a11y.test.tsx` — the default expanded nav bar, and the sign-in popup
+  open.
+- `RouteResultPanel.a11y.test.tsx` — the found, loading, no-route and error
+  result states.
 - `SearchForm.a11y.test.tsx` — the empty form, rendering the real
   `StopAutocomplete` (not a stub).
 - `StopAutocomplete.a11y.test.tsx` — the collapsed combobox, the expanded
   suggestion listbox, and the no-match message.
+- `StopsLoadError.a11y.test.tsx` — the stop-load-failure notice with and
+  without a stale stop list.
 
 That catches structural and ARIA problems (roles, accessible names,
 parent/child relationships, required attributes) in those states. It does
@@ -157,11 +227,11 @@ parent/child relationships, required attributes) in those states. It does
   jsdom.
 - **Keyboard or screen-reader behaviour** — axe reports markup, not what a
   browser or assistive technology does with it.
-- **States other than those listed** — the other result states (loading,
-  error, no-route), the minimized nav bar, the via-stop and validation states
-  of the form, the congestion panel, the map, and the `/admin` UI have no axe
-  pass. `eslint-plugin-jsx-a11y` still catches static errors across all of
-  them, and there is no axe run against a built page in CI.
+- **States other than those listed** — the minimized nav bar, the via-stop and
+  validation states of the form, the congestion panel, the map, and the
+  `/admin` UI have no axe pass. `eslint-plugin-jsx-a11y` still catches static
+  errors across all of them, and there is no axe run against a built page in
+  CI.
 
 ### 4. `control-has-associated-label` is not enabled, deliberately
 
@@ -202,13 +272,33 @@ the plugin fixes the behaviour.
   future palette regression — and the two remaining `#16A34A` links on
   `/routes/[routeId]` ("← Back to all routes", on white) still sit at
   3.30:1, as does the `hover:text-accent-green` on the breadcrumb link.
-- **Live regions** for the *other* asynchronous updates. The route-search
-  outcomes (loading / found / no-route / error) are now live regions and
-  covered by tests (`RouteResultPanel.test.tsx`); the geolocation and
-  congestion fetches resolve asynchronously and whether those are announced
-  politely is still unverified.
-- **The mobile bottom sheet** (`hooks/useSheet.ts`) — drag, focus trapping and
-  Escape behaviour for a dialog-like surface.
+- **Live regions** for the *other* asynchronous updates. All four route-search
+  outcomes (loading / found / no-route / error) are live regions in the markup;
+  role, politeness and one-region-per-state are asserted in
+  `RouteResultPanel.test.tsx`, with an axe pass on each state in
+  `RouteResultPanel.a11y.test.tsx`. These are markup assertions, not a spoken
+  pass — jsdom has no assistive technology, so what a screen reader actually
+  announces is still unverified. A successful "Use my location" is announced
+  through a polite `role="status"` region in `SearchForm.tsx` (the nearest
+  stop's name only — `/stops/nearby` returns no distance and the walking
+  distance is optional, so no distance is claimed); its transitions and
+  message contents are asserted in `hooks/useGeolocation.test.ts` and
+  `components/search/SearchForm.test.tsx`. The congestion overlay is exposed
+  through a single persistent polite `role="status"` region in
+  `components/CongestionPanel.tsx` — not per segment and not the whole
+  overlay — whose message tracks the loading, populated, empty, fetch-failure
+  and refresh-failure states and is asserted in
+  `components/CongestionPanel.test.tsx`. That message is derived from the
+  settled result rather than the loading flag, so the three-minute background
+  refresh does not re-announce a transient "Loading…" while earlier results
+  are still shown. As with the regions above, this is a markup/DOM assertion:
+  what a screen reader actually announces, and how often, is not
+  independently verified in a real browser.
+- **The mobile bottom sheet** (`hooks/useSheet.ts`) — the pointer drag itself,
+  plus focus trapping and Escape behaviour for a dialog-like surface. Its three
+  snap positions are now keyboard-selectable through a native radio group
+  (`components/ui/SheetSnapControl.tsx`, mobile only), so a keyboard user can
+  reach `half` without dragging; the drag handle stays a pointer-only gesture.
 - **Screen reader smoke tests** on the main flows: search, select a route,
   walk to a stop, and the `/admin` UI. No spoken pass is on record for any of
   them, so the marker keyboard work above is verified structurally and with a
@@ -224,20 +314,26 @@ the plugin fixes the behaviour.
 3. **Keyboard only:** unplug the mouse. Tab from page load — the skip link
    should be first. Reach every control that responds to a click. Confirm the
    focus ring is visible on each. On the map, cluster bubbles and popup pins
-   should activate on Enter/Space; individual stops are intentionally not in
-  the tab order unless map-picking is armed. Keyboard panning and marker-to-
-   marker navigation are still missing; that is gap 1.
+   should activate on Enter/Space, and the map container itself is focusable:
+   with it focused, the arrow keys pan and `+`/`-` zoom, with the focus ring
+   visible. Individual stops are intentionally not in the tab order unless
+   map-picking is armed, and there is no keyboard move from marker to marker
+   (the arrow keys pan instead); that is gap 1.
 4. **Screen reader:** VoiceOver (macOS) or NVDA (Windows). Verify the
    autocomplete announces its expanded state and highlighted option, and that
    the results panel updates are announced.
 5. **Contrast:** any colour-contrast checker against the rendered page, at
    both themes, plus the congestion ramp specifically.
 6. **Zoom/reflow:** 200% browser text scaling and 320px viewport width. Check
-   that the sidebar does not scroll horizontally at 320 px + 200%. The one
-   control seen clipping there — the Traffic panel's On/Off pill — was fixed
-   in `components/ui/LayerToggle.tsx`: the label column shrinks (`min-w-0`)
-   while the pill keeps its 44 px target (`shrink-0`). `LayerToggle.test.tsx`
-   pins those classes (jsdom cannot measure layout).
+   that the sidebar does not scroll horizontally at 320 px + 200%, and that the
+   open sign-in popup is fully visible at 320 px (its form is capped to the
+   viewport and its actions group is kept flush right when the header wraps)
+   while at 1280 px it is unchanged. The one control seen clipping there — the
+   Traffic panel's On/Off pill — was fixed in `components/ui/LayerToggle.tsx`:
+   the label column shrinks (`min-w-0`) while the pill keeps its 44 px target
+   (`shrink-0`). `LayerToggle.test.tsx` pins those classes and
+   `NavBar.test.tsx` pins the popup's width cap and group alignment (jsdom
+   cannot measure layout).
 
 ## If you fix one thing
 
