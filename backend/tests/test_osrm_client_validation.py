@@ -187,6 +187,73 @@ def test_invalid_geometry_raises(monkeypatch, geometry):
         _call(monkeypatch, payload)
 
 
+# --- coordinate elements --------------------------------------------------
+#
+# A coordinate list that is a list but whose elements aren't usable
+# [lng, lat] pairs must fail here, not as a TypeError/ValueError later --
+# stop-positioning unpacks each pair (`for lng, lat in coordinates`), and
+# the frontend destructures them for Leaflet.
+
+
+def test_valid_two_element_pair_is_accepted(monkeypatch):
+    result = _call(monkeypatch, _valid_payload(coordinates=[[85.30, 27.70]]))
+    assert result["geometry"]["coordinates"] == [[85.30, 27.70]]
+
+
+def test_valid_multi_point_linestring_is_accepted(monkeypatch):
+    coords = [[85.30, 27.70], [85.31, 27.71], [85.32, 27.72]]
+    result = _call(monkeypatch, _valid_payload(coordinates=coords))
+    assert result["geometry"]["coordinates"] == coords
+
+
+def test_two_element_tuple_coordinate_is_accepted(monkeypatch):
+    result = _call(monkeypatch, _valid_payload(coordinates=[(85.30, 27.70)]))
+    assert result["geometry"]["coordinates"] == [(85.30, 27.70)]
+
+
+def test_empty_coordinate_list_remains_accepted(monkeypatch):
+    # Callers deliberately treat an empty geometry as "fall back" (see
+    # test_attach_road_geometry / test_stop_positioning), so it must not
+    # start raising.
+    result = _call(monkeypatch, _valid_payload(coordinates=[]))
+    assert result["geometry"]["coordinates"] == []
+    assert result["distance_m"] == 1234.5
+
+
+@pytest.mark.parametrize(
+    "coordinates",
+    [
+        [85.30, 27.70],  # flat: elements are bare numbers, not pairs
+        [[85.30]],  # one value
+        [[85.30, 27.70, 99.0]],  # three values
+        [[85.30, 27.70], [85.31]],  # later element wrong arity
+        [["85.30", 27.70]],  # string longitude
+        [[85.30, "27.70"]],  # string latitude
+        [[None, 27.70]],  # None longitude
+        [[85.30, None]],  # None latitude
+        [[True, 27.70]],  # bool longitude (bool subclasses int)
+        [[85.30, False]],  # bool latitude
+        [[float("nan"), 27.70]],  # NaN longitude
+        [[85.30, float("nan")]],  # NaN latitude
+        [[float("inf"), 27.70]],  # +inf longitude
+        [[85.30, float("inf")]],  # +inf latitude
+        [[float("-inf"), 27.70]],  # -inf longitude
+        [[85.30, float("-inf")]],  # -inf latitude
+        [{"lng": 85.30, "lat": 27.70}],  # non-pair element
+        [[[85.30, 27.70]]],  # nested pair as one coordinate
+    ],
+)
+def test_malformed_coordinate_element_raises_osrm_error(monkeypatch, coordinates):
+    with pytest.raises(OSRMError):
+        _call(monkeypatch, _valid_payload(coordinates=coordinates))
+
+
+def test_malformed_coordinate_is_not_cached(monkeypatch):
+    with pytest.raises(OSRMError):
+        _call(monkeypatch, _valid_payload(coordinates=[[85.30]]))
+    assert osrm_client._route_cache == {}
+
+
 # --- distance / duration --------------------------------------------------
 
 

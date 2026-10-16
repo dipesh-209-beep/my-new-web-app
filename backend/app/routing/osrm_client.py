@@ -210,6 +210,21 @@ def _is_positive_finite_number(value) -> bool:
     )
 
 
+def _is_finite_number(value) -> bool:
+    """True only for a real, finite number (of either sign).
+
+    Same rejection set as _is_positive_finite_number -- bools (a subclass
+    of int), strings, None, NaN and +/-inf -- but without the sign
+    restriction, since a coordinate's longitude/latitude may legitimately
+    be negative. Anything else means the geometry point is unusable, so it
+    must not reach callers that unpack or project it."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
 def _parse_route_response(data) -> dict:
     """Validate a decoded OSRM /route response and extract the first
     route's geometry, distance and duration.
@@ -222,6 +237,12 @@ def _parse_route_response(data) -> dict:
     (see app/api/routing.py::_attach_road_geometry and app/api/routes.py),
     rather than letting a KeyError/IndexError/TypeError escape or a bad
     number propagate into a total, fare or duration.
+
+    Each geometry coordinate is likewise required to be a two-element
+    [lng, lat] pair of finite numbers. A malformed element would otherwise
+    reach stop-positioning's `for lng, lat in coordinates` unpacking
+    (app/routing/stop_positioning.py) as a TypeError/ValueError -- an
+    unhandled 500 on GET /routes/{id}/stops -- or a bad map point.
 
     Every message is a fixed string: it never echoes the response body or
     the request URL, so a malformed payload can't leak into logs or an
@@ -247,8 +268,18 @@ def _parse_route_response(data) -> dict:
         raise OSRMError("OSRM route was missing a geometry object")
     if geometry.get("type") != "LineString":
         raise OSRMError("OSRM route geometry was not a LineString")
-    if not isinstance(geometry.get("coordinates"), list):
+    coordinates = geometry.get("coordinates")
+    if not isinstance(coordinates, list):
         raise OSRMError("OSRM route geometry had no coordinate list")
+    # An empty list is accepted on purpose (see the module's callers, which
+    # fall back to a straight line / canonical positions), but every element
+    # present must be a usable [lng, lat] pair.
+    for point in coordinates:
+        if not isinstance(point, (list, tuple)) or len(point) != 2:
+            raise OSRMError("OSRM route geometry had a malformed coordinate")
+        lng, lat = point
+        if not _is_finite_number(lng) or not _is_finite_number(lat):
+            raise OSRMError("OSRM route geometry had a non-finite coordinate")
 
     distance = route.get("distance")
     if not _is_positive_finite_number(distance):
