@@ -149,10 +149,16 @@ export function searchStops(query: string, stops: Stop[]): StopMatch[] {
         fuzzyMatchesText(q, aliasesRaw) ||
         fuzzyMatchesText(q, landmarkRaw))
     ) {
-      score = 40;
-      if (fuzzyMatchesText(q, stop.stop_name ?? "")) matchedField = "name";
-      else if (fuzzyMatchesText(q, aliasesRaw)) matchedField = "alias";
-      else matchedField = "landmark";
+      if (fuzzyMatchesText(q, stop.stop_name ?? "")) {
+        score = 40;
+        matchedField = "name";
+      } else if (fuzzyMatchesText(q, aliasesRaw)) {
+        score = 30;
+        matchedField = "alias";
+      } else {
+        score = 30;
+        matchedField = "landmark";
+      }
     }
 
     if (score > 0) {

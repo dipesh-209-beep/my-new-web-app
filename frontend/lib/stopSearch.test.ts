@@ -99,6 +99,25 @@ describe("searchStops", () => {
     expect(results[1]?.stop.stop_id).toBe("S0019");
   });
 
+  it("ranks a name fuzzy match above a landmark-only fuzzy match (score, not length)", () => {
+    // Both stops reach "koteshwar" only through the lowest tier: the token
+    // "koteshwor" is one edit from that query, as the name of one stop and
+    // as the landmark of the other. The landmark-only stop has the shorter
+    // name ("Ghat"), so if both shared a single fuzzy score the length
+    // tie-break would float it above the name match. The name tier must be
+    // 40 and the alias/landmark tier 30 for the name match to win on score.
+    const nameMatch = makeStop({ stop_id: "S0107", stop_name: "Koteshwor Stop" });
+    const landmarkMatch = makeStop({
+      stop_id: "S0200",
+      stop_name: "Ghat",
+      landmark: "Koteshwor Road",
+    });
+    const results = searchStops("koteshwar", [landmarkMatch, nameMatch]);
+    expect(results.map((r) => r.stop.stop_id)).toEqual(["S0107", "S0200"]);
+    expect(results.map((r) => r.score)).toEqual([40, 30]);
+    expect(results.map((r) => r.matchedField)).toEqual(["name", "landmark"]);
+  });
+
   it("does not depend on dataset order (ranking, not first-in-dataset)", () => {
     // Put the exact match LAST in the array; ranking must still surface
     // it first regardless of input order.
