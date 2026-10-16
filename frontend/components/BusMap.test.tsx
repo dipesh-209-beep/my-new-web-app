@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
-import type { RouteLeg, RouteSearchResult, RouteStopEntry, Stop } from "@/types/route";
+import type {
+  CongestionSegment,
+  RouteLeg,
+  RouteSearchResult,
+  RouteStopEntry,
+  Stop,
+} from "@/types/route";
 import { leafletState } from "@/test/leaflet-mock";
 import { getCongestionColor } from "@/lib/congestionColor";
 
@@ -24,6 +30,31 @@ function makeStop(overrides: Partial<Stop> = {}): Stop {
     status: "active",
     ...overrides,
   };
+}
+
+function makeCongestionSegment(overrides: Partial<CongestionSegment> = {}): CongestionSegment {
+  return {
+    route_id: "R0001",
+    from_stop_id: "S0001",
+    to_stop_id: "S0002",
+    avg_duration_s: 600,
+    avg_distance_m: 2000,
+    free_flow_duration_s: 300,
+    congestion_ratio: 2,
+    congestion_level: "heavy",
+    sample_count: 5,
+    is_seeded: false,
+    ...overrides,
+  };
+}
+
+/** The on-map congestion key currently on the map, if any. Reads the live
+ * control rather than `leafletState.controls` at large, because a mock
+ * control removed by the effect stays in the array with `removed = true`. */
+function activeCongestionLegend() {
+  return leafletState.controls.find(
+    (c) => c.div?.getAttribute("aria-label") === "Congestion key" && !c.removed
+  );
 }
 
 /** Dispatch a keydown the way markerA11y's handler expects, returning the
@@ -506,6 +537,105 @@ describe("BusMap", () => {
       // "yet"/"confirmed traffic" imply live collection is happening.
       expect(popup).not.toContain("yet");
       expect(popup.toLowerCase()).not.toContain("confirmed traffic");
+    });
+  });
+
+  describe("map congestion key", () => {
+    const stops = [
+      makeStop({ stop_id: "S0001", stop_name: "A", lat: 27.7, lng: 85.3 }),
+      makeStop({ stop_id: "S0002", stop_name: "B", lat: 27.71, lng: 85.31 }),
+    ];
+
+    it("shows a labelled key when congestion segments are present", () => {
+      render(<BusMap allStops={stops} congestionSegments={[makeCongestionSegment()]} />);
+
+      const legend = activeCongestionLegend();
+      expect(legend).toBeDefined();
+      const div = legend!.div!;
+      // An accessible name for the group, and real text labels so the
+      // meaning does not depend on the gradient colours alone.
+      expect(div.getAttribute("role")).toBe("group");
+      expect(div.getAttribute("aria-label")).toBe("Congestion key");
+      expect(div.textContent).toContain("Low");
+      expect(div.textContent).toContain("Moderate");
+      expect(div.textContent).toContain("Heavy");
+    });
+
+    it("places the key in the corner free of the other map controls", () => {
+      render(<BusMap allStops={stops} congestionSegments={[makeCongestionSegment()]} />);
+      // Zoom is top-left, the route-leg legend bottom-left, recenter/scale
+      // bottom-right; the key must not share a corner with any of them.
+      expect(activeCongestionLegend()!.options.position).toBe("topright");
+    });
+
+    it("does not add a key when there are no segments", () => {
+      render(<BusMap allStops={stops} />);
+      expect(activeCongestionLegend()).toBeUndefined();
+    });
+
+    it("removes the key once the overlay is off and segments become empty", () => {
+      const { rerender } = render(
+        <BusMap allStops={stops} congestionSegments={[makeCongestionSegment()]} />
+      );
+      expect(activeCongestionLegend()).toBeDefined();
+
+      // app/page.tsx passes [] when the Traffic layer is disabled, so the
+      // key must disappear at that boundary.
+      rerender(<BusMap allStops={stops} congestionSegments={[]} />);
+      expect(activeCongestionLegend()).toBeUndefined();
+    });
+
+    it("stays on the map when a collapsible bottom-sheet body is minimized", () => {
+      // Mirrors app/page.tsx, where the sheet body is unmounted when
+      // minimized and BusMap is a sibling that receives no sheet state.
+      function Harness({ minimized }: { minimized: boolean }) {
+        return (
+          <div>
+            {!minimized && <div>Traffic panel</div>}
+            <BusMap allStops={stops} congestionSegments={[makeCongestionSegment()]} />
+          </div>
+        );
+      }
+
+      const { rerender } = render(<Harness minimized={false} />);
+      expect(activeCongestionLegend()).toBeDefined();
+
+      rerender(<Harness minimized={true} />);
+      expect(activeCongestionLegend()).toBeDefined();
+    });
+
+    it("coexists with the route-leg legend without displacing it", () => {
+      const result: RouteSearchResult = {
+        found: true,
+        origin_stop_id: "S0001",
+        destination_stop_id: "S0002",
+        total_cost: 10,
+        transfer_count: 0,
+        fare: null,
+        alternatives: [],
+        legs: [
+          {
+            route_id: "R0001",
+            route_name: "Route 1",
+            board_stop: stops[0],
+            alight_stop: stops[1],
+            num_ride_segments: 1,
+            stops: [stops[0], stops[1]],
+            road_geometry: null,
+          },
+        ],
+      };
+
+      render(
+        <BusMap result={result} allStops={stops} congestionSegments={[makeCongestionSegment()]} />
+      );
+
+      const routeLegends = leafletState.controls.filter(
+        (c) => c.div?.style.maxWidth === "min(220px, 60vw)" && !c.removed
+      );
+      expect(routeLegends).toHaveLength(1);
+      expect(routeLegends[0].options.position).toBe("bottomleft");
+      expect(activeCongestionLegend()!.options.position).toBe("topright");
     });
   });
 

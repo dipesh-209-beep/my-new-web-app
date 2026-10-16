@@ -143,9 +143,9 @@ markup, decorative icons are `aria-hidden`, there is a skip link as the first
 tab stop, and `prefers-reduced-motion` is honoured.
 
 This is **not** a WCAG conformance claim and no level is claimed. The known
-gaps — chiefly that Leaflet is not keyboard-operable, and that the congestion
-gradient has no legend — plus the manual checks still to do, are documented
-in [`ACCESSIBILITY.md`](ACCESSIBILITY.md). Read it before adding UI.
+gaps — chiefly that the map is only partly keyboard-operable — plus the manual
+checks still to do, are documented in [`ACCESSIBILITY.md`](ACCESSIBILITY.md).
+Read it before adding UI.
 
 ## Notes
 

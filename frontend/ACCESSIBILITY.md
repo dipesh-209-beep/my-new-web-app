@@ -191,15 +191,16 @@ expanded — alongside the map. The route results, stop details and fare
 information are already rendered as text in the surrounding panel, so the
 information is reachable — the exploration experience is what remains weak.
 
-### 2. The congestion legend is in the panel, not on the map
+### 2. The on-map congestion key is terse
 
-The gradient key (a bar labelled Low / Moderate / Heavy) sits in the Traffic
-panel (`components/CongestionPanel.tsx`), not on the map itself. On desktop the
-panel and map sit side by side, so the key is co-visible with the overlay. On a
-phone the two share the screen through a bottom sheet: collapsing the sheet to
-see the whole map also hides the key. The per-segment popups still pair colour
-with a text label and a numeric ratio, so nothing is unreadable — but the
-at-a-glance key is not always visible next to the overlay.
+The map carries a compact gradient key — a bar labelled Low / Moderate / Heavy
+(`components/map/useCongestionLayer.ts`, top-right) — so the colour meaning
+survives the mobile bottom sheet being minimized. It is deliberately minimal:
+the provenance note, the day/hour pickers and the numeric segment summary stay
+in the Traffic panel (`components/CongestionPanel.tsx`), which still scrolls
+with the sheet body, and the per-segment popups pair colour with a text label
+and a ratio. The key is hidden when the overlay is off or has no segments.
+Colour contrast of the ramp itself is still unmeasured (see gap 5).
 
 ### 3. Automated runtime testing covers structure, not appearance
 
