@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import RouteResultPanel from "@/components/route/RouteResultPanel";
 import {
-  FareOut,
+  JourneyFareOut,
   RouteAlternative,
   RouteFinderResult,
   RouteLeg,
@@ -41,23 +41,21 @@ function makeLeg(overrides: Partial<RouteLeg> = {}): RouteLeg {
   };
 }
 
-function makeFare(overrides: Partial<FareOut> = {}): FareOut {
+function makeJourneyFare(overrides: Partial<JourneyFareOut> = {}): JourneyFareOut {
   return {
-    fare_id: "F1",
-    min_distance_km: 0,
-    max_distance_km: 5,
     fare_npr_min: 20,
     fare_npr_max: 25,
-    student_discount_pct: null,
+    complete: true,
+    ride_leg_count: 1,
+    priced_leg_count: 1,
     verification_note: null,
     ...overrides,
   };
 }
 
-/** A shape the client could receive unchecked from a malformed or unexpected
- * 200 response -- typed as FareOut only to exercise the panel's guard. */
-function malformedFare(overrides: Record<string, unknown>): FareOut {
-  return { ...makeFare(), ...overrides } as unknown as FareOut;
+/** Malformed journey total for the panel's defensive-formatting guards. */
+function malformedJourneyFare(overrides: Record<string, unknown>): JourneyFareOut {
+  return { ...makeJourneyFare(), ...overrides } as unknown as JourneyFareOut;
 }
 
 function makeResult(overrides: Partial<RouteFinderResult> = {}): RouteFinderResult {
@@ -114,12 +112,12 @@ describe("RouteResultPanel time and fare honesty", () => {
       total_cost: 1200,
       transfer_count: 1,
       legs: [makeLeg()],
-      fare: makeFare({ fare_npr_min: 40, fare_npr_max: 45 }),
+      fare: makeJourneyFare({ fare_npr_min: 40, fare_npr_max: 45 }),
       total_estimated_duration_s: 900,
     };
     renderPanel(
       makeResult({
-        fare: makeFare({ fare_npr_min: 20, fare_npr_max: 25 }),
+        fare: makeJourneyFare({ fare_npr_min: 20, fare_npr_max: 25 }),
         alternatives: [alt],
       }),
       0
@@ -131,7 +129,7 @@ describe("RouteResultPanel time and fare honesty", () => {
   it("keeps the verification note neutral and inspectable instead of claiming pending confirmation", () => {
     renderPanel(
       makeResult({
-        fare: makeFare({
+        fare: makeJourneyFare({
           verification_note: "PENDING confirmation against the official gazette notice.",
         }),
       })
@@ -146,7 +144,7 @@ describe("RouteResultPanel time and fare honesty", () => {
   it("keeps an unexpected non-empty verification note neutral", () => {
     renderPanel(
       makeResult({
-        fare: makeFare({
+        fare: makeJourneyFare({
           verification_note: "roadside listing reviewed 2027-01; indicative only.",
         }),
       })
@@ -159,7 +157,7 @@ describe("RouteResultPanel time and fare honesty", () => {
   });
 
   it("omits the verification disclosure when the fare carries no note", () => {
-    renderPanel(makeResult({ fare: makeFare({ verification_note: null }) }));
+    renderPanel(makeResult({ fare: makeJourneyFare({ verification_note: null }) }));
     expect(screen.getByText("Rs. 20–25")).toBeTruthy();
     expect(screen.getByText("Estimated fare, not a final ticket price.")).toBeTruthy();
     expect(screen.queryByText("Fare verification information")).toBeNull();
@@ -168,7 +166,7 @@ describe("RouteResultPanel time and fare honesty", () => {
   it("shows Fare unavailable instead of Rs. undefined when amounts are missing", () => {
     renderPanel(
       makeResult({
-        fare: malformedFare({ fare_npr_min: undefined, fare_npr_max: undefined }),
+        fare: malformedJourneyFare({ fare_npr_min: undefined, fare_npr_max: undefined }),
       })
     );
     expect(screen.getByText("Fare unavailable")).toBeTruthy();
@@ -180,7 +178,7 @@ describe("RouteResultPanel time and fare honesty", () => {
   it("shows Fare unavailable instead of Rs. NaN for non-finite amounts", () => {
     renderPanel(
       makeResult({
-        fare: makeFare({ fare_npr_min: NaN, fare_npr_max: Infinity }),
+        fare: makeJourneyFare({ fare_npr_min: NaN, fare_npr_max: Infinity }),
       })
     );
     expect(screen.getByText("Fare unavailable")).toBeTruthy();
@@ -188,12 +186,12 @@ describe("RouteResultPanel time and fare honesty", () => {
   });
 
   it("shows Fare unavailable for a negative amount (invalid per the >= 0 contract)", () => {
-    renderPanel(makeResult({ fare: makeFare({ fare_npr_min: -1 }) }));
+    renderPanel(makeResult({ fare: makeJourneyFare({ fare_npr_min: -1 }) }));
     expect(screen.getByText("Fare unavailable")).toBeTruthy();
   });
 
   it("preserves a legitimate zero fare", () => {
-    renderPanel(makeResult({ fare: makeFare({ fare_npr_min: 0, fare_npr_max: 0 }) }));
+    renderPanel(makeResult({ fare: makeJourneyFare({ fare_npr_min: 0, fare_npr_max: 0 }) }));
     expect(screen.getByText("Rs. 0")).toBeTruthy();
     expect(screen.getByText("Estimated fare, not a final ticket price.")).toBeTruthy();
   });
@@ -201,6 +199,27 @@ describe("RouteResultPanel time and fare honesty", () => {
   it("says fare is unavailable when no fare rule matched", () => {
     renderPanel(makeResult({ fare: null }));
     expect(screen.getByText("Fare unavailable")).toBeTruthy();
+  });
+
+  it("flags an incomplete total when some ride legs had no fare band", () => {
+    renderPanel(
+      makeResult({
+        fare: makeJourneyFare({
+          fare_npr_min: 20,
+          fare_npr_max: 25,
+          complete: false,
+          ride_leg_count: 2,
+          priced_leg_count: 1,
+        }),
+      })
+    );
+    expect(screen.getByText("Rs. 20–25")).toBeTruthy();
+    expect(screen.getByText(/1 of 2 bus legs have no fare estimate/i)).toBeTruthy();
+    expect(
+      screen.getByText(/Estimated fare covering only the buses we could price/i)
+    ).toBeTruthy();
+    // The partial sum must never be presented as the complete fare.
+    expect(screen.queryByText("Estimated fare, not a final ticket price.")).toBeNull();
   });
 });
 

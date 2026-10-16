@@ -53,6 +53,18 @@ export interface RouteLeg {
    * that's how long a private car would take at free-flow speed. Always
    * display as an estimate, never an ETA. */
   estimated_duration_s?: number | null;
+  /** The distance-banded fare estimate for THIS ride leg (its own ridden
+   * distance looked up in fare_rules), or null for a walking-transfer leg
+   * or a ride leg no band covers. The journey total is the sum of the ride
+   * legs' fares -- see RouteFinderResult.fare / JourneyFareOut. */
+  fare?: FareOut | null;
+}
+
+/** The min/max amount pair shared by a single fare band (FareOut) and a
+ * journey total (JourneyFareOut), so one formatter serves both. */
+export interface FareAmounts {
+  fare_npr_min: number;
+  fare_npr_max: number;
 }
 
 /** Which basis a result's distance-derived figures are on. Chosen once per
@@ -62,16 +74,27 @@ export interface RouteLeg {
  * alike. Mirrors DistanceSource in backend/app/schemas.py. */
 export type DistanceSource = "osrm" | "graph";
 
-export interface FareOut {
+export interface FareOut extends FareAmounts {
   fare_id: string;
   min_distance_km: number;
   max_distance_km: number;
-  fare_npr_min: number;
-  fare_npr_max: number;
   student_discount_pct: number | null;
   /** Caveat on how solid this fare figure is ("PENDING confirmation
    * against the official gazette", for now). Frontend shows it under the
    * fare so "Estimated fare" never reads as fact. */
+  verification_note?: string | null;
+}
+
+/** A journey's estimated total fare: the sum of its ride legs' own fare
+ * bands. Mirrors JourneyFareOut in backend/app/schemas.py. `complete` is
+ * true only when every ride leg matched a fare band; when false the min/max
+ * cover only the matched legs and must be labelled incomplete. A journey
+ * with no priced ride leg has `fare: null`, never a zero. */
+export interface JourneyFareOut extends FareAmounts {
+  complete: boolean;
+  ride_leg_count: number;
+  priced_leg_count: number;
+  /** Distinct verification notes of the contributing bands, joined. */
   verification_note?: string | null;
 }
 
@@ -84,11 +107,12 @@ export interface RouteAlternative {
   total_distance_source?: DistanceSource | null;
   transfer_count: number;
   legs: RouteLeg[];
-  /** This option's own fare (computed on ride-leg distance only, on the
-   * same basis as total_cost), so the selected alternative's card never
-   * has to borrow the primary result's fare. Null when there's no ride leg
-   * or no fare rule. */
-  fare?: FareOut | null;
+  /** This option's own fare: the sum of its ride legs' bands (on the same
+   * basis as total_cost), so the selected alternative's card never has to
+   * borrow the primary result's fare. `complete` is false when any ride leg
+   * had no matching band; null when there's no ride leg or no leg could be
+   * priced. Each leg's own band is on RouteLeg.fare. */
+  fare?: JourneyFareOut | null;
   /** Sum of every leg's estimate plus assumed per-ride boarding wait.
    * Labeled approximation, same distance basis as the primary result. */
   total_estimated_duration_s?: number | null;
@@ -111,7 +135,7 @@ export interface RouteFinderResult {
   total_distance_source?: DistanceSource | null;
   transfer_count: number;
   legs: RouteLeg[];
-  fare: FareOut | null;
+  fare: JourneyFareOut | null;
   alternatives: RouteAlternative[];
   /** Whole-trip estimate: ride/walk time at assumed speeds (over each
    * leg's distance on the same basis as total_cost) plus per-ride boarding

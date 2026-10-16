@@ -144,7 +144,8 @@ def test_route_finder_exposes_estimated_time_and_per_option_fare(client):
     estimated trip time and its own fare, so the UI can show a labeled
     estimate instead of presenting the OSRM driving-profile duration as
     the trip time, and so a selected alternative never borrows the
-    primary result's fare. Fare is banded on ridden distance only.
+    primary result's fare. The journey fare is the sum of the ride legs'
+    own distance bands -- charged once per bus boarded.
     """
     resp = client.get(
         "/route-finder",
@@ -159,9 +160,23 @@ def test_route_finder_exposes_estimated_time_and_per_option_fare(client):
         assert leg["estimated_duration_s"] is not None
         assert leg["estimated_duration_s"] > 0
 
-    # The primary fare, if any, exposes its verification caveat.
+    # The primary fare, if any, is the summed journey total: it exposes its
+    # verification caveat, how many ride legs it covers, and completeness.
     if body["fare"] is not None:
         assert "verification_note" in body["fare"]
+        assert body["fare"]["ride_leg_count"] >= 1
+        assert 1 <= body["fare"]["priced_leg_count"] <= body["fare"]["ride_leg_count"]
+        assert body["fare"]["complete"] == (
+            body["fare"]["priced_leg_count"] == body["fare"]["ride_leg_count"]
+        )
+
+    # Each ride leg carries its own band; walking transfers never do. When
+    # the journey total is complete, every ride leg must have one.
+    for leg in body["legs"]:
+        if leg["route_id"] == "TRANSFER":
+            assert leg["fare"] is None
+        elif body["fare"] is not None and body["fare"]["complete"]:
+            assert leg["fare"] is not None
 
     # Each alternative carries its own estimate and fare (or an explicit
     # null when no ride leg / no matching band), never omitted.
@@ -169,6 +184,9 @@ def test_route_finder_exposes_estimated_time_and_per_option_fare(client):
         assert alt["total_estimated_duration_s"] is not None
         assert alt["total_estimated_duration_s"] > 0
         assert "fare" in alt
+        if alt["fare"] is not None:
+            assert alt["fare"]["ride_leg_count"] >= 1
+            assert 1 <= alt["fare"]["priced_leg_count"] <= alt["fare"]["ride_leg_count"]
         for leg in alt["legs"]:
             assert leg["estimated_duration_s"] is not None
 

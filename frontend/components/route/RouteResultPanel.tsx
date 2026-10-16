@@ -211,6 +211,10 @@ export default function RouteResultPanel({
   // object is missing OR either amount is absent/non-finite/negative, so a
   // malformed response can never render as "Rs. undefined" or "Rs. NaN".
   const activeFareRange = activeFare ? formatFareRange(activeFare) : null;
+  // A journey total is complete only when every ride leg matched a fare
+  // band. When one didn't, the range covers just the priced legs, so the
+  // panel must say so rather than present a partial sum as the total.
+  const fareIncomplete = activeFare ? !activeFare.complete : false;
   const verificationNote =
     activeFare &&
     typeof activeFare.verification_note === "string" &&
@@ -352,8 +356,17 @@ export default function RouteResultPanel({
         {activeFareRange && (
           <>
             <p className="mt-1 text-xs text-ink-tertiary">
-              Estimated fare, not a final ticket price.
+              {fareIncomplete
+                ? "Estimated fare covering only the buses we could price — not a final ticket price."
+                : "Estimated fare, not a final ticket price."}
             </p>
+            {fareIncomplete && (
+              <p className="mt-1 text-xs text-ink-tertiary">
+                {activeFare!.priced_leg_count} of {activeFare!.ride_leg_count} bus{" "}
+                {activeFare!.ride_leg_count === 1 ? "leg has" : "legs have"} no fare
+                estimate, so this total may be higher.
+              </p>
+            )}
             {verificationNote && (
               <details className="mt-1 text-xs text-ink-tertiary">
                 <summary className="cursor-pointer">Fare verification information</summary>

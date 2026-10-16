@@ -416,8 +416,12 @@ def test_mixed_coverage_falls_the_whole_path_to_graph_for_fare_and_duration(
 
     ride_graph = _graph_distance([S1, S2]) + _graph_distance([S2X, S3])
     walk_graph = _graph_distance([S2, S2X])
-    # Fare is ride-only: the graph distance of both ride legs, no walk.
-    assert fares == [pytest.approx(ride_graph / 1000)]
+    # Fare is charged per ride leg, not once over the summed distance: one
+    # lookup per bus, each on that leg's own graph distance, walk excluded.
+    assert fares == [
+        pytest.approx(_graph_distance([S1, S2]) / 1000),
+        pytest.approx(_graph_distance([S2X, S3]) / 1000),
+    ]
     assert body["total_estimated_duration_s"] == pytest.approx(
         _graph_distance([S1, S2]) / BUS_AVG_SPEED_MPS
         + walk_graph / WALK_SPEED_MPS
@@ -535,11 +539,14 @@ def test_non_collinear_graph_falls_back_on_all_ride_legs_and_excludes_walk(
 
     # Graph total sums every edge on the path, including the walk.
     assert body["total_cost"] == pytest.approx(ra_edges + walk_edges + rb_edges, rel=1e-6)
-    # Fare reconciles with the graph path for BOTH ride legs (R_TA's merged
-    # two hops included) and excludes the walk -- even though R_TB and the
-    # walk leg DO carry OSRM geometry here, the path is "graph", so that
-    # geometry must not be substituted in.
-    assert fares == [pytest.approx((ra_edges + rb_edges) / 1000)]
+    # Fare is charged once per ride leg (both of them, R_TA's merged two hops
+    # included) on each leg's own graph distance, and excludes the walk --
+    # even though R_TB and the walk leg DO carry OSRM geometry here, the path
+    # is "graph", so that geometry must not be substituted in.
+    assert fares == [
+        pytest.approx(ra_edges / 1000),
+        pytest.approx(rb_edges / 1000),
+    ]
     assert body["legs"][0]["estimated_duration_s"] == pytest.approx(
         ra_edges / BUS_AVG_SPEED_MPS
     )
@@ -569,4 +576,233 @@ def test_non_collinear_all_osrm_path_still_uses_the_osrm_basis(
     assert fares == [pytest.approx(OSRM_FACTOR * edges / 1000)]
     assert body["total_estimated_duration_s"] == pytest.approx(
         OSRM_FACTOR * edges / BUS_AVG_SPEED_MPS + BOARD_WAIT_S
+    )
+
+
+# --- fare is summed once per ride leg, NOT once over the whole path --------
+#
+# The bug these lock down: the fare used to be one band looked up on the
+# summed ride distance, so a two-bus 4 km + 4 km trip was charged the single
+# 8 km band (25-30) instead of fare(4 km) + fare(4 km) = 40-50. The rule is
+# fare(bus 1) + fare(bus 2) + ... -- charged once per bus boarded.
+
+# A linear three-bus chain with two ~100 m walking interchanges, so a single
+# S->E trip really boards three buses and must pay three fares.
+P1 = make_stop("P1", "PStart", 27.7000, 85.3000)
+P2 = make_stop("P2", "PMidA", 27.7200, 85.3000)
+P2X = make_stop("P2X", "PMidA2", 27.7200, 85.3010)  # ~100 m from P2
+P3 = make_stop("P3", "PMidB", 27.7800, 85.3000)
+P3X = make_stop("P3X", "PMidB2", 27.7800, 85.3010)  # ~100 m from P3
+P4 = make_stop("P4", "PEnd", 27.9000, 85.3000)
+
+
+def two_transfer_network():
+    return {
+        "routes": [
+            make_route("R_P", [P1, P2]),
+            make_route("R_Q", [P2X, P3]),
+            make_route("R_R", [P3X, P4]),
+        ],
+        "stops": {s.stop_id: s for s in (P1, P2, P2X, P3, P3X, P4)},
+    }
+
+
+def _fare_band(npr_min, npr_max, fare_id="FX", note="PENDING official gazette"):
+    """Smallest honoured fare_rules row for FareOut.model_validate."""
+    return SimpleNamespace(
+        fare_id=fare_id,
+        min_distance_km=0,
+        max_distance_km=99,
+        fare_npr_min=npr_min,
+        fare_npr_max=npr_max,
+        student_discount_pct=None,
+        verification_note=note,
+    )
+
+
+def _banded_fare(seen, missing_above_km=None):
+    """fare_for_distance stub: records each lookup's km and returns the desk
+    band by distance (F01 <5, F02 <10, F03 <15, F04 else), or None when
+    `missing_above_km` is set and the leg is at/above it."""
+    def stub(session, km):
+        seen.append(km)
+        if missing_above_km is not None and km >= missing_above_km:
+            return None
+        if km < 5:
+            return _fare_band(20, 25, "F01")
+        if km < 10:
+            return _fare_band(25, 30, "F02")
+        if km < 15:
+            return _fare_band(30, 35, "F03")
+        return _fare_band(35, 45, "F04")
+    return stub
+
+
+def test_direct_journey_makes_one_fare_lookup_and_keeps_the_band(
+    client_factory, monkeypatch
+):
+    client = client_factory(direct_network(), osrm_down)
+    seen = []
+    monkeypatch.setattr(queries, "fare_for_distance", _banded_fare(seen))
+
+    body = client.get(
+        "/route-finder", params={"origin": "S1", "destination": "S3"}
+    ).json()
+
+    assert seen == [pytest.approx(EXPECTED_GRAPH_A / 1000)]
+    fare = body["fare"]
+    assert fare["ride_leg_count"] == 1
+    assert fare["priced_leg_count"] == 1
+    assert fare["complete"] is True
+    assert (fare["fare_npr_min"], fare["fare_npr_max"]) == pytest.approx((20, 25))
+    assert "PENDING" in fare["verification_note"]
+
+
+def test_one_transfer_sums_both_leg_fares(client_factory, monkeypatch):
+    client = client_factory(transfer_network(), osrm_down)
+    seen = []
+    monkeypatch.setattr(queries, "fare_for_distance", _banded_fare(seen))
+
+    body = client.get(
+        "/route-finder", params={"origin": "S1", "destination": "S3"}
+    ).json()
+
+    ra_km = _graph_distance([S1, S2]) / 1000
+    rb_km = _graph_distance([S2X, S3]) / 1000
+    assert seen == [pytest.approx(ra_km), pytest.approx(rb_km)]
+
+    fare = body["fare"]
+    # Two legs each in the 0-5 km band: 20-25 + 20-25 = 40-50, NOT the
+    # single ~4.5-9 km band the old summed-distance code would have used.
+    assert (fare["fare_npr_min"], fare["fare_npr_max"]) == pytest.approx((40, 50))
+    assert fare["ride_leg_count"] == 2
+    assert fare["priced_leg_count"] == 2
+    assert fare["complete"] is True
+
+    # Each ride leg carries its own band; the walk leg carries none.
+    per_leg = {leg["route_id"]: leg["fare"] for leg in body["legs"]}
+    assert per_leg["TRANSFER"] is None
+    assert per_leg["R_A"]["fare_npr_min"] == pytest.approx(20)
+    assert per_leg["R_B"]["fare_npr_min"] == pytest.approx(20)
+
+
+def test_two_transfers_sum_three_leg_fares_across_bands(
+    client_factory, monkeypatch
+):
+    client = client_factory(two_transfer_network(), osrm_down)
+    seen = []
+    monkeypatch.setattr(queries, "fare_for_distance", _banded_fare(seen))
+
+    body = client.get(
+        "/route-finder", params={"origin": "P1", "destination": "P4"}
+    ).json()
+
+    assert [leg["route_id"] for leg in body["legs"]] == [
+        "R_P",
+        "TRANSFER",
+        "R_Q",
+        "TRANSFER",
+        "R_R",
+    ]
+    p_km = _graph_distance([P1, P2]) / 1000
+    q_km = _graph_distance([P2X, P3]) / 1000
+    r_km = _graph_distance([P3X, P4]) / 1000
+    assert seen == [pytest.approx(p_km), pytest.approx(q_km), pytest.approx(r_km)]
+
+    # F01 + F02 + F03 = (20+25+30) - (25+30+35).
+    fare = body["fare"]
+    assert fare["ride_leg_count"] == 3
+    assert fare["priced_leg_count"] == 3
+    assert fare["complete"] is True
+    assert (fare["fare_npr_min"], fare["fare_npr_max"]) == pytest.approx(
+        (75, 90)
+    )
+
+
+def test_many_stops_on_one_bus_charge_one_fare(client_factory, monkeypatch):
+    """R_N visits BN1->BN2->BN3 without changing buses: a single merged leg,
+    so one fare lookup and one band -- not one per stop passed."""
+    client = client_factory(bent_direct_network(), osrm_down)
+    seen = []
+    monkeypatch.setattr(queries, "fare_for_distance", _banded_fare(seen))
+
+    body = client.get(
+        "/route-finder", params={"origin": "BN1", "destination": "BN3"}
+    ).json()
+
+    assert [leg["route_id"] for leg in body["legs"]] == ["R_N"]
+    assert body["legs"][0]["num_ride_segments"] == 2
+    assert len(seen) == 1
+    fare = body["fare"]
+    assert fare["ride_leg_count"] == 1
+    assert fare["priced_leg_count"] == 1
+    assert fare["complete"] is True
+
+
+def test_missing_band_on_a_leg_marks_the_total_incomplete(
+    client_factory, monkeypatch
+):
+    client = client_factory(two_transfer_network(), osrm_down)
+    seen = []
+    # Only the first (~2 km) leg is priceable; the 6.7 km and 13 km legs have
+    # no band. The total must not be silently presented as the full fare.
+    monkeypatch.setattr(
+        queries, "fare_for_distance", _banded_fare(seen, missing_above_km=5)
+    )
+
+    body = client.get(
+        "/route-finder", params={"origin": "P1", "destination": "P4"}
+    ).json()
+
+    fare = body["fare"]
+    assert fare is not None
+    assert fare["complete"] is False
+    assert fare["ride_leg_count"] == 3
+    assert fare["priced_leg_count"] == 1
+    assert (fare["fare_npr_min"], fare["fare_npr_max"]) == pytest.approx((20, 25))
+
+    per_leg = [leg["fare"] for leg in body["legs"] if leg["route_id"] != "TRANSFER"]
+    assert per_leg[0] is not None
+    assert per_leg[1] is None
+    assert per_leg[2] is None
+
+
+def test_no_matching_band_yields_null_fare_not_zero(client_factory, monkeypatch):
+    client = client_factory(two_transfer_network(), osrm_down)
+    monkeypatch.setattr(queries, "fare_for_distance", lambda session, km: None)
+
+    body = client.get(
+        "/route-finder", params={"origin": "P1", "destination": "P4"}
+    ).json()
+
+    # A completely unavailable fare is null, never a zero total.
+    assert body["fare"] is None
+    assert all(leg["fare"] is None for leg in body["legs"])
+
+
+def test_each_alternative_gets_its_own_summed_fare(client_factory, monkeypatch):
+    client = client_factory(direct_network(), osrm_down)
+    seen = []
+    monkeypatch.setattr(queries, "fare_for_distance", _banded_fare(seen))
+
+    body = client.get(
+        "/route-finder",
+        params={"origin": "S1", "destination": "S3", "include_alternatives": "true"},
+    ).json()
+
+    # R_A (~4.4 km) is the primary, in the 0-5 band.
+    assert (body["fare"]["fare_npr_min"], body["fare"]["fare_npr_max"]) == (
+        pytest.approx(20),
+        pytest.approx(25),
+    )
+    assert body["fare"]["complete"] is True
+
+    assert len(body["alternatives"]) == 1
+    alt = body["alternatives"][0]
+    # R_B is a longer single leg (~9 km) -> the 5-10 band, its own aggregate.
+    assert alt["fare"]["ride_leg_count"] == 1
+    assert alt["fare"]["complete"] is True
+    assert (alt["fare"]["fare_npr_min"], alt["fare"]["fare_npr_max"]) == (
+        pytest.approx(25),
+        pytest.approx(30),
     )

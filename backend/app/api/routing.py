@@ -21,6 +21,7 @@ from app.routing.pathfinder import (
 from app.schemas import (
     DistanceSource,
     FareOut,
+    JourneyFareOut,
     RouteAlternative,
     RouteFinderResult,
     RouteLeg,
@@ -323,6 +324,66 @@ def _ride_only_distance_m(legs: list[RouteLeg], source: DistanceSource) -> float
     )
 
 
+def _combine_verification_notes(fares: list[FareOut]) -> Optional[str]:
+    """Distinct, non-blank verification notes from the fare bands that
+    contributed to a journey total, joined -- so a logged caveat is never
+    dropped just because several legs shared it, and the same note isn't
+    repeated once per leg. None when no contributing band carried one."""
+    notes: list[str] = []
+    for fare in fares:
+        note = (fare.verification_note or "").strip()
+        if note and note not in notes:
+            notes.append(note)
+    return " ".join(notes) if notes else None
+
+
+def _journey_fare(
+    db: Session, legs: list[RouteLeg], source: DistanceSource
+) -> Optional[JourneyFareOut]:
+    """The journey's estimated total fare: each ride leg's own fare band
+    summed (fare(bus 1) + fare(bus 2) + ...), NOT one band over the summed
+    distance. A passenger pays once per bus boarded, so a trip that changes
+    buses pays each leg's fare; a route ridden through several stops without
+    changing buses is a single `RouteLeg` (see _build_legs) and is charged
+    once.
+
+    Walking-transfer legs are skipped entirely (they add distance, not
+    fare). Each ride leg's own band is written to `leg.fare`. Returns None
+    when there is no ride leg or no ride leg could be priced at all; when
+    *some but not all* ride legs were priced it returns the partial sum with
+    `complete=False`, so a caller can never present the sum of the matching
+    legs as the whole journey's fare. A journey whose fare is entirely
+    unavailable is thus a None, never a zero.
+    """
+    ride_legs = [leg for leg in legs if leg.route_id != "TRANSFER"]
+    priced: list[FareOut] = []
+    for leg in ride_legs:
+        # Use the leg's own distance on the path's single basis, so a leg's
+        # fare and its displayed distance can't measure it two different
+        # ways (see _leg_distance_m). A zero-length ride leg can't be priced.
+        distance_m = _leg_distance_m(leg, source)
+        fare = None
+        if distance_m > 0:
+            rule = queries.fare_for_distance(db, distance_m / 1000)
+            if rule is not None:
+                fare = FareOut.model_validate(rule)
+        leg.fare = fare
+        if fare is not None:
+            priced.append(fare)
+
+    if not priced:
+        return None
+
+    return JourneyFareOut(
+        fare_npr_min=sum(fare.fare_npr_min for fare in priced),
+        fare_npr_max=sum(fare.fare_npr_max for fare in priced),
+        complete=len(priced) == len(ride_legs),
+        ride_leg_count=len(ride_legs),
+        priced_leg_count=len(priced),
+        verification_note=_combine_verification_notes(priced),
+    )
+
+
 def _record_leg_congestion(legs: list[RouteLeg]) -> None:
     """Runs after the response is already sent (see BackgroundTasks in
     find_route below), so this never adds latency to a user's search. Each
@@ -596,17 +657,7 @@ def find_route(
             alt_legs, alt.total_distance_m
         )
         _annotate_leg_estimated_durations(alt_legs, alt_distance_source)
-        alt_ride_only_m = _ride_only_distance_m(alt_legs, alt_distance_source)
-        alt_fare_rule = (
-            queries.fare_for_distance(db, alt_ride_only_m / 1000)
-            if alt_ride_only_m > 0
-            else None
-        )
-        alt_fare = (
-            FareOut.model_validate(alt_fare_rule)
-            if alt_fare_rule is not None
-            else None
-        )
+        alt_fare = _journey_fare(db, alt_legs, alt_distance_source)
         alternatives.append(
             RouteAlternative(
                 label=alt.label,
@@ -621,19 +672,13 @@ def find_route(
             )
         )
 
-    # Fare is banded on the distance actually ridden, not the whole trip:
-    # a walking transfer adds minutes but nothing to the bus fare, so
-    # counting it would over-charge the estimate (see the old bug where
-    # total_distance_m included walk legs). Uses the path's single basis
-    # (`total_distance_source`) so the fare and the displayed total can't
-    # be measuring the trip two different ways.
-    ride_only_m = _ride_only_distance_m(legs, total_distance_source)
-    fare_rule = (
-        queries.fare_for_distance(db, ride_only_m / 1000)
-        if ride_only_m > 0
-        else None
-    )
-    fare = FareOut.model_validate(fare_rule) if fare_rule is not None else None
+    # Fare is charged once per bus boarded: each ride leg's own distance is
+    # looked up in the fare bands and the legs are summed (see
+    # _journey_fare). Walking transfers add minutes but nothing to the fare,
+    # and a route ridden through several stops on one bus is a single leg,
+    # charged once. Uses the path's single basis (`total_distance_source`)
+    # so each leg's fare and its displayed distance measure it the same way.
+    fare = _journey_fare(db, legs, total_distance_source)
 
     return RouteFinderResult(
         origin_stop_id=origin,

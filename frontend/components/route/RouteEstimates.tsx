@@ -1,4 +1,4 @@
-import { FareOut } from "@/types/route";
+import { FareAmounts, FareOut } from "@/types/route";
 
 interface RouteEstimatesProps {
   /** Whole-route estimated running time in minutes (RouteOut.estimated_duration_min).
@@ -75,8 +75,9 @@ export function formatServiceHours(
 /** "Rs. 30–35", or "Rs. 30" when the band's min and max are equal. Returns
  * null when either amount is missing, non-numeric, non-finite, or negative,
  * so the caller shows an unavailable state rather than "Rs. undefined" or
- * "Rs. NaN". */
-export function formatFareRange(fare: FareOut): string | null {
+ * "Rs. NaN". Accepts any min/max pair (a single FareOut band or a summed
+ * JourneyFareOut total). */
+export function formatFareRange(fare: FareAmounts): string | null {
   const { fare_npr_min: min, fare_npr_max: max } = fare;
   if (!isValidAmount(min) || !isValidAmount(max)) return null;
   return min === max ? `Rs. ${formatNpr(min)}` : `Rs. ${formatNpr(min)}–${formatNpr(max)}`;

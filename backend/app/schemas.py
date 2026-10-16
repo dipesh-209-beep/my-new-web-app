@@ -214,6 +214,36 @@ class FareOut(BaseModel):
     verification_note: Optional[str] = None
 
 
+class JourneyFareOut(BaseModel):
+    """A journey's estimated total fare: the sum of its ride legs' own fare
+    bands (see api/routing.py). Deliberately NOT a `FareOut` -- a sum of
+    bands has no single band id or distance range, and inventing one would
+    make the aggregate masquerade as a real `fare_rules` row.
+
+    `complete` is True only when *every* ride leg matched a fare band, so
+    `fare_npr_min`/`fare_npr_max` are then the full journey total. When a
+    ride leg had no matching band, `complete` is False and the min/max only
+    cover the legs that *did* match -- a caller must say so rather than
+    present a partial sum as the total. A journey with no priced ride leg
+    (every band missing, or no ride leg at all) returns `fare = None` on the
+    result, so a fully unavailable fare is never confused with a zero fare.
+    """
+
+    fare_npr_min: float
+    fare_npr_max: float
+    # True when priced_leg_count == ride_leg_count (and at least one leg).
+    complete: bool
+    # Ride legs on the journey, and how many of them a fare band covered.
+    # priced_leg_count < ride_leg_count is exactly what makes `complete`
+    # False; both are exposed so the UI can explain the gap honestly.
+    ride_leg_count: int
+    priced_leg_count: int
+    # The distinct verification notes carried by the bands that matched
+    # ("PENDING confirmation against the official gazette", for now),
+    # joined; None when none carried a note.
+    verification_note: Optional[str] = None
+
+
 class RouteLeg(BaseModel):
     """One uninterrupted ride on a single route, part of a route-finder result."""
     route_id: str
@@ -248,6 +278,13 @@ class RouteLeg(BaseModel):
     # This is the labeled-approximate figure (see
     # RouteFinderResult.total_estimated_duration_s), not a live ETA.
     estimated_duration_s: Optional[float] = None
+    # The distance-banded fare estimate for THIS ride leg -- its own ridden
+    # distance looked up in fare_rules. None for a walking-transfer leg, a
+    # zero-length ride leg, or a ride leg no band covers. The journey total
+    # is the sum of these (see RouteFinderResult.fare / JourneyFareOut), so
+    # a multi-transfer trip is charged once per bus boarded rather than once
+    # over the summed distance.
+    fare: Optional[FareOut] = None
 
 
 # Which distance basis a route result's figures are on. One basis is chosen
@@ -316,12 +353,13 @@ class RouteAlternative(BaseModel):
     total_distance_source: Optional[DistanceSource] = None
     transfer_count: int
     legs: list[RouteLeg]
-    # This option's own fare, computed on the ride-leg distance only
-    # (walking transfers contribute distance to the trip but nothing to
-    # the bus fare), on the same distance basis as `total_cost` (see
-    # total_distance_source). None when there's no ride leg or no fare rule
-    # matches.
-    fare: Optional[FareOut] = None
+    # This option's own fare, the sum of its ride legs' fare bands (walking
+    # transfers contribute distance to the trip but nothing to the bus
+    # fare), on the same distance basis as `total_cost` (see
+    # total_distance_source). `complete` is False when any ride leg had no
+    # matching band; None when there's no ride leg or no leg could be
+    # priced. Each leg's own band is on `RouteLeg.fare`.
+    fare: Optional[JourneyFareOut] = None
     # Sum of every leg's estimated_duration_s plus an assumed per-ride
     # boarding wait (see api/routing.py). Labeled approximation, on the
     # same distance basis as total_cost and the same basis as
@@ -348,11 +386,13 @@ class RouteFinderResult(BaseModel):
     total_distance_source: Optional[DistanceSource] = None
     transfer_count: int
     legs: list[RouteLeg]
-    # Fare for the trip, computed on the ride-leg distance only (walking
-    # transfers contribute distance but nothing to the bus fare), on the
-    # same distance basis as `total_cost` (see total_distance_source). None
-    # when there's no ride leg or no fare rule matches.
-    fare: Optional[FareOut] = None
+    # Fare for the trip: the sum of each ride leg's own distance-banded fare
+    # estimate (walking transfers contribute distance but nothing to the
+    # bus fare), on the same distance basis as `total_cost` (see
+    # total_distance_source). `complete` is False when any ride leg had no
+    # matching band; None when there's no ride leg or no leg could be
+    # priced. Each leg's own band is on `RouteLeg.fare`.
+    fare: Optional[JourneyFareOut] = None
     alternatives: list[RouteAlternative] = []
     # Sum of every leg's estimated_duration_s plus an assumed per-ride
     # boarding wait -- time at fixed assumed speeds over each leg's
