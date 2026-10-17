@@ -49,6 +49,8 @@ function mockBrowser(
     total: routes.length,
     loading: false,
     loadingMore: false,
+    error: null,
+    retry: vi.fn(),
     searchQuery: "",
     setSearchQuery: vi.fn(),
     visibleRouteId: null,
@@ -65,6 +67,112 @@ function mockBrowser(
     ...overrides,
   } as ReturnType<typeof useRouteBrowser>);
 }
+
+describe("RoutesPage error and retry", () => {
+  it("shows the route list on a successful non-empty response", () => {
+    mockBrowser([makeRoute({ route_name: "Ring Road" })]);
+
+    render(<RoutesPage />);
+
+    expect(screen.getByText("Ring Road")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows the genuine empty state when the server returns no routes", () => {
+    mockBrowser([], { total: 0 });
+
+    render(<RoutesPage />);
+
+    expect(screen.getByText("No routes available.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows an error instead of the empty state when the request fails", () => {
+    mockBrowser([], {
+      total: 0,
+      error: "Couldn't load routes. Check your connection and try again.",
+    });
+
+    render(<RoutesPage />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn't load routes/i);
+    expect(screen.queryByText("No routes available.")).toBeNull();
+  });
+
+  it("does not announce a no-match status while the list request has failed", () => {
+    mockBrowser([], { total: 0, searchQuery: "zzz", error: "Couldn't load routes." });
+
+    render(<RoutesPage />);
+
+    expect(screen.getByRole("status")).not.toHaveTextContent(/no routes match/i);
+  });
+
+  it("Retry calls the hook's retry action", () => {
+    const retry = vi.fn();
+    mockBrowser([], { total: 0, error: "Couldn't load routes.", retry });
+
+    render(<RoutesPage />);
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("RoutesPage retained results on a failed refresh", () => {
+  const errorMsg = "Couldn't load routes. Check your connection and try again.";
+
+  function renderStale() {
+    mockBrowser(
+      [
+        makeRoute({ route_id: "R1", route_name: "One" }),
+        makeRoute({ route_id: "R2", route_name: "Two" }),
+      ],
+      { total: 2, error: errorMsg }
+    );
+    render(<RoutesPage />);
+  }
+
+  it("keeps the previously loaded rows and labels them as stale", () => {
+    renderStale();
+
+    expect(screen.getByText("One")).toBeInTheDocument();
+    expect(screen.getByText("Two")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(errorMsg);
+    expect(screen.getByRole("alert")).toHaveTextContent(/previous results/i);
+  });
+
+  it("does not report a fresh count or a 'found' status for stale rows", () => {
+    renderStale();
+
+    expect(screen.queryByText(/routes across the Valley/)).toBeNull();
+    expect(screen.getByText(/^Showing 2 previously loaded routes$/)).toBeInTheDocument();
+
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(/previously loaded/i);
+    expect(status).not.toHaveTextContent(/found/i);
+  });
+
+  it("keeps the Retry action on the stale error", () => {
+    const retry = vi.fn();
+    mockBrowser([makeRoute()], { total: 1, error: errorMsg, retry });
+
+    render(<RoutesPage />);
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the plain error with no stale wording when nothing was retained", () => {
+    mockBrowser([], { total: 0, error: errorMsg });
+
+    render(<RoutesPage />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(errorMsg);
+    expect(screen.getByRole("alert")).not.toHaveTextContent(/previous/i);
+    expect(screen.queryByText(/previously loaded/i)).toBeNull();
+    expect(screen.queryByText("No routes available.")).toBeNull();
+  });
+});
 
 describe("RoutesPage search field labelling", () => {
   it("names the search field with real label markup, independent of its placeholder", () => {

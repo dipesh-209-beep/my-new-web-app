@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { RouteDirection, RouteGeometry, RouteStopEntry, RouteSummary } from "@/types/route";
-import { getRouteGeometry, getRouteStops, getRoutes } from "@/lib/api";
+import { ApiError, getRouteGeometry, getRouteStops, getRoutes } from "@/lib/api";
 
 const PAGE_SIZE = 50;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -10,6 +10,13 @@ interface UseRouteBrowserResult {
   total: number;
   loading: boolean;
   loadingMore: boolean;
+  /** Non-null when the latest route-list request failed. The list may still
+   * hold results from an earlier successful load, so callers must show this
+   * rather than the empty state. Cleared on the next success. */
+  error: string | null;
+  /** Re-runs the current route-list query through the same debounced fetch
+   * path, for a Retry action. Does not touch the visible route's stops. */
+  retry: () => void;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
   visibleRouteId: string | null;
@@ -50,7 +57,11 @@ export function useRouteBrowser(): UseRouteBrowserResult {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  // Bumped by retry() to re-run the debounced list effect on demand without
+  // re-implementing the fetch; the effect depends on both values below.
+  const [reloadToken, setReloadToken] = useState(0);
 
   const [visibleRouteId, setVisibleRouteId] = useState<string | null>(null);
   const [direction, setDirectionState] = useState<RouteDirection>("forward");
@@ -111,12 +122,16 @@ export function useRouteBrowser(): UseRouteBrowserResult {
   }
 
   // Debounced search -- re-fetch page 1 whenever the query settles,
-  // rather than on every keystroke.
+  // rather than on every keystroke. Also re-runs when retry() bumps
+  // reloadToken. The `cancelled` cleanup means a superseded request can
+  // never overwrite the state of a newer one, so retries and rapid query
+  // changes are race-safe.
   useEffect(() => {
     let cancelled = false;
 
     const timer = setTimeout(async () => {
       setLoading(true);
+      setError(null);
       try {
         const data = await getRoutes({
           limit: PAGE_SIZE,
@@ -127,9 +142,15 @@ export function useRouteBrowser(): UseRouteBrowserResult {
           setRoutes(data.items);
           setTotal(data.total);
         }
-      } catch {
-        // Route browser is supplementary -- fail silently, panel just
-        // shows "no routes" rather than an error banner.
+      } catch (err) {
+        if (cancelled) return;
+        // A failed request must not read as "no routes". Keep any routes
+        // already on screen (stale-but-usable) and surface the failure.
+        setError(
+          err instanceof ApiError && err.kind === "timeout"
+            ? "Loading routes is taking longer than usual. Try again in a moment."
+            : "Couldn't load routes. Check your connection and try again."
+        );
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -139,7 +160,20 @@ export function useRouteBrowser(): UseRouteBrowserResult {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [searchQuery]);
+  }, [searchQuery, reloadToken]);
+
+  function retry() {
+    // Clear the error and mark the list loading immediately. The effect below
+    // still waits out the debounce before issuing the request, so without this
+    // there is a window with `error` cleared but `loading` still false -- long
+    // enough for a caller gating its empty state on
+    // `!loading && !error && routes.length === 0` to flash "no routes" before
+    // the request starts. `loading` is the same flag the debounced effect sets,
+    // so this reuses it rather than adding new state.
+    setError(null);
+    setLoading(true);
+    setReloadToken((token) => token + 1);
+  }
 
   async function loadMore() {
     // The Load more button uses aria-disabled (not disabled) while a page is
@@ -257,6 +291,8 @@ export function useRouteBrowser(): UseRouteBrowserResult {
     total,
     loading,
     loadingMore,
+    error,
+    retry,
     searchQuery,
     setSearchQuery,
     visibleRouteId,

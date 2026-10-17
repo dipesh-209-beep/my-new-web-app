@@ -492,4 +492,89 @@ describe("useRouteBrowser", () => {
     });
     await waitFor(() => expect(result.current.loadingMore).toBe(false));
   });
+
+  it("surfaces an error (not an empty list) when the route-list request fails", async () => {
+    vi.spyOn(api, "getRoutes").mockRejectedValue(new api.ApiError("network down", "network"));
+
+    const { result } = renderHook(() => useRouteBrowser());
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.routes).toHaveLength(0);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("treats a successful empty response as empty, not an error", async () => {
+    vi.spyOn(api, "getRoutes").mockResolvedValue({ total: 0, limit: 50, offset: 0, items: [] });
+
+    const { result } = renderHook(() => useRouteBrowser());
+
+    await waitFor(() => expect(result.current.error).toBeNull());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.routes).toHaveLength(0);
+  });
+
+  it("retry re-requests the route list and recovers", async () => {
+    const getRoutesSpy = vi
+      .spyOn(api, "getRoutes")
+      .mockRejectedValueOnce(new api.ApiError("network down", "network"))
+      .mockResolvedValueOnce({ total: 1, limit: 50, offset: 0, items: [makeRoute()] });
+
+    const { result } = renderHook(() => useRouteBrowser());
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+
+    act(() => {
+      result.current.retry();
+    });
+
+    await waitFor(() => expect(result.current.routes).toHaveLength(1));
+    expect(result.current.error).toBeNull();
+    expect(getRoutesSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the list loading on retry so the empty state cannot flash before the debounced refetch", async () => {
+    vi.spyOn(api, "getRoutes").mockRejectedValue(new api.ApiError("network down", "network"));
+
+    const { result } = renderHook(() => useRouteBrowser());
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.loading).toBe(false);
+
+    act(() => {
+      result.current.retry();
+    });
+
+    // Synchronously after retry: error cleared AND loading true. A caller that
+    // gates its empty state on `!loading && !error && routes.length === 0`
+    // therefore has no window in which to show it before the 300 ms debounce
+    // fires -- the bug this guards against.
+    expect(result.current.error).toBeNull();
+    expect(result.current.loading).toBe(true);
+    expect(result.current.routes).toHaveLength(0);
+  });
+
+  it("retry reissues the current search query and recovers", async () => {
+    const getRoutesSpy = vi
+      .spyOn(api, "getRoutes")
+      .mockResolvedValueOnce({ total: 0, limit: 50, offset: 0, items: [] })
+      .mockRejectedValueOnce(new api.ApiError("network down", "network"))
+      .mockResolvedValueOnce({ total: 1, limit: 50, offset: 0, items: [makeRoute()] });
+
+    const { result } = renderHook(() => useRouteBrowser());
+    await waitFor(() => expect(getRoutesSpy).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      result.current.setSearchQuery("ring");
+    });
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(getRoutesSpy).toHaveBeenLastCalledWith({ limit: 50, offset: 0, q: "ring" });
+
+    act(() => {
+      result.current.retry();
+    });
+    await waitFor(() => expect(result.current.routes).toHaveLength(1));
+
+    expect(result.current.error).toBeNull();
+    expect(getRoutesSpy).toHaveBeenCalledTimes(3);
+    // Retry keeps the same query (and page offset) -- it does not reset search.
+    expect(getRoutesSpy).toHaveBeenLastCalledWith({ limit: 50, offset: 0, q: "ring" });
+  });
 });

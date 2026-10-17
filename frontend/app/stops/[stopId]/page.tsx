@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ApiError, getStop, getStopRoutes } from "@/lib/api";
 import SuggestionBox from "@/components/user/SuggestionBox";
+import InlineAlert from "@/components/ui/InlineAlert";
 import { RouteOut, Stop } from "@/types/route";
 
 const BusMap = dynamic(() => import("@/components/BusMap"), {
@@ -24,9 +25,14 @@ export default function StopDetailPage() {
   const [stop, setStop] = useState<Stop | null>(null);
   const [routes, setRoutes] = useState<RouteOut[]>([]);
   const [routesLoading, setRoutesLoading] = useState(true);
+  const [routesError, setRoutesError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bumped by the serving-routes Retry button so its own effect re-runs.
+  // Kept separate from the stop-details effect so retrying never reloads
+  // the stop itself.
+  const [routesReloadToken, setRoutesReloadToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,25 +58,49 @@ export default function StopDetailPage() {
       }
     }
 
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [stopId]);
+
+  // The serving-routes request is supplementary to the stop's own details,
+  // so it lives in its own effect with its own error state. A failure here
+  // must never take the stop down, and a retry (bumping routesReloadToken)
+  // re-runs only this request. The `cancelled` guard keeps a superseded
+  // request from overwriting a newer one.
+  useEffect(() => {
+    let cancelled = false;
+
     async function loadRoutes() {
       setRoutesLoading(true);
+      setRoutesError(null);
       try {
         const data = await getStopRoutes(stopId);
         if (!cancelled) setRoutes(data);
-      } catch {
-        // Supplementary to the stop's own info -- fail silently, the
-        // section below just shows nothing rather than an error banner.
+      } catch (err) {
+        if (cancelled) return;
+        setRoutesError(
+          err instanceof ApiError && err.kind === "timeout"
+            ? "Loading the routes for this stop is taking longer than usual. Try again."
+            : "Couldn't load the routes serving this stop. Try again."
+        );
       } finally {
         if (!cancelled) setRoutesLoading(false);
       }
     }
 
-    load();
     loadRoutes();
     return () => {
       cancelled = true;
     };
-  }, [stopId]);
+  }, [stopId, routesReloadToken]);
+
+  function retryRoutes() {
+    // Clear immediately so the alert goes away, then re-run the effect.
+    setRoutesError(null);
+    setRoutesReloadToken((token) => token + 1);
+  }
 
   // Every state gets a title that names the stop the URL asked for, so a
   // loading, missing or errored page can never keep a previously-viewed
@@ -181,6 +211,17 @@ export default function StopDetailPage() {
 
       <div>
         <h2 className="mb-2 text-sm font-medium text-ink">Routes serving this stop</h2>
+        {routesError && (
+          <InlineAlert
+            variant="error"
+            action={{
+              label: "Retry",
+              onClick: retryRoutes,
+            }}
+          >
+            {routesError}
+          </InlineAlert>
+        )}
         {routesLoading && (
           <div className="flex flex-col gap-1.5">
             {[...Array(3)].map((_, i) => (
@@ -188,7 +229,7 @@ export default function StopDetailPage() {
             ))}
           </div>
         )}
-        {!routesLoading && routes.length === 0 && (
+        {!routesLoading && !routesError && routes.length === 0 && (
           <p className="text-sm text-ink-secondary">
             No routes currently list this stop. Search a specific origin and destination on the{" "}
             <Link href="/" className="text-accent-blue hover:underline">

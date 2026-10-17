@@ -5,9 +5,10 @@ import Link from "next/link";
 import { useRouteBrowser } from "@/hooks/useRouteBrowser";
 import { formatRouteDistance } from "@/lib/routeDistance";
 import { BusIcon } from "@/components/icons/TransitIcons";
+import InlineAlert from "@/components/ui/InlineAlert";
 
 export default function RoutesPage() {
-  const { routes, total, loading, loadingMore, searchQuery, setSearchQuery, hasMore, loadMore } =
+  const { routes, total, loading, loadingMore, error, retry, searchQuery, setSearchQuery, hasMore, loadMore } =
     useRouteBrowser();
 
   useEffect(() => {
@@ -52,20 +53,32 @@ export default function RoutesPage() {
   // no rows yet, so the initial "Browse every route…" flash is not announced.
   const trimmedQuery = searchQuery.trim();
   const routeNoun = total === 1 ? "route" : "routes";
+  // A failed refresh keeps the previously loaded rows on screen (useful, so not
+  // discarded), but they are not results of the failed request. Track that so
+  // the count, the live-region status and the error copy can say so rather than
+  // presenting them as fresh.
+  const hasStaleResults = error !== null && routes.length > 0;
+  const shownNoun = routes.length === 1 ? "route" : "routes";
   const listStatus = loadingMore
     ? "Loading more routes…"
-    : routes.length > 0
-      ? `${total} ${routeNoun} found${hasMore ? `, ${routes.length} shown` : ""}.`
-      : trimmedQuery && !loading
-        ? `No routes match "${trimmedQuery}".`
-        : "";
+    : hasStaleResults
+      ? `Couldn't refresh the route list. Showing ${routes.length} previously loaded ${shownNoun}.`
+      : routes.length > 0
+        ? `${total} ${routeNoun} found${hasMore ? `, ${routes.length} shown` : ""}.`
+        : !error && trimmedQuery && !loading
+          ? `No routes match "${trimmedQuery}".`
+          : "";
 
   return (
     <div className="mx-auto flex h-full max-w-3xl flex-col gap-4 overflow-y-auto p-4">
       <div>
         <h1 className="text-xl font-semibold tracking-tight text-ink">Browse routes</h1>
         <p className="mt-1 text-sm text-ink-secondary">
-          {total > 0 ? `${total} routes across the Valley` : "Browse every route in the network"}
+          {hasStaleResults
+            ? `Showing ${routes.length} previously loaded ${shownNoun}`
+            : total > 0
+              ? `${total} routes across the Valley`
+              : "Browse every route in the network"}
         </p>
       </div>
 
@@ -84,6 +97,12 @@ export default function RoutesPage() {
         className="w-full rounded-md border border-route-line bg-surface-raised px-3 py-2.5 text-base text-ink outline-none focus:border-accent-green"
       />
 
+      {error && (
+        <InlineAlert variant="error" action={{ label: "Retry", onClick: retry }}>
+          {hasStaleResults ? `${error} Showing the previous results.` : error}
+        </InlineAlert>
+      )}
+
       {loading && routes.length === 0 && (
         <div className="flex flex-col gap-2">
           {[...Array(6)].map((_, i) => (
@@ -92,7 +111,7 @@ export default function RoutesPage() {
         </div>
       )}
 
-      {!loading && routes.length === 0 && (
+      {!loading && !error && routes.length === 0 && (
         <p className="text-sm text-ink-secondary">
           {searchQuery.trim()
             ? `No routes match "${searchQuery.trim()}".`
