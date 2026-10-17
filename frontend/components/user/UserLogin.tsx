@@ -77,7 +77,7 @@ export default function UserLogin({ onDone }: UserLoginProps) {
             type="button"
             onClick={() => switchMode("login")}
             aria-pressed={mode === "login"}
-            className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
+            className={`inline-flex min-h-11 items-center justify-center rounded-md px-2.5 py-1 font-medium transition-colors ${
               mode === "login" ? "bg-white text-ink shadow-sm" : "text-ink-secondary hover:text-ink"
             }`}
           >
@@ -87,7 +87,7 @@ export default function UserLogin({ onDone }: UserLoginProps) {
             type="button"
             onClick={() => switchMode("register")}
             aria-pressed={mode === "register"}
-            className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
+            className={`inline-flex min-h-11 items-center justify-center rounded-md px-2.5 py-1 font-medium transition-colors ${
               mode === "register" ? "bg-white text-ink shadow-sm" : "text-ink-secondary hover:text-ink"
             }`}
           >
@@ -142,7 +142,7 @@ export default function UserLogin({ onDone }: UserLoginProps) {
       <button
         type="submit"
         disabled={submitting}
-        className="mt-4 w-full rounded-md bg-brand px-3 py-2 text-sm font-semibold text-ink transition-colors hover:bg-brand-dark disabled:opacity-50"
+        className="mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-md bg-brand px-3 py-2 text-sm font-semibold text-ink transition-colors hover:bg-brand-dark disabled:opacity-50"
       >
         {submitting ? (mode === "login" ? "Signing in…" : "Creating account…") : mode === "login" ? "Sign in" : "Create account"}
       </button>

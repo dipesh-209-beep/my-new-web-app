@@ -221,7 +221,7 @@ export default function NavBar() {
                     logout();
                     setAuthOpen(false);
                   }}
-                  className="mt-3 rounded-md border border-route-line px-3 py-1.5 text-sm text-ink-secondary transition-colors hover:border-accent-red hover:text-accent-red"
+                  className="mt-3 inline-flex min-h-11 items-center rounded-md border border-route-line px-3 py-1.5 text-sm text-ink-secondary transition-colors hover:border-accent-red hover:text-accent-red"
                 >
                   Sign out
                 </button>

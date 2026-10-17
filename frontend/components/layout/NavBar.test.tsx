@@ -184,3 +184,23 @@ describe("NavBar sign-in popup narrow-screen sizing", () => {
     expect(group).not.toHaveClass("ml-auto");
   });
 });
+
+describe("NavBar sign-out touch target", () => {
+  // The sign-out action sits inside the account popup and used to be only
+  // ~32px tall (px-3 py-1.5). It now carries the app-wide 44px convention
+  // (WCAG 2.5.5), same as the other authored controls -- asserted by class
+  // because jsdom has no layout engine.
+  it("gives the sign-out action the 44px min height", async () => {
+    setUserToken("test-jwt");
+    setUsername("dipesh");
+    const user = userEvent.setup();
+    renderNav();
+
+    const trigger = await screen.findByRole("button", { name: "Account: dipesh" });
+    await user.click(trigger);
+
+    const signOut = screen.getByRole("button", { name: "Sign out" });
+    expect(signOut).toHaveClass("min-h-11");
+    expect(signOut).toHaveClass("inline-flex");
+  });
+});

@@ -165,7 +165,7 @@ export default function RoutesPage() {
           type="button"
           onClick={handleLoadMore}
           aria-disabled={loadingMore}
-          className="self-center rounded-md border border-route-line px-4 py-2 text-sm text-ink-secondary hover:border-accent-green hover:text-accent-green aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+          className="self-center rounded-md border border-route-line px-4 py-2 text-sm text-ink-secondary hover:border-accent-green hover:text-accent-green-text aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
         >
           {loadingMore ? "Loading…" : "Load more"}
         </button>

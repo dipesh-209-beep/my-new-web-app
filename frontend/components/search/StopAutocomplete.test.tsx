@@ -145,6 +145,25 @@ describe("StopAutocomplete keyboard and focus behavior", () => {
     expect(combobox).not.toHaveAttribute("aria-controls");
   });
 
+  it("does not advertise expanded once the query is cleared to empty", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const combobox = screen.getByRole("combobox", { name: "From" });
+
+    await user.type(combobox, "rat");
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeInTheDocument());
+    expect(combobox).toHaveAttribute("aria-expanded", "true");
+
+    // Clearing fires onChange, which sets isOpen true again, but an empty
+    // query yields no results -- so no listbox renders. aria-expanded must
+    // describe that absent popup, not the leftover isOpen flag.
+    await user.clear(combobox);
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(combobox).toHaveAttribute("aria-expanded", "false");
+    expect(combobox).not.toHaveAttribute("aria-controls");
+  });
+
   it("keeps a valid active descendant when the result list shrinks", async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();

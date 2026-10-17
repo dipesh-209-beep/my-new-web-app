@@ -347,7 +347,7 @@ export default function SuggestionBox({ targetType, targetId, currentStops }: Su
                   className={`shrink-0 rounded-md px-3 py-1 text-sm font-medium transition-colors ${
                     s.voted_by_me === true
                       ? "border border-accent-green/40 bg-accent-green/10 text-accent-green-text"
-                      : "border border-route-line text-ink-secondary hover:border-accent-green hover:text-accent-green"
+                      : "border border-route-line text-ink-secondary hover:border-accent-green hover:text-accent-green-text"
                   } disabled:opacity-60`}
                 >
                   {s.voted_by_me === true ? "Backed" : "Back this"}

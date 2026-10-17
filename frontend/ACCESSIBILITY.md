@@ -1,6 +1,6 @@
 # Accessibility
 
-**Last reviewed: 2026-10-16**
+**Last reviewed: 2026-10-17**
 
 This is an honest assessment, not a conformance claim. **This application has
 not been audited against WCAG** and no conformance level (A, AA, or AAA) is
@@ -66,7 +66,8 @@ Verified by reading the source, not by audit:
   states listed under gap 3.
 - **Touch targets are at least 44×44 CSS px** (WCAG 2.5.5 Target Size) for the
   controls this project authors: nav links and the brand mark, the
-  sign-in/minimize/restore buttons, the autocomplete clear buttons, the
+  sign-in/minimize/restore buttons, the sign-in form's login/register mode
+  toggle and submit and the sign-out action, the autocomplete clear buttons, the
   origin/destination swap, "use my location"/"pick on map"/"+ Add a stop",
   the via-stop remove button, the Submit button, the map-layer and traffic
   toggle pills, the congestion day/hour selects and "Reset to now", the route
@@ -199,8 +200,9 @@ survives the mobile bottom sheet being minimized. It is deliberately minimal:
 the provenance note, the day/hour pickers and the numeric segment summary stay
 in the Traffic panel (`components/CongestionPanel.tsx`), which still scrolls
 with the sheet body, and the per-segment popups pair colour with a text label
-and a ratio. The key is hidden when the overlay is off or has no segments.
-Colour contrast of the ramp itself is still unmeasured (see gap 5).
+and a ratio. The key is hidden when the overlay is off or has no segments,
+and its bar (like the panel's) carries an outline so the legend reads as a
+bounded object — see gap 5.
 
 ### 3. Automated runtime testing covers structure, not appearance
 
@@ -265,14 +267,29 @@ the plugin fixes the behaviour.
   text-only variants in `accent.{green,yellow,red}-text` that clear 4.5:1
   on both the `/5` and `/10` tints.
 
-  **What is still not measured:** the five-stop congestion ramp
-  (`lib/congestionColor.ts`) has not been checked at all. Adjacent
-  green/yellow/orange/red stops are not required to contrast with each
-  other, but the extremes are used as text/background in places and should
-  be measured. There is also no automated check — nothing in CI catches a
-  future palette regression — and the two remaining `#16A34A` links on
-  `/routes/[routeId]` ("← Back to all routes", on white) still sit at
-  3.30:1, as does the `hover:text-accent-green` on the breadcrumb link.
+  **The congestion ramp is now measured, and the legend is bounded — but the
+  fills are not all conformant.** The five-stop ramp (`lib/congestionColor.ts`)
+  was measured against white: the light end fails WCAG 1.4.11 (3:1 for
+  non-text) — `#22C55E` 2.28:1, `#F59E0B` 2.15:1, `#F97316` 2.80:1 — while
+  `#EF4444` (3.76:1) and `#7F1D1D` (10.02:1) clear it. These colours are
+  **never used as text or as a text background** anywhere in the app, so
+  WCAG 1.4.3 does not apply to them (the green/yellow/red *text* issues above
+  are the separate `accent.*-text` tokens). To keep each legend readable as a
+  graphical object, both the Traffic panel bar and the on-map key bar now
+  carry a 1 px `ink.tertiary` (`#767194`, 4.61:1) outline, and the key's
+  container border was raised from `route.line` (1.35:1) to the same neutral.
+  `lib/contrast.test.ts` guards the outline's 3:1 and pins the measured
+  gradient-fill ratios, so CI detects any drift — but it does not enforce a
+  3:1 minimum for every fill. **What remains:** the outline bounds the legend
+  but does **not** make every fill independently compliant — at the light end
+  severity is still conveyed to sighted users mainly by hue. The green *link*
+  text was the last measured text failure: the `#16A34A` back-links on
+  `/routes/[routeId]` ("← Back to all routes", on white) sat at 3.30:1, as did
+  the `hover:text-accent-green` on that page's breadcrumb and on `/routes`'
+  "Load more" and the suggestion "Back this" hover. All now use the existing
+  `accent.green-text` token (`#117E39`, 5.16:1 on white), which
+  `lib/contrast.test.ts` pins at >=4.5:1. `#16A34A` remains the map/line green,
+  not a text colour.
 - **Live regions** for the *other* asynchronous updates. All four route-search
   outcomes (loading / found / no-route / error) are live regions in the markup;
   role, politeness and one-region-per-state are asserted in
@@ -300,6 +317,16 @@ the plugin fixes the behaviour.
   snap positions are now keyboard-selectable through a native radio group
   (`components/ui/SheetSnapControl.tsx`, mobile only), so a keyboard user can
   reach `half` without dragging; the drag handle stays a pointer-only gesture.
+  After a search succeeds on a narrow viewport, `useSheet.revealResults()`
+  (fired once per result by `hooks/useRevealResults.ts`) settles the sheet from
+  its `full` default to `half`, so both the map and the results stay usable;
+  it never overrides a chosen `minimize`/`half` and is not persisted. The
+  expand/collapse transition is subject to the project-wide
+  `prefers-reduced-motion` rule in `app/globals.css`. The reveal logic and the
+  reduced-motion-independent snap math are unit-tested
+  (`hooks/useSheet.test.ts`, `hooks/useRevealResults.test.ts`,
+  `lib/sheetSnap.test.ts`), not verified with a real screen reader or touch
+  device.
 - **Screen reader smoke tests** on the main flows: search, select a route,
   walk to a stop, and the `/admin` UI. No spoken pass is on record for any of
   them, so the marker keyboard work above is verified structurally and with a

@@ -139,9 +139,12 @@ function StopAutocompleteImpl({
   }
 
   const showEmptyState = isOpen && debouncedValue.trim().length > 0 && results.length === 0;
-  // The listbox element exists only in this state, so aria-controls is set
-  // only then -- an aria-controls that points at an absent id is worse than
-  // none at all.
+  // The listbox element exists only in this state, so both aria-controls and
+  // aria-expanded are driven from it rather than from `isOpen` alone. `isOpen`
+  // can be true with an empty query (clearing the field fires onChange →
+  // setIsOpen(true) but yields no results), where no listbox renders -- saying
+  // "expanded" then would advertise a popup that isn't there, and an
+  // aria-controls pointing at an absent id is worse than none at all.
   const listboxVisible = isOpen && (results.length > 0 || showEmptyState);
 
   // Check if current input matches a selected stop (for visual feedback).
@@ -161,7 +164,7 @@ function StopAutocompleteImpl({
           ref={inputRef}
           id={id}
           role="combobox"
-          aria-expanded={isOpen}
+          aria-expanded={listboxVisible}
           aria-controls={listboxVisible ? listboxId : undefined}
           aria-autocomplete="list"
           aria-activedescendant={

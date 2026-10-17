@@ -187,7 +187,7 @@ export default function RouteDetailPage() {
         <p className="text-sm text-ink">
           Route <span className="font-mono">{routeId}</span> doesn&apos;t exist.
         </p>
-        <Link href="/routes" className="text-sm text-accent-green hover:underline">
+        <Link href="/routes" className="text-sm text-accent-green-text hover:underline">
           ← Back to all routes
         </Link>
       </div>
@@ -200,7 +200,7 @@ export default function RouteDetailPage() {
         <p role="alert" className="text-sm text-accent-red">
           {error ?? "Something went wrong."}
         </p>
-        <Link href="/routes" className="text-sm text-accent-green hover:underline">
+        <Link href="/routes" className="text-sm text-accent-green-text hover:underline">
           ← Back to all routes
         </Link>
       </div>
@@ -214,7 +214,7 @@ export default function RouteDetailPage() {
 
   return (
     <div className="mx-auto flex h-full max-w-2xl flex-col gap-4 overflow-y-auto p-4">
-      <Link href="/routes" className="text-sm text-ink-secondary hover:text-accent-green">
+      <Link href="/routes" className="text-sm text-ink-secondary hover:text-accent-green-text">
         ← All routes
       </Link>
 
