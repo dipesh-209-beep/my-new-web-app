@@ -621,3 +621,80 @@ describe("RouteResultPanel announces async outcomes", () => {
     expect(screen.getByRole("region", { name: "Route results" })).toHaveFocus();
   });
 });
+
+describe("RouteResultPanel journey instructions", () => {
+  it("shows board, transfer and get-off steps for a two-bus journey without breaking selection", () => {
+    const firstRide = makeLeg({
+      route_id: "R1",
+      route_name: "Kalimati-Koteshwor",
+      board_stop: makeStop({ stop_id: "S1", stop_name: "Kalimati" }),
+      alight_stop: makeStop({ stop_id: "S2", stop_name: "Tripureshwor" }),
+      num_ride_segments: 4,
+    });
+    const walk = makeLeg({
+      route_id: "TRANSFER",
+      route_name: "Transfer (walk)",
+      board_stop: makeStop({ stop_id: "S2", stop_name: "Tripureshwor" }),
+      alight_stop: makeStop({ stop_id: "S3", stop_name: "Ratna Park" }),
+      num_ride_segments: 1,
+      estimated_duration_s: 180,
+    });
+    const secondRide = makeLeg({
+      route_id: "R2",
+      route_name: "Ratna Park-Budhanilkantha",
+      board_stop: makeStop({ stop_id: "S3", stop_name: "Ratna Park" }),
+      alight_stop: makeStop({ stop_id: "S4", stop_name: "Budhanilkantha" }),
+      num_ride_segments: 8,
+    });
+
+    renderPanel(makeResult({ transfer_count: 1, legs: [firstRide, walk, secondRide] }));
+
+    expect(screen.getByText("Board at Kalimati")).toBeTruthy();
+    expect(screen.getByText("Get off at Tripureshwor")).toBeTruthy();
+    expect(screen.getByText("Transfer")).toBeTruthy();
+    expect(screen.getByText("Walk from Tripureshwor to Ratna Park")).toBeTruthy();
+    expect(screen.getByText("Board at Ratna Park")).toBeTruthy();
+    expect(screen.getByText("Get off at Budhanilkantha")).toBeTruthy();
+    // Ranking/announcement behaviour is untouched by the presentation change.
+    expect(screen.getByRole("status")).toHaveTextContent("Recommended. Estimated");
+  });
+});
+
+describe("RouteResultPanel itinerary/map selection", () => {
+  it("reflects the selected leg and forwards a timeline click to onLegSelect", () => {
+    const firstRide = makeLeg({
+      route_id: "R1",
+      board_stop: makeStop({ stop_id: "S1", stop_name: "Kalimati" }),
+      alight_stop: makeStop({ stop_id: "S2", stop_name: "Tripureshwor" }),
+    });
+    const walk = makeLeg({
+      route_id: "TRANSFER",
+      route_name: "Transfer (walk)",
+      board_stop: makeStop({ stop_id: "S2", stop_name: "Tripureshwor" }),
+      alight_stop: makeStop({ stop_id: "S3", stop_name: "Ratna Park" }),
+      estimated_duration_s: 180,
+    });
+    const onLegSelect = vi.fn();
+
+    render(
+      <RouteResultPanel
+        result={{ found: true, ...makeResult({ transfer_count: 1, legs: [firstRide, walk] }) }}
+        loading={false}
+        error={null}
+        selectedIndex={-1}
+        onSelectedIndexChange={() => {}}
+        selectedLegIndex={1}
+        onLegSelect={onLegSelect}
+      />
+    );
+
+    const buttons = screen.getAllByRole("button", { name: /Board at|Walk from|Transfer/ });
+    expect(buttons).toHaveLength(2);
+    expect(buttons[1]).toHaveAttribute("aria-pressed", "true");
+    expect(buttons[0]).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(buttons[0]);
+    expect(onLegSelect).toHaveBeenCalledWith(0);
+  });
+});
+

@@ -55,6 +55,12 @@ interface BusMapProps {
    * segments between consecutive stops. Null/undefined falls back to the
    * straight-line connector (OSRM unavailable, or still loading). */
   browseRouteGeometry?: RouteGeometry | null;
+  /** Index of the result leg the itinerary marks as the current step, or
+   * null for none. Restyles the already-drawn leg; does not redraw. */
+  selectedLegIndex?: number | null;
+  /** Fired when a leg's line is clicked on the map, so the itinerary can
+   * mark the same step as current. */
+  onLegSelect?: (index: number) => void;
 }
 
 interface BusMapHandle {
@@ -73,6 +79,8 @@ const BusMap = forwardRef<BusMapHandle, BusMapProps>(({
   congestionSegments = [],
   browseRouteStops = [],
   browseRouteGeometry = null,
+  selectedLegIndex = null,
+  onLegSelect,
 }, ref) => {
   const routeBoundsRef = useRef<L.LatLngBounds | null>(null);
   const userLocationRef = useRef<LatLng | null>(userLocation);
@@ -132,6 +140,8 @@ const BusMap = forwardRef<BusMapHandle, BusMapProps>(({
     result,
     routeBoundsRef,
     onFitBounds: fitBounds,
+    selectedLegIndex,
+    onLegSelect: onLegSelect ?? null,
   });
 
   // Recenter control

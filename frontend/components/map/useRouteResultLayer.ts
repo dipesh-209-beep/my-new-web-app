@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import L from "leaflet";
 import { RouteSearchResult } from "@/types/route";
 import { LEG_COLORS, TRANSFER_ROUTE_ID } from "@/lib/constants";
@@ -21,6 +21,13 @@ interface UseRouteResultLayerProps {
   result: RouteSearchResult | null;
   routeBoundsRef: React.MutableRefObject<L.LatLngBounds | null>;
   onFitBounds: (bounds: L.LatLngBounds) => void;
+  /** Index of the leg highlighted as the rider's current step, or null for
+   * none. Highlighting only restyles the already-drawn leg polylines, so
+   * changing it never tears down the overlay or re-fits the map. */
+  selectedLegIndex?: number | null;
+  /** Fired when the rider clicks a leg's line on the map, so the itinerary
+   * can mark the same step as current. */
+  onLegSelect?: ((index: number) => void) | null;
 }
 
 export function useRouteResultLayer({
@@ -28,9 +35,46 @@ export function useRouteResultLayer({
   result,
   routeBoundsRef,
   onFitBounds,
+  selectedLegIndex = null,
+  onLegSelect = null,
 }: UseRouteResultLayerProps) {
   const legLayersRef = useRef<L.LayerGroup[]>([]);
   const legendRef = useRef<L.Control | null>(null);
+  // Per-leg line plus the weight it was drawn at, so a highlight can raise
+  // the selected leg and dim the rest without rebuilding the overlay.
+  const legPolylinesRef = useRef<({ polyline: L.Polyline; baseWeight: number } | undefined)[]>([]);
+
+  // Read through refs so the heavy draw effect never depends on the
+  // selection or the callback identity -- otherwise every selection would
+  // redraw every leg and re-fit the map, and an unstable callback would
+  // loop. The refs are synced in effects (not during render) and are only
+  // read from other effects, never from render.
+  const selectedLegIndexRef = useRef(selectedLegIndex);
+  const onLegSelectRef = useRef(onLegSelect);
+
+  useEffect(() => {
+    selectedLegIndexRef.current = selectedLegIndex;
+  }, [selectedLegIndex]);
+
+  useEffect(() => {
+    onLegSelectRef.current = onLegSelect;
+  }, [onLegSelect]);
+
+  const applyLegHighlight = useCallback((selected: number | null) => {
+    legPolylinesRef.current.forEach((entry, i) => {
+      if (!entry) return;
+      entry.polyline.setStyle({
+        weight: i === selected ? entry.baseWeight + 3 : entry.baseWeight,
+        opacity: selected === null || i === selected ? 1 : 0.35,
+      });
+    });
+  }, []);
+
+  // Restyle on selection change only; the draw effect below applies the
+  // initial highlight after (re)building the legs.
+  useEffect(() => {
+    applyLegHighlight(selectedLegIndex);
+  }, [selectedLegIndex, applyLegHighlight]);
 
   useEffect(() => {
     if (!map) return;
@@ -40,6 +84,7 @@ export function useRouteResultLayer({
     legLayersRef.current = [];
     legendRef.current?.remove();
     legendRef.current = null;
+    legPolylinesRef.current = [];
     routeBoundsRef.current = null;
 
     if (!result?.found || result.legs.length === 0) return;
@@ -146,6 +191,10 @@ export function useRouteResultLayer({
           kmLabel ? `<br/>${kmLabel}` : ""
         }`
       );
+      // Clicking a leg's line on the map marks the same step as current in
+      // the itinerary; the callback is read via ref so this never re-binds.
+      polyline.on("click", () => onLegSelectRef.current?.(i));
+      legPolylinesRef.current[i] = { polyline, baseWeight: isWalk ? 4 : 5 };
       legLayer.addLayer(polyline);
 
       bounds.push(...points);
@@ -156,6 +205,8 @@ export function useRouteResultLayer({
       routeBoundsRef.current = latLngBounds;
       onFitBounds(latLngBounds);
     }
+
+    applyLegHighlight(selectedLegIndexRef.current);
 
     // Legend control
     const LegendControl = L.Control.extend({
@@ -232,5 +283,5 @@ export function useRouteResultLayer({
       legLayersRef.current.forEach((layer) => layer.remove());
       legendRef.current?.remove();
     };
-  }, [map, result, routeBoundsRef, onFitBounds]);
+  }, [map, result, routeBoundsRef, onFitBounds, applyLegHighlight]);
 }

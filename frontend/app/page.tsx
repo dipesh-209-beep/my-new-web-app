@@ -84,6 +84,18 @@ function HomeInner() {
     if (selectedAltIndex !== -1) setSelectedAltIndex(-1);
   }
 
+  // Which leg of the shown result the itinerary marks as the rider's current
+  // step. Shared with BusMap so clicking a timeline step highlights the
+  // matching leg on the map, and clicking a leg on the map marks the step.
+  // Cleared whenever the result or the chosen alternative changes, because
+  // leg indices refer to the legs currently displayed.
+  const [selectedLegIndex, setSelectedLegIndex] = useState<number | null>(null);
+  const [lastLegSelection, setLastLegSelection] = useState({ result, alt: selectedAltIndex });
+  if (lastLegSelection.result !== result || lastLegSelection.alt !== selectedAltIndex) {
+    setLastLegSelection({ result, alt: selectedAltIndex });
+    if (selectedLegIndex !== null) setSelectedLegIndex(null);
+  }
+
   // The result BusMap actually draws: the primary result as-is, or the
   // primary result with the selected alternative's fields swapped in
   // (legs, total_cost, transfer_count, and now fare/estimate too). The
@@ -275,6 +287,8 @@ const congestion = useCongestion();
               selectedIndex={selectedAltIndex}
               onSelectedIndexChange={setSelectedAltIndex}
               onRetry={retry}
+              selectedLegIndex={selectedLegIndex}
+              onLegSelect={setSelectedLegIndex}
             />
 
             {stopsError && (
@@ -369,6 +383,8 @@ const congestion = useCongestion();
             congestionSegments={congestion.enabled ? congestion.segments : []}
             browseRouteStops={routeBrowser.visibleRouteStops}
             browseRouteGeometry={routeBrowser.visibleRouteGeometry}
+            selectedLegIndex={selectedLegIndex}
+            onLegSelect={setSelectedLegIndex}
           />
         </MapErrorBoundary>
       </div>

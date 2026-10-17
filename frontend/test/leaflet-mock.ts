@@ -22,6 +22,7 @@ export interface MockPolyline {
   points: unknown;
   options: Record<string, unknown>;
   popup: { content: string; options?: unknown } | null;
+  handlers: Record<string, (() => void)[]>;
 }
 
 export interface MockLayerGroup {
@@ -232,12 +233,25 @@ export function createLeafletMock() {
       makeMarker("marker", latlng, options)
     ),
     polyline: vi.fn((points: unknown, options: Record<string, unknown> = {}) => {
-      const poly: MockPolyline = { points, options, popup: null };
+      const poly: MockPolyline = { points, options, popup: null, handlers: {} };
       leafletState.polylines.push(poly);
       const api = {
         ...poly,
         bindPopup: (content: string, popupOptions?: unknown) => {
           poly.popup = { content, options: popupOptions };
+          return api;
+        },
+        setStyle: (opts: Record<string, unknown>) => {
+          Object.assign(poly.options, opts);
+          return api;
+        },
+        on: (event: string, handler: () => void) => {
+          (poly.handlers[event] ??= []).push(handler);
+          return api;
+        },
+        off: (event: string, handler: () => void) => {
+          const list = poly.handlers[event];
+          if (list) poly.handlers[event] = list.filter((h) => h !== handler);
           return api;
         },
         addTo: () => api,

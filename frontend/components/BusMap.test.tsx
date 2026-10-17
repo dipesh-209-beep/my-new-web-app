@@ -873,4 +873,79 @@ describe("BusMap", () => {
       });
     });
   });
+
+  describe("itinerary/map leg selection", () => {
+    function makeSelectionResult(): RouteSearchResult {
+      const board = makeStop({ stop_id: "S1", stop_name: "Kalimati" });
+      const transfer = makeStop({ stop_id: "S2", stop_name: "Tripureshwor" });
+      const alight = makeStop({ stop_id: "S3", stop_name: "Ratna Park" });
+      return {
+        found: true,
+        origin_stop_id: "S1",
+        destination_stop_id: "S3",
+        total_cost: 10,
+        transfer_count: 1,
+        fare: null,
+        alternatives: [],
+        legs: [
+          {
+            route_id: "R1",
+            route_name: "Route 1",
+            board_stop: board,
+            alight_stop: transfer,
+            num_ride_segments: 3,
+            stops: [board, transfer],
+            road_geometry: null,
+          },
+          {
+            route_id: "TRANSFER",
+            route_name: "Transfer (walk)",
+            board_stop: transfer,
+            alight_stop: alight,
+            num_ride_segments: 1,
+            stops: [transfer, alight],
+            road_geometry: null,
+          },
+        ],
+      };
+    }
+
+    it("highlights the selected leg and dims the rest without redrawing or re-fitting", () => {
+      const result = makeSelectionResult();
+      const { rerender } = render(<BusMap result={result} selectedLegIndex={0} />);
+
+      const lines = leafletState.polylines;
+      expect(lines).toHaveLength(2);
+      expect(lines[0].options.weight).toBe(8);
+      expect(lines[0].options.opacity).toBe(1);
+      expect(lines[1].options.weight).toBe(4);
+      expect(lines[1].options.opacity).toBe(0.35);
+
+      const map = leafletState.mapInstances[0];
+      expect(map.fitBoundsCalls).toHaveLength(1);
+
+      // Clearing the selection restyles in place. It must not rebuild the
+      // overlay -- that would re-fit the map and throw away per-leg
+      // visibility toggles.
+      rerender(<BusMap result={result} selectedLegIndex={null} />);
+      expect(lines[0].options.weight).toBe(5);
+      expect(lines[0].options.opacity).toBe(1);
+      expect(lines[1].options.weight).toBe(4);
+      expect(lines[1].options.opacity).toBe(1);
+      expect(map.fitBoundsCalls).toHaveLength(1);
+    });
+
+    it("reports the clicked leg, including a transfer, when its line is clicked on the map", () => {
+      const onLegSelect = vi.fn();
+      render(<BusMap result={makeSelectionResult()} onLegSelect={onLegSelect} />);
+
+      const lines = leafletState.polylines;
+      lines[0].handlers["click"]?.forEach((handler) => handler());
+      expect(onLegSelect).toHaveBeenLastCalledWith(0);
+
+      lines[1].handlers["click"]?.forEach((handler) => handler());
+      expect(onLegSelect).toHaveBeenLastCalledWith(1);
+      expect(onLegSelect).toHaveBeenCalledTimes(2);
+    });
+  });
 });

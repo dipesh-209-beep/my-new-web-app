@@ -19,6 +19,11 @@ interface RouteResultPanelProps {
   selectedIndex: number;
   onSelectedIndexChange: (index: number) => void;
   onRetry?: () => void;
+  /** Index of the leg the itinerary marks as the current step (shared with
+   * the map), or null for none. */
+  selectedLegIndex?: number | null;
+  /** Called when a timeline step is selected or deselected. */
+  onLegSelect?: (index: number | null) => void;
 }
 
 const ALTERNATIVE_LABELS: Record<RouteAlternative["label"], string> = {
@@ -102,6 +107,8 @@ export default function RouteResultPanel({
   selectedIndex,
   onSelectedIndexChange,
   onRetry,
+  selectedLegIndex = null,
+  onLegSelect,
 }: RouteResultPanelProps) {
   // The panel root is the one element that is the same node in every state
   // (loading / error / no-route / idle / found), so it is where focus can
@@ -384,7 +391,11 @@ export default function RouteResultPanel({
       </div>
 
       <div className="border-t border-route-line pt-3">
-        <RouteTimeline legs={legs} />
+        <RouteTimeline
+          legs={legs}
+          selectedLegIndex={selectedLegIndex}
+          onLegSelect={onLegSelect}
+        />
       </div>
     </div>
   );
