@@ -4,6 +4,14 @@ import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps } from "react";
 import CongestionPanel from "@/components/CongestionPanel";
 import { CongestionProvenance } from "@/types/route";
+import { CONGESTION_LEGEND_OUTLINE } from "@/lib/constants";
+
+/** jsdom normalizes an inline hex colour to `rgb(...)`; mirror that here. */
+function rgbString(hex: string): string {
+  const h = hex.replace("#", "");
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+  return `rgb(${r}, ${g}, ${b})`;
+}
 
 const PROVENANCE: CongestionProvenance = {
   is_live: false,
@@ -53,6 +61,15 @@ describe("CongestionPanel", () => {
     expect(screen.getByText(/area zones that aren/i)).toBeInTheDocument();
     // The overlay must still say it doesn't re-rank the routes below.
     expect(screen.getByText(/doesn.t re-rank the routes below/i)).toBeInTheDocument();
+  });
+
+  it("outlines the gradient key so its boundary clears non-text contrast", () => {
+    const { container } = renderPanel();
+    const bar = container.querySelector<HTMLElement>('div[style*="linear-gradient"]');
+    expect(bar).not.toBeNull();
+    expect(bar!.style.borderStyle).toBe("solid");
+    expect(bar!.style.borderWidth).toBe("1px");
+    expect(bar!.style.borderColor).toBe(rgbString(CONGESTION_LEGEND_OUTLINE));
   });
 
   it("distinguishes a failed load from a genuinely empty result", () => {

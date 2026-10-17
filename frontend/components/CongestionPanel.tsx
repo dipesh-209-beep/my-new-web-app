@@ -2,7 +2,7 @@
 
 import { useRef } from "react";
 import { LayersIcon } from "@/components/icons/TransitIcons";
-import { CONGESTION_COLORS } from "@/lib/constants";
+import { CONGESTION_COLORS, CONGESTION_LEGEND_OUTLINE } from "@/lib/constants";
 import LayerToggle from "@/components/ui/LayerToggle";
 import { CongestionProvenance } from "@/types/route";
 
@@ -178,6 +178,9 @@ export default function CongestionPanel({
               className="h-2 w-full rounded-full"
               style={{
                 background: `linear-gradient(to right, ${CONGESTION_COLORS.free_flow}, ${CONGESTION_COLORS.moderate}, ${CONGESTION_COLORS.heavy})`,
+                // Bounds the bar so the legend object stays perceivable on
+                // white (1.4.11); the fills themselves are not all >=3:1.
+                border: `1px solid ${CONGESTION_LEGEND_OUTLINE}`,
               }}
             />
             <div className="flex justify-between text-xs text-ink-secondary">

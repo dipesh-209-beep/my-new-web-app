@@ -9,6 +9,7 @@ import type {
 } from "@/types/route";
 import { leafletState } from "@/test/leaflet-mock";
 import { getCongestionColor } from "@/lib/congestionColor";
+import { CONGESTION_LEGEND_OUTLINE } from "@/lib/constants";
 
 vi.mock("leaflet", async () => {
   const { createLeafletMock } = await import("@/test/leaflet-mock");
@@ -55,6 +56,13 @@ function activeCongestionLegend() {
   return leafletState.controls.find(
     (c) => c.div?.getAttribute("aria-label") === "Congestion key" && !c.removed
   );
+}
+
+/** jsdom normalizes an inline hex colour to `rgb(...)`; mirror that here. */
+function rgbString(hex: string): string {
+  const h = hex.replace("#", "");
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 /** Dispatch a keydown the way markerA11y's handler expects, returning the
@@ -559,6 +567,20 @@ describe("BusMap", () => {
       expect(div.textContent).toContain("Low");
       expect(div.textContent).toContain("Moderate");
       expect(div.textContent).toContain("Heavy");
+    });
+
+    it("outlines the key bar and container so the legend object is perceivable", () => {
+      render(<BusMap allStops={stops} congestionSegments={[makeCongestionSegment()]} />);
+      const div = activeCongestionLegend()!.div!;
+      // The container border was `route.line` (#DEDCF0, 1.35:1) -- below the
+      // 3:1 non-text minimum. It and the gradient bar now share the compliant
+      // neutral outline.
+      expect(div.style.border).toBe(`1px solid ${rgbString(CONGESTION_LEGEND_OUTLINE)}`);
+      const bar = Array.from(div.children).find(
+        (el) => (el as HTMLElement).style.background.includes("linear-gradient")
+      ) as HTMLElement | undefined;
+      expect(bar).toBeDefined();
+      expect(bar!.style.border).toBe(`1px solid ${rgbString(CONGESTION_LEGEND_OUTLINE)}`);
     });
 
     it("places the key in the corner free of the other map controls", () => {

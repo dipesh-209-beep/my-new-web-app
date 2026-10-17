@@ -5,7 +5,7 @@ import L from "leaflet";
 import { CongestionSegment, Stop } from "@/types/route";
 import { escapeHtml } from "@/lib/escapeHtml";
 import { getCongestionColor } from "@/lib/congestionColor";
-import { CONGESTION_COLORS } from "@/lib/constants";
+import { CONGESTION_COLORS, CONGESTION_LEGEND_OUTLINE } from "@/lib/constants";
 
 interface UseCongestionLayerProps {
   map: L.Map | null;
@@ -101,7 +101,7 @@ export function useCongestionLayer({
         div.setAttribute("role", "group");
         div.setAttribute("aria-label", "Congestion key");
         div.style.background = "#ffffff";
-        div.style.border = "1px solid #DEDCF0";
+        div.style.border = `1px solid ${CONGESTION_LEGEND_OUTLINE}`;
         div.style.borderRadius = "4px";
         div.style.padding = "8px 10px";
         div.style.fontSize = "12px";
@@ -121,6 +121,9 @@ export function useCongestionLayer({
         bar.style.height = "8px";
         bar.style.borderRadius = "9999px";
         bar.style.background = `linear-gradient(to right, ${CONGESTION_COLORS.free_flow}, ${CONGESTION_COLORS.moderate}, ${CONGESTION_COLORS.heavy})`;
+        // Outline the bar so the legend object has a perceivable boundary on
+        // white (1.4.11); the fills are not all >=3:1 (see ACCESSIBILITY.md).
+        bar.style.border = `1px solid ${CONGESTION_LEGEND_OUTLINE}`;
         div.appendChild(bar);
 
         const labels = document.createElement("div");

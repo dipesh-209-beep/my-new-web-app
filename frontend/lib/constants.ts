@@ -17,6 +17,14 @@ export const CONGESTION_COLORS: Record<string, string> = {
   unknown: "#6B7280",
 };
 
+// Hairline outline for the two congestion legend bars (the Traffic panel bar
+// and the on-map key bar) and the on-map key's container border, so the
+// legend reads as a bounded graphical object on white: WCAG 1.4.11 wants
+// >=3:1 for non-text indicators, and `ink.tertiary` #767194 is 4.61:1. This
+// only bounds the legend -- it does NOT make the gradient FILLS compliant;
+// their light end sits below 3:1 (see ACCESSIBILITY.md, gap 5).
+export const CONGESTION_LEGEND_OUTLINE = "#767194";
+
 // Route-finder "transfer" legs are identified on the client by this sentinel
 // route_id (the backend's schemas emit "TRANSFER" for walking legs between
 // buses). Single source of truth so the "is this a walk?" check reads one
