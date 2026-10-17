@@ -9,7 +9,7 @@ RouteFinderResult response_model).
 Why this exists: tests/test_congestion_direct_vs_transfer.py proves the
 congestion scoring inside find_shortest_path in isolation, and the frontend
 tests prove the client *sends* the flag, but nothing proved the two ends
-meet -- REVIEW.md recorded `avoid_congestion=True` as "no integration
+meet -- `avoid_congestion=True` was recorded as having "no integration
 proof". These tests close that gap without a live database.
 
 No DB, Redis, OSRM or network is used:
