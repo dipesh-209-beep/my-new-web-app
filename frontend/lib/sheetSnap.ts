@@ -17,6 +17,18 @@ const MINIMIZED_HEIGHT_PX = 56;
 const HALF_HEIGHT_FRACTION = 0.45;
 const FULL_HEIGHT_FRACTION = 0.75;
 
+/** Width below which the bottom sheet is the mobile layout. Matches the
+ * Tailwind `md:` breakpoint (min-width: 768px) used throughout app/page.tsx,
+ * so JS-driven sheet decisions agree with the CSS that lays the page out. */
+export const MOBILE_BREAKPOINT_PX = 768;
+
+/** True on the narrow viewports where the search panel is an overlay sheet.
+ * On wider viewports the panel is a static column and its snap height is
+ * ignored (`md:max-h-none`), so sheet-position logic must not run there. */
+export function isNarrowViewport(viewportWidthPx: number): boolean {
+  return viewportWidthPx < MOBILE_BREAKPOINT_PX;
+}
+
 /** The sheet's target height in px for a given snap point, at the given
  * viewport height. */
 export function snapHeightPx(snap: SheetSnap, viewportHeightPx: number): number {

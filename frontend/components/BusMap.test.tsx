@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, act } from "@testing-library/react";
 import type {
   CongestionSegment,
   RouteLeg,
@@ -946,6 +946,28 @@ describe("BusMap", () => {
       lines[1].handlers["click"]?.forEach((handler) => handler());
       expect(onLegSelect).toHaveBeenLastCalledWith(1);
       expect(onLegSelect).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the selected-leg highlight when the map is resized for a sheet change", () => {
+      // app/page.tsx calls the map handle's invalidateSize() whenever the
+      // sheet expands/collapses. That must resize only -- not redraw the
+      // overlay, re-fit the map, or lose the Phase 3 selection.
+      const ref = { current: null as { invalidateSize: () => void } | null };
+      render(<BusMap ref={ref} result={makeSelectionResult()} selectedLegIndex={0} />);
+
+      const lines = leafletState.polylines;
+      expect(lines[0].options.weight).toBe(8);
+      expect(lines[1].options.opacity).toBe(0.35);
+
+      act(() => {
+        ref.current!.invalidateSize();
+      });
+
+      expect(leafletState.mapInstances[0].invalidateSize).toHaveBeenCalledTimes(1);
+      expect(lines[0].options.weight).toBe(8);
+      expect(lines[0].options.opacity).toBe(1);
+      expect(lines[1].options.opacity).toBe(0.35);
+      expect(leafletState.mapInstances[0].fitBoundsCalls).toHaveLength(1);
     });
   });
 });

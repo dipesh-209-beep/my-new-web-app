@@ -16,6 +16,7 @@ import { useCongestion } from "@/hooks/useCongestion";
 import { useRouteBrowser } from "@/hooks/useRouteBrowser";
 import { ChevronIcon, LayersIcon } from "@/components/icons/TransitIcons";
 import { useSheet } from "@/hooks/useSheet";
+import { useRevealResults } from "@/hooks/useRevealResults";
 import { MapErrorBoundary } from "@/components/MapErrorBoundary";
 import LayerToggle from "@/components/ui/LayerToggle";
 import SheetSnapControl from "@/components/ui/SheetSnapControl";
@@ -129,6 +130,7 @@ const congestion = useCongestion();
     showMinimized,
     liveHeightPx,
     toggleSidebarMinimized,
+    revealResults,
     handleHandlePointerDown,
     handleHandlePointerMove,
     handleHandlePointerUp,
@@ -138,6 +140,12 @@ const congestion = useCongestion();
   useEffect(() => {
     invalidateMap();
   }, [liveHeightPx, showMinimized, sidebarHydrated, invalidateMap]);
+
+  // Once a search succeeds on a narrow viewport, settle the sheet at "half"
+  // so both the map and the results are usable, instead of the default
+  // "full" sheet covering most of the screen. It does not fire for the
+  // loading, error or no-route states (see useRevealResults).
+  useRevealResults(result, revealResults);
 
   // One-time deep-link handling: /stops/[id] links here with
   // ?origin=<stop_id> or ?destination=<stop_id> (its "Set as From/To"

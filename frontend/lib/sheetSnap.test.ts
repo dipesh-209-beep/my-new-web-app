@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { clampDragHeightPx, nearestSnap, parseStoredSnap, snapHeightPx } from "./sheetSnap";
+import {
+  clampDragHeightPx,
+  isNarrowViewport,
+  nearestSnap,
+  parseStoredSnap,
+  snapHeightPx,
+} from "./sheetSnap";
 
 const VIEWPORT = 800;
 
@@ -47,6 +53,18 @@ describe("clampDragHeightPx", () => {
 
   it("clamps above the ceiling so the sheet never covers the navbar", () => {
     expect(clampDragHeightPx(10000, VIEWPORT)).toBeLessThan(VIEWPORT);
+  });
+});
+
+describe("isNarrowViewport", () => {
+  it("treats widths below the md breakpoint as the mobile sheet layout", () => {
+    expect(isNarrowViewport(375)).toBe(true);
+    expect(isNarrowViewport(767)).toBe(true);
+  });
+
+  it("treats the md breakpoint and above as desktop", () => {
+    expect(isNarrowViewport(768)).toBe(false);
+    expect(isNarrowViewport(1024)).toBe(false);
   });
 });
 

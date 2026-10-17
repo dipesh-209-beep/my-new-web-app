@@ -44,6 +44,8 @@ export interface MockMapInstance {
   handlers: Record<string, (() => void)[]>;
   /** Spy, called once on init and again whenever the app recentres/zooms. */
   setView: ReturnType<typeof vi.fn>;
+  /** Spy for `invalidateSize()`, which the page calls on sheet changes. */
+  invalidateSize: ReturnType<typeof vi.fn>;
   /** Test helper: simulate the map firing "zoomend" after a zoom change. */
   fireZoomEnd(newZoom: number): void;
 }
@@ -167,7 +169,8 @@ export function createLeafletMock() {
       zoom: 12,
       handlers: {},
       setView,
-      fireZoomEnd(newZoom: number) {
+      invalidateSize: vi.fn(),
+      fireZoomEnd(newZoom) {
         this.zoom = newZoom;
         this.handlers["zoomend"]?.forEach((h) => h());
       },

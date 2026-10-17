@@ -20,6 +20,9 @@ function pointerMove(clientY: number): PointerLike {
 
 beforeEach(() => {
   window.innerHeight = 800;
+  // jsdom's default is 1024 (desktop). Tests that need the mobile sheet
+  // layout set this to a narrow width themselves.
+  window.innerWidth = 1024;
   window.localStorage.clear();
 });
 
@@ -106,5 +109,96 @@ describe("useSheet", () => {
     });
     // 92% of an 800px viewport.
     expect(result.current.dragHeightPx).toBe(736);
+  });
+});
+
+describe("useSheet revealResults", () => {
+  it("drops full to half on a narrow viewport so the map stays usable", async () => {
+    window.innerWidth = 375;
+    const invalidateMap = vi.fn();
+    const { result } = renderHook(() => useSheet(invalidateMap));
+    await waitFor(() => expect(result.current.sidebarHydrated).toBe(true));
+    expect(result.current.sheetSnap).toBe("full");
+
+    act(() => {
+      result.current.revealResults();
+    });
+
+    expect(result.current.sheetSnap).toBe("half");
+    // The map must be told to recalculate its size at the new sheet height.
+    await waitFor(() => expect(invalidateMap).toHaveBeenCalled());
+  });
+
+  it("leaves the desktop layout untouched", async () => {
+    window.innerWidth = 1024;
+    const invalidateMap = vi.fn();
+    const { result } = renderHook(() => useSheet(invalidateMap));
+    await waitFor(() => expect(result.current.sidebarHydrated).toBe(true));
+
+    act(() => {
+      result.current.revealResults();
+    });
+
+    expect(result.current.sheetSnap).toBe("full");
+    expect(invalidateMap).not.toHaveBeenCalled();
+  });
+
+  it("never overrides a deliberate minimize or an already-half sheet", async () => {
+    window.innerWidth = 375;
+    const { result } = renderHook(() => useSheet());
+    await waitFor(() => expect(result.current.sidebarHydrated).toBe(true));
+
+    act(() => {
+      result.current.setSheetSnap("minimized");
+    });
+    act(() => {
+      result.current.revealResults();
+    });
+    expect(result.current.sheetSnap).toBe("minimized");
+
+    act(() => {
+      result.current.setSheetSnap("half");
+    });
+    act(() => {
+      result.current.revealResults();
+    });
+    expect(result.current.sheetSnap).toBe("half");
+  });
+
+  it("does not persist the automatic half position over the saved default", async () => {
+    window.innerWidth = 375;
+    window.localStorage.setItem(STORAGE_KEY, "full");
+    const { result } = renderHook(() => useSheet());
+    await waitFor(() => expect(result.current.sidebarHydrated).toBe(true));
+
+    act(() => {
+      result.current.revealResults();
+    });
+
+    expect(result.current.sheetSnap).toBe("half");
+    // Per-session only: a reload should still restore the user's choice.
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe("full");
+  });
+
+  it("keeps pointer dragging working after an automatic reveal", async () => {
+    window.innerWidth = 375;
+    const { result } = renderHook(() => useSheet());
+    await waitFor(() => expect(result.current.sidebarHydrated).toBe(true));
+    act(() => {
+      result.current.revealResults();
+    });
+    expect(result.current.sheetSnap).toBe("half");
+
+    // Drag from the half height (360) down toward minimized and release.
+    act(() => {
+      result.current.handleHandlePointerDown(pointerDown(360));
+    });
+    act(() => {
+      result.current.handleHandlePointerMove(pointerMove(520));
+    });
+    act(() => {
+      result.current.handleHandlePointerUp();
+    });
+    expect(result.current.sheetSnap).toBe("minimized");
   });
 });

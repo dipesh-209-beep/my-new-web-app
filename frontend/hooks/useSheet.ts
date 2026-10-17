@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { clampDragHeightPx, nearestSnap, parseStoredSnap, SheetSnap, snapHeightPx } from "@/lib/sheetSnap";
+import { clampDragHeightPx, isNarrowViewport, nearestSnap, parseStoredSnap, SheetSnap, snapHeightPx } from "@/lib/sheetSnap";
 
 const SIDEBAR_STORAGE_KEY = "ktm-transit:search-panel-minimized";
 
@@ -16,6 +16,11 @@ interface UseSheetReturn {
   liveHeightPx: number;
   viewportHeight: number;
   toggleSidebarMinimized: () => void;
+  /** Called when a route search succeeds: on a narrow viewport, drops the
+   * sheet from its default "full" snap to "half" so the map (and the drawn
+   * route) stays visible instead of the sheet covering most of the screen.
+   * A no-op on desktop, and never overrides a deliberate minimize/half. */
+  revealResults: () => void;
   handleHandlePointerDown: (e: React.PointerEvent<HTMLSpanElement>) => void;
   handleHandlePointerMove: (e: React.PointerEvent<HTMLSpanElement>) => void;
   handleHandlePointerUp: () => void;
@@ -65,6 +70,21 @@ export function useSheet(invalidateMap?: () => void): UseSheetReturn {
     setSheetSnap(sheetSnap === "minimized" ? "full" : "minimized");
   }
 
+  // Drop to "half" only when there is something worth making room for and
+  // the user hasn't already chosen a smaller position. Deliberately does NOT
+  // write localStorage: this is a per-session reaction to a search result,
+  // not a change to the user's saved default. It also never runs on desktop,
+  // where the sheet is a static column and the snap height is ignored.
+  function revealResults() {
+    if (typeof window === "undefined") return;
+    if (!isNarrowViewport(window.innerWidth)) return;
+    if (sheetSnap !== "full") return;
+    setSheetSnapState("half");
+    if (invalidateMap) {
+      setTimeout(() => invalidateMap(), 0);
+    }
+  }
+
   function handleHandlePointerDown(e: React.PointerEvent<HTMLSpanElement>) {
     e.currentTarget.setPointerCapture(e.pointerId);
     dragStartRef.current = { startY: e.clientY, startHeightPx: snapHeightPx(sheetSnap, viewportHeight) };
@@ -104,6 +124,7 @@ export function useSheet(invalidateMap?: () => void): UseSheetReturn {
     liveHeightPx,
     viewportHeight,
     toggleSidebarMinimized,
+    revealResults,
     handleHandlePointerDown,
     handleHandlePointerMove,
     handleHandlePointerUp,
