@@ -806,3 +806,170 @@ def test_each_alternative_gets_its_own_summed_fare(client_factory, monkeypatch):
         pytest.approx(25),
         pytest.approx(30),
     )
+
+
+# --- via waypoints are required stops, not forced bus changes --------------
+#
+# find_route_via_stops used to add a transfer for every waypoint boundary
+# unconditionally, while _build_legs merges consecutive same-route segments.
+# A trip that rode one bus straight through the via came back as
+# transfer_count=1 beside a single merged leg, one fare and one boarding
+# wait -- the UI showed "1 transfer" and "1 bus" at once. These lock in the
+# corrected contract: a waypoint costs a transfer only when the route
+# actually changes there.
+
+
+def test_via_on_one_continuous_bus_is_not_a_transfer(client_factory, monkeypatch):
+    # R_A visits S1 -> S2 -> S3 without changing buses. Routing S1->S2 and
+    # S2->S3 separately and stitching them is still one uninterrupted ride.
+    client = client_factory(direct_network(), osrm_down)
+    seen = []
+    monkeypatch.setattr(queries, "fare_for_distance", _banded_fare(seen))
+
+    body = client.get(
+        "/route-finder",
+        params={"origin": "S1", "destination": "S3", "via": ["S2"]},
+    ).json()
+
+    assert body["via_stop_ids"] == ["S2"]
+    assert [leg["route_id"] for leg in body["legs"]] == ["R_A"]
+    assert body["legs"][0]["num_ride_segments"] == 2
+    assert body["transfer_count"] == 0
+
+    # One bus boarded -> one fare, one boarding wait, all agreeing with
+    # transfer_count=0 instead of contradicting it.
+    assert seen == [pytest.approx(EXPECTED_GRAPH_A / 1000)]
+    fare = body["fare"]
+    assert fare["ride_leg_count"] == 1
+    assert fare["priced_leg_count"] == 1
+    assert (fare["fare_npr_min"], fare["fare_npr_max"]) == pytest.approx((20, 25))
+    assert body["total_estimated_duration_s"] == pytest.approx(
+        EXPECTED_GRAPH_A / BUS_AVG_SPEED_MPS + BOARD_WAIT_S
+    )
+
+
+def test_via_where_the_route_changes_still_counts_a_transfer(
+    client_factory, monkeypatch
+):
+    # No single route covers S1->S2->S3, so the trip rides R_A to S2, walks
+    # to the neighbouring S2x and boards R_B: a genuine transfer at the via.
+    client = client_factory(transfer_network(), osrm_down)
+    seen = []
+    monkeypatch.setattr(queries, "fare_for_distance", _banded_fare(seen))
+
+    body = client.get(
+        "/route-finder",
+        params={"origin": "S1", "destination": "S3", "via": ["S2"]},
+    ).json()
+
+    ride_legs = [leg for leg in body["legs"] if leg["route_id"] != "TRANSFER"]
+    assert [leg["route_id"] for leg in body["legs"]] == ["R_A", "TRANSFER", "R_B"]
+    assert body["transfer_count"] == len(ride_legs) - 1 == 1
+
+    # Two buses boarded -> two fares summed, two boarding waits.
+    assert seen == [
+        pytest.approx(_graph_distance([S1, S2]) / 1000),
+        pytest.approx(_graph_distance([S2X, S3]) / 1000),
+    ]
+    fare = body["fare"]
+    assert fare["ride_leg_count"] == 2
+    assert (fare["fare_npr_min"], fare["fare_npr_max"]) == pytest.approx((40, 50))
+    assert body["total_estimated_duration_s"] == pytest.approx(
+        _graph_distance([S1, S2]) / BUS_AVG_SPEED_MPS
+        + _graph_distance([S2, S2X]) / WALK_SPEED_MPS
+        + _graph_distance([S2X, S3]) / BUS_AVG_SPEED_MPS
+        + 2 * BOARD_WAIT_S
+    )
+
+
+# --- approach/egress walks at the ends of a via trip are not transfers -----
+#
+# A via leg can be a pure walk when the origin/via (or via/destination) are
+# neighbouring stops within the interchange radius. Riding one bus after
+# walking up to it (or walking away from it) is still a single boarding, so
+# transfer_count must be 0 and agree with the single ride leg, the single
+# fare and the single boarding wait.
+
+HWS1 = make_stop("HWS1", "ApproachStart", 27.6000, 85.2000)
+HWSFAR = make_stop("HWSFAR", "ApproachFar", 27.8000, 85.2000)
+HWS2 = make_stop("HWS2", "ApproachVia", 27.6010, 85.2000)  # ~111 m from HWS1
+HWS3 = make_stop("HWS3", "ApproachEnd", 27.6200, 85.2000)
+
+TWS1 = make_stop("TWS1", "EgressStart", 27.6000, 85.2000)
+TWS2 = make_stop("TWS2", "EgressVia", 27.6200, 85.2000)
+TWS3 = make_stop("TWS3", "EgressEnd", 27.6210, 85.2000)  # ~111 m from TWS2
+TWSFAR = make_stop("TWSFAR", "EgressFar", 27.8000, 85.2000)
+
+
+def head_walk_network():
+    return {
+        "routes": [
+            make_route("R_STUB_H", [HWS1, HWSFAR]),
+            make_route("R_HA", [HWS2, HWS3]),
+        ],
+        "stops": {s.stop_id: s for s in (HWS1, HWSFAR, HWS2, HWS3)},
+    }
+
+
+def tail_walk_network():
+    return {
+        "routes": [
+            make_route("R_TA", [TWS1, TWS2]),
+            make_route("R_STUB_T", [TWS3, TWSFAR]),
+        ],
+        "stops": {s.stop_id: s for s in (TWS1, TWS2, TWS3, TWSFAR)},
+    }
+
+
+def test_via_head_walk_is_not_a_transfer(client_factory, monkeypatch):
+    client = client_factory(head_walk_network(), osrm_down)
+    seen = []
+    monkeypatch.setattr(queries, "fare_for_distance", _banded_fare(seen))
+
+    body = client.get(
+        "/route-finder",
+        params={"origin": "HWS1", "destination": "HWS3", "via": ["HWS2"]},
+    ).json()
+
+    walk_m = _graph_distance([HWS1, HWS2])
+    ride_m = _graph_distance([HWS2, HWS3])
+    assert [leg["route_id"] for leg in body["legs"]] == ["TRANSFER", "R_HA"]
+    assert body["transfer_count"] == 0
+
+    # One bus boarded -> one fare and one boarding wait, plus the approach
+    # walk's time, all agreeing with transfer_count=0.
+    assert seen == [pytest.approx(ride_m / 1000)]
+    fare = body["fare"]
+    assert fare["ride_leg_count"] == 1
+    assert fare["priced_leg_count"] == 1
+    assert (fare["fare_npr_min"], fare["fare_npr_max"]) == pytest.approx((20, 25))
+    assert body["total_estimated_duration_s"] == pytest.approx(
+        walk_m / WALK_SPEED_MPS + ride_m / BUS_AVG_SPEED_MPS + BOARD_WAIT_S
+    )
+
+
+def test_via_tail_walk_is_not_a_transfer(client_factory, monkeypatch):
+    client = client_factory(tail_walk_network(), osrm_down)
+    seen = []
+    monkeypatch.setattr(queries, "fare_for_distance", _banded_fare(seen))
+
+    body = client.get(
+        "/route-finder",
+        params={"origin": "TWS1", "destination": "TWS3", "via": ["TWS2"]},
+    ).json()
+
+    ride_m = _graph_distance([TWS1, TWS2])
+    walk_m = _graph_distance([TWS2, TWS3])
+    assert [leg["route_id"] for leg in body["legs"]] == ["R_TA", "TRANSFER"]
+    assert body["transfer_count"] == 0
+
+    # One bus boarded -> one fare and one boarding wait, plus the egress
+    # walk's time, all agreeing with transfer_count=0.
+    assert seen == [pytest.approx(ride_m / 1000)]
+    fare = body["fare"]
+    assert fare["ride_leg_count"] == 1
+    assert fare["priced_leg_count"] == 1
+    assert (fare["fare_npr_min"], fare["fare_npr_max"]) == pytest.approx((20, 25))
+    assert body["total_estimated_duration_s"] == pytest.approx(
+        ride_m / BUS_AVG_SPEED_MPS + walk_m / WALK_SPEED_MPS + BOARD_WAIT_S
+    )

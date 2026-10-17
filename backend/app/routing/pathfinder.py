@@ -507,6 +507,30 @@ def _path_to_result(graph: nx.DiGraph, path: list) -> RouteFinderResult:
     )
 
 
+def _count_transfers(segments: list[PathSegment]) -> int:
+    """Transfers in an already-spliced segment sequence, using the same
+    definition as _path_to_result: transfer_count = boardings - 1, where
+    each boarding is one ride run. A ride run is a maximal stretch of ride
+    segments on the same route; a walk ends the current run (the rider is
+    off the bus) and a route change starts a new one, so a walk between
+    two ride runs is a transfer while a walk before the first ride or
+    after the last one is an approach/egress walk and is not. The graph
+    path _path_to_result sees carries explicit board edges, which the
+    concatenated segments do not, so the same rule is applied here by
+    counting runs instead of board edges.
+    """
+    ride_runs = 0
+    current_route: Optional[str] = None
+    for seg in segments:
+        if seg.route_id is None:
+            current_route = None
+            continue
+        if seg.route_id != current_route:
+            ride_runs += 1
+            current_route = seg.route_id
+    return max(ride_runs - 1, 0)
+
+
 def _find_with_dijkstra(
     graph: nx.DiGraph,
     origin_stop_id: str,
@@ -749,12 +773,18 @@ def find_route_via_stops(
     options, so callers should not pass include_alternatives-style
     behavior on top of this.
 
-    transfer_count is the sum of each leg's own transfer_count, PLUS one
-    per waypoint boundary: forcing the path through a specific stop is
-    treated as always requiring the rider to at least re-board there,
-    even in the edge case where the same bus happens to continue past
-    it -- simpler and safer to over-count than to silently assume
-    continuity that isn't guaranteed by the data.
+    A waypoint is a required intermediate stop, not a forced bus change.
+    transfer_count is derived from the spliced path exactly as
+    _path_to_result derives it for a single leg (boardings - 1, see
+    _count_transfers): a new ride run on a different route, or one
+    reached by walking, is one transfer, while the same route continuing
+    straight through a waypoint is one uninterrupted ride and counts
+    zero. A walk before the first ride or after the last one is an
+    approach/egress walk, not a bus transfer, so transfer_count, the
+    built legs, the summed fare and the boarding waits all agree (see
+    api/routing.py:_build_legs / _journey_fare /
+    _total_estimated_duration_s, which merge by route_id and charge once
+    per ride leg).
     """
 
     if len(stop_ids) < 2:
@@ -763,7 +793,6 @@ def find_route_via_stops(
     segments: list[PathSegment] = []
     stop_sequence: list[str] = []
     total_distance_m = 0.0
-    transfer_count = 0
 
     for i, (leg_origin, leg_destination) in enumerate(zip(stop_ids, stop_ids[1:])):
         if leg_origin == leg_destination:
@@ -790,9 +819,6 @@ def find_route_via_stops(
 
         segments.extend(leg_result.segments)
         total_distance_m += leg_result.total_distance_m
-        transfer_count += leg_result.transfer_count
-        if i > 0:
-            transfer_count += 1  # forced re-board at this waypoint, see docstring
 
         if not stop_sequence:
             stop_sequence.extend(leg_result.stop_sequence)
@@ -805,7 +831,11 @@ def find_route_via_stops(
     return RouteFinderResult(
         segments=segments,
         total_distance_m=total_distance_m,
-        transfer_count=transfer_count,
+        # Derived from the whole spliced path, not summed per leg or per
+        # via waypoint: a leading/trailing approach or egress walk is not
+        # a bus transfer, and the same route continuing through a waypoint
+        # is one ride run. See _count_transfers.
+        transfer_count=_count_transfers(segments),
         stop_sequence=stop_sequence,
         # A via search always honours the rider's explicitly requested
         # intermediate stops; that, not a distance/transfer comparison,

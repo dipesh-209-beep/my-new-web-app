@@ -170,10 +170,137 @@ def test_find_route_via_stops_chains_legs_in_order(monkeypatch):
     result = find_route_via_stops(session=None, stop_ids=["S1", "S2", "S3"])
 
     assert result.stop_sequence == ["S1", "S2", "S3"]
-    # Forced re-board at the via stop (S2), on top of each leg's own
-    # (zero) transfer_count.
-    assert result.transfer_count == 1
+    # R_A continues straight through the via stop (S2): the waypoint is a
+    # required stop, not a forced bus change, so this is one uninterrupted
+    # ride and counts zero transfers.
+    assert result.transfer_count == 0
+    assert [seg.route_id for seg in result.segments] == ["R_A", "R_A"]
     assert len(result.segments) == 2
+
+
+def test_find_route_via_stops_counts_a_real_route_change(monkeypatch):
+    """A via stop where the rider must actually change routes is a real
+    transfer, even though neither leg has a transfer inside it."""
+    s1 = make_stop("S1", "A", 27.7000, 85.3100)
+    s2 = make_stop("S2", "B", 27.7010, 85.3110)
+    s3 = make_stop("S3", "C", 27.7020, 85.3120)
+    route_a = make_route("R_A", [s1, s2])
+    route_b = make_route("R_B", [s2, s3])
+    monkeypatch.setattr(gb, "get_active_routes", lambda session: [route_a, route_b])
+
+    result = find_route_via_stops(session=None, stop_ids=["S1", "S2", "S3"])
+
+    assert result.stop_sequence == ["S1", "S2", "S3"]
+    assert result.transfer_count == 1
+    assert [seg.route_id for seg in result.segments] == ["R_A", "R_B"]
+
+
+def test_find_route_via_stops_ignores_leading_duplicate_waypoint(monkeypatch):
+    """A via equal to the origin produces a skipped zero-length leg before
+    the first real leg; it must not be mistaken for a boundary and invent
+    a transfer."""
+    s1 = make_stop("S1", "A", 27.7000, 85.3100)
+    s2 = make_stop("S2", "B", 27.7010, 85.3110)
+    route = make_route("R_A", [s1, s2])
+    monkeypatch.setattr(gb, "get_active_routes", lambda session: [route])
+
+    result = find_route_via_stops(session=None, stop_ids=["S1", "S1", "S2"])
+
+    assert result.stop_sequence == ["S1", "S2"]
+    assert result.transfer_count == 0
+    assert [seg.route_id for seg in result.segments] == ["R_A"]
+
+
+def test_find_route_via_stops_ignores_repeated_leading_duplicate_waypoints(
+    monkeypatch,
+):
+    """Several leading duplicates in a row must behave the same as one: the
+    first real leg is not a transfer just because earlier legs were
+    skipped."""
+    s1 = make_stop("S1", "A", 27.7000, 85.3100)
+    s2 = make_stop("S2", "B", 27.7010, 85.3110)
+    route = make_route("R_A", [s1, s2])
+    monkeypatch.setattr(gb, "get_active_routes", lambda session: [route])
+
+    result = find_route_via_stops(session=None, stop_ids=["S1", "S1", "S1", "S2"])
+
+    assert result.stop_sequence == ["S1", "S2"]
+    assert result.transfer_count == 0
+    assert [seg.route_id for seg in result.segments] == ["R_A"]
+
+
+def test_find_route_via_stops_head_walk_is_not_a_transfer(monkeypatch):
+    """A walk-only first leg (origin and via are neighbouring stops) then a
+    ride boards a single bus, so it is zero transfers -- walking up to the
+    first bus is not a transfer."""
+    origin = make_stop("HW1", "A", 27.7000, 85.3000)
+    far = make_stop("HWX", "FarX", 27.9000, 85.3000)
+    via = make_stop("HW2", "B", 27.7010, 85.3000)  # ~111 m from HW1
+    dest = make_stop("HW3", "C", 27.7200, 85.3000)
+    routes = [make_route("R_STUB", [origin, far]), make_route("R_A", [via, dest])]
+    monkeypatch.setattr(gb, "get_active_routes", lambda session: routes)
+
+    result = find_route_via_stops(session=None, stop_ids=["HW1", "HW2", "HW3"])
+
+    assert result.stop_sequence == ["HW1", "HW2", "HW3"]
+    assert result.transfer_count == 0
+    assert [seg.route_id for seg in result.segments] == [None, "R_A"]
+
+
+def test_find_route_via_stops_tail_walk_is_not_a_transfer(monkeypatch):
+    """A ride then a walk-only final leg (via and destination are
+    neighbouring stops) boards a single bus, so it is zero transfers."""
+    origin = make_stop("TW1", "A", 27.7000, 85.3000)
+    via = make_stop("TW2", "B", 27.7200, 85.3000)
+    dest = make_stop("TW3", "C", 27.7210, 85.3000)  # ~111 m from TW2
+    far = make_stop("TWY", "FarY", 27.9000, 85.3000)
+    routes = [make_route("R_A", [origin, via]), make_route("R_STUB", [dest, far])]
+    monkeypatch.setattr(gb, "get_active_routes", lambda session: routes)
+
+    result = find_route_via_stops(session=None, stop_ids=["TW1", "TW2", "TW3"])
+
+    assert result.stop_sequence == ["TW1", "TW2", "TW3"]
+    assert result.transfer_count == 0
+    assert [seg.route_id for seg in result.segments] == ["R_A", None]
+
+
+def test_find_route_via_stops_walk_ride_walk_is_zero_transfers(monkeypatch):
+    """Approach walk -> one bus -> egress walk boards a single bus, so it is
+    zero transfers."""
+    w1 = make_stop("WRW1", "A", 27.7000, 85.3000)
+    w1far = make_stop("WRWF1", "FarA", 27.9000, 85.3000)
+    r1 = make_stop("WRW2", "B", 27.7010, 85.3000)  # ~111 m from WRW1
+    r2 = make_stop("WRW3", "C", 27.7200, 85.3000)
+    w2 = make_stop("WRW4", "D", 27.7210, 85.3000)  # ~111 m from WRW3
+    w2far = make_stop("WRWF2", "FarD", 27.9000, 85.3100)
+    routes = [
+        make_route("R_S1", [w1, w1far]),
+        make_route("R_A", [r1, r2]),
+        make_route("R_S2", [w2, w2far]),
+    ]
+    monkeypatch.setattr(gb, "get_active_routes", lambda session: routes)
+
+    result = find_route_via_stops(
+        session=None, stop_ids=["WRW1", "WRW2", "WRW3", "WRW4"]
+    )
+
+    assert result.transfer_count == 0
+    assert [seg.route_id for seg in result.segments] == [None, "R_A", None]
+
+
+def test_find_route_via_stops_ride_walk_ride_counts_one_transfer(monkeypatch):
+    """Two buses joined by an interchange walk is one transfer."""
+    s1 = make_stop("RWR1", "A", 27.7000, 85.3000)
+    s2 = make_stop("RWR2", "B", 27.7200, 85.3000)
+    s2x = make_stop("RWR2X", "B2", 27.7200, 85.3010)  # ~100 m from RWR2
+    s3 = make_stop("RWR3", "C", 27.7400, 85.3000)
+    routes = [make_route("R_A", [s1, s2]), make_route("R_B", [s2x, s3])]
+    monkeypatch.setattr(gb, "get_active_routes", lambda session: routes)
+
+    result = find_route_via_stops(session=None, stop_ids=["RWR1", "RWR2", "RWR3"])
+
+    assert result.transfer_count == 1
+    assert [seg.route_id for seg in result.segments] == ["R_A", None, "R_B"]
 
 
 def test_find_route_via_stops_requires_at_least_origin_and_destination():
