@@ -218,8 +218,11 @@ const congestion = useCongestion();
         } ${showMinimized ? "gap-0 p-2 md:max-w-[52px]" : "gap-5 p-4"}`}
         style={{ "--sheet-height": `${liveHeightPx}px` } as React.CSSProperties}
       >
+        {/* `shrink-0` keeps the handle's 4-5px height: as a flex item in the
+            scrollable column sheet it would otherwise shrink to 0 and be
+            neither visible nor a valid pointer target (D11). */}
         <span
-          className="sheet-handle mx-auto touch-none md:hidden"
+          className="sheet-handle mx-auto shrink-0 touch-none md:hidden"
           aria-hidden
           onPointerDown={handleHandlePointerDown}
           onPointerMove={handleHandlePointerMove}
@@ -375,7 +378,12 @@ const congestion = useCongestion();
         )}
       </aside>
 
-      <div className="h-full w-full flex-1 md:min-h-0">
+      {/* `isolate` makes this a stacking context so Leaflet's own z-indexes
+          (.leaflet-bottom = 1000, .leaflet-control = 800) are contained here
+          and can't paint over the mobile bottom sheet (z-[500]). Without it
+          the route legend intercepts taps meant for the sheet's snap controls
+          and drag handle once a result is drawn. */}
+      <div className="isolate h-full w-full flex-1 md:min-h-0">
         <MapErrorBoundary onError={() => busMapRef.current?.invalidateSize()}>
           <BusMap
             ref={busMapRef}
