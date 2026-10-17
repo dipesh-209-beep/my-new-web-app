@@ -21,6 +21,21 @@ function wordsOf(input: string): string[] {
   return input.toLowerCase().split(/[^\p{L}\p{M}\p{N}]+/u).filter(Boolean);
 }
 
+/**
+ * True when every cased letter in `text` uses the same case -- all-uppercase
+ * ("KALANKI") or all-lowercase ("sallaghari"). That shape marks an
+ * auto-generated case-only duplicate rather than a curated name, so such a
+ * field is a weaker carrier of relevance than a normally-cased one. Scripts
+ * with no case distinction (e.g. Devanagari) are never degraded.
+ */
+function isDegradedCasing(text: string): boolean {
+  const cased = [...text].filter((ch) => ch.toLowerCase() !== ch.toUpperCase());
+  if (cased.length === 0) return false;
+  const hasUpper = cased.some((ch) => ch === ch.toUpperCase());
+  const hasLower = cased.some((ch) => ch === ch.toLowerCase());
+  return !(hasUpper && hasLower);
+}
+
 const MIN_QUERY_FOR_FUZZY = 5;
 
 /**
@@ -71,6 +86,13 @@ export interface StopMatch {
   stop: Stop;
   score: number;
   matchedField: SearchField;
+  /**
+   * True when the matched field is written in a single case (all-uppercase or
+   * all-lowercase). A degraded exact name match is deliberately demoted to the
+   * prefix tier (see searchStops), and the tie-break keeps it below an
+   * otherwise equal match on a normally-cased field.
+   */
+  degraded: boolean;
 }
 
 /**
@@ -80,9 +102,13 @@ export interface StopMatch {
  * surface a flood of unrelated stops ahead of a real name match).
  *
  * Tiers, best to worst:
- *   100 exact name
+ *   100 exact name, canonically cased
  *    90 exact alias or landmark
- *    80 name starts with the query
+ *    80 name starts with the query, OR the name normalizes exactly to the
+ *       query but is written in a single case ("KALANKI"/"sallaghari").
+ *       A case-only variant is not authoritative enough to outrank a
+ *       canonically-cased name that merely starts with the query, so it is
+ *       demoted here instead of claiming the exact tier.
  *    70 any searchable word starts with the query, or the alias/landmark
  *       field as a whole starts with it
  *    60 name contains the query
@@ -91,9 +117,11 @@ export interface StopMatch {
  *    30 alias/landmark is within one edit of the query
  *
  * Exact and prefix tiers always beat substring tiers, and fuzzy matches can
- * never outrank a real name/alias match. Ties break by shortest name, then
- * case-insensitively alphabetically, then stop_id, so results are stable no
- * matter what order the dataset arrives in (no first-in-dataset cut-off).
+ * never outrank a real name/alias match. Ties break by canonically-cased
+ * before single-cased, then shortest name, then case-insensitively
+ * alphabetically, then stop_id, so results are stable no matter what order
+ * the dataset arrives in (no first-in-dataset cut-off) and a case-only
+ * duplicate cannot float above a curated name by luck of its stop_id.
  */
 export function searchStops(query: string, stops: Stop[]): StopMatch[] {
   const q = normalizeText(query);
@@ -116,7 +144,7 @@ export function searchStops(query: string, stops: Stop[]): StopMatch[] {
       { field: "landmark", text: landmarkRaw },
     ];
 
-    if (name === q) {
+    if (name === q && !isDegradedCasing(stop.stop_name ?? "")) {
       score = 100;
     } else if (aliases === q || landmark === q) {
       score = 90;
@@ -162,12 +190,18 @@ export function searchStops(query: string, stops: Stop[]): StopMatch[] {
     }
 
     if (score > 0) {
-      matches.push({ stop, score, matchedField });
+      const matchedRaw =
+        matchedField === "alias" ? aliasesRaw : matchedField === "landmark" ? landmarkRaw : stop.stop_name ?? "";
+      matches.push({ stop, score, matchedField, degraded: isDegradedCasing(matchedRaw) });
     }
   }
 
   matches.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    // A match carried by a single-cased field ("KALANKI", "sallaghari") is a
+    // case-only variant: keep it below an otherwise equal match on a
+    // canonically-cased field, before length or stop_id can float it up.
+    if (a.degraded !== b.degraded) return a.degraded ? 1 : -1;
     const aName = a.stop.stop_name ?? "";
     const bName = b.stop.stop_name ?? "";
     if (aName.length !== bName.length) return aName.length - bName.length;

@@ -149,9 +149,9 @@ describe("searchStops", () => {
 describe("case-colliding stop names", () => {
   // The real dataset carries near-duplicate records that share a normalized
   // name but differ in capitalization -- e.g. S0130 "Kalanki" and S_395
-  // "KALANKI". They are separate, distinct stops; this only pins down the
-  // suggestion order so raw code-unit comparison can't float an ALLCAPS
-  // duplicate to the top. Inputs are deliberately in reverse dataset order.
+  // "KALANKI". They are separate, distinct stops. The curated record is
+  // normally cased; the auto-generated duplicate is single-cased. The
+  // canonical record must win on relevance, not by luck of stop_id ordering.
   function kalankiPair(): Stop[] {
     return [
       makeStop({ stop_id: "S_395", stop_name: "KALANKI" }),
@@ -163,9 +163,23 @@ describe("case-colliding stop names", () => {
     const results = searchStops("kalanki", kalankiPair());
     expect(results.map((r) => r.stop.stop_name)).toEqual(["Kalanki", "KALANKI"]);
     expect(results.map((r) => r.stop.stop_id)).toEqual(["S0130", "S_395"]);
-    // Both are still exact name matches at the same tier -- ordering did
-    // not change relevance.
-    expect(results.every((r) => r.score === 100 && r.matchedField === "name")).toBe(true);
+    // The canonically-cased record is an exact name match; the single-cased
+    // duplicate is a case-only variant and is demoted to the prefix tier.
+    expect(results[0]?.score).toBe(100);
+    expect(results[0]?.matchedField).toBe("name");
+    expect(results[1]?.score).toBe(80);
+    expect(results[1]?.matchedField).toBe("name");
+  });
+
+  it("ranks a canonically-cased name ahead of a case variant even when its stop_id sorts later", () => {
+    // Regression: the old tie-break fell through to raw stop_id once the
+    // folded names matched, so a variant with the smaller id could win. The
+    // ranking must not depend on which id the duplicate happens to carry.
+    const variant = makeStop({ stop_id: "S0001", stop_name: "KALANKI" });
+    const canonical = makeStop({ stop_id: "S0002", stop_name: "Kalanki" });
+    const results = searchStops("kalanki", [variant, canonical]);
+    expect(results.map((r) => r.stop.stop_name)).toEqual(["Kalanki", "KALANKI"]);
+    expect(results.map((r) => r.stop.stop_id)).toEqual(["S0002", "S0001"]);
   });
 
   it("orders 'Tripureshwor' before 'TRIPURESHWOR' for the query 'tripureshwor'", () => {
@@ -176,6 +190,16 @@ describe("case-colliding stop names", () => {
     const results = searchStops("tripureshwor", stops);
     expect(results.map((r) => r.stop.stop_name)).toEqual(["Tripureshwor", "TRIPURESHWOR"]);
     expect(results.map((r) => r.stop.stop_id)).toEqual(["S0056", "S_396"]);
+  });
+
+  it("orders 'Bhadrakali' before 'bhadrakali' (an all-lower variant)", () => {
+    const stops = [
+      makeStop({ stop_id: "S_394", stop_name: "bhadrakali" }),
+      makeStop({ stop_id: "S0088", stop_name: "Bhadrakali", district: "KATHMANDU" }),
+    ];
+    const results = searchStops("bhadrakali", stops);
+    expect(results.map((r) => r.stop.stop_name)).toEqual(["Bhadrakali", "bhadrakali"]);
+    expect(results.map((r) => r.score)).toEqual([100, 80]);
   });
 
   it("produces the same order on repeated searches", () => {
@@ -199,6 +223,32 @@ describe("case-colliding stop names", () => {
     const a = makeStop({ stop_id: "S0001", stop_name: "Baneshwor Chowk" });
     const b = makeStop({ stop_id: "S0002", stop_name: "Baneshwor" });
     expect(searchStops("baneshwor", [a, b]).map((r) => r.stop.stop_id)).toEqual(["S0002", "S0001"]);
+  });
+});
+
+describe("case-variant duplicates among the real dataset", () => {
+  // S_398 "sallaghari" is an auto-generated, all-lowercase duplicate. The
+  // curated stops nearby are "Sallaghari Stop" (S0095) and "Sallaghari
+  // North" (S0014). A query that normalizes exactly to the duplicate's name
+  // must not let the case-only variant outrank the canonically-cased stops
+  // that merely start with the query.
+  it("ranks canonically-cased 'Sallaghari ...' stops above the lowercase duplicate", () => {
+    const duplicate = makeStop({ stop_id: "S_398", stop_name: "sallaghari" });
+    const stop = makeStop({ stop_id: "S0095", stop_name: "Sallaghari Stop" });
+    const north = makeStop({ stop_id: "S0014", stop_name: "Sallaghari North", is_major_stop: true });
+    const results = searchStops("sallaghari", [duplicate, north, stop]);
+    expect(results.map((r) => r.stop.stop_id)).toEqual(["S0095", "S0014", "S_398"]);
+    expect(results.every((r) => r.score === 80)).toBe(true);
+    // The duplicate is flagged degraded and sorted last among the tie.
+    expect(results[2]?.degraded).toBe(true);
+    expect(results.slice(0, 2).every((r) => !r.degraded)).toBe(true);
+  });
+
+  it("does not treat a caseless (Devanagari) exact name as a degraded variant", () => {
+    const stop = makeStop({ stop_id: "S0071", stop_name: "पिङ्गलस्थान" });
+    const results = searchStops("पिङ्गलस्थान", [stop]);
+    expect(results[0]?.score).toBe(100);
+    expect(results[0]?.degraded).toBe(false);
   });
 });
 
