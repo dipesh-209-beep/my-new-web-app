@@ -5,6 +5,7 @@ import { LoadingStage, RouteAlternative, RouteFinderResult, RouteSearchResult } 
 import RouteTimeline from "./RouteTimeline";
 import { BusIcon, ClockIcon, TransferIcon, WalkIcon } from "@/components/icons/TransitIcons";
 import InlineAlert from "@/components/ui/InlineAlert";
+import SelectablePill from "@/components/ui/SelectablePill";
 import { TRANSFER_ROUTE_ID } from "@/lib/constants";
 import { formatFareRange } from "./RouteEstimates";
 
@@ -283,34 +284,22 @@ export default function RouteResultPanel({
       </p>
       {result.alternatives.length > 0 && (
         <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5" role="group" aria-label="Route alternatives">
-          <button
-            type="button"
+          <SelectablePill
             onClick={() => onSelectedIndexChange(-1)}
-            aria-pressed={isPrimary}
+            selected={isPrimary}
             aria-label={result.transfer_count === 0 ? "Direct route" : "Recommended route"}
-            className={`inline-flex min-h-11 shrink-0 items-center rounded-full border px-3 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-purple ${
-              isPrimary
-                ? "border-accent-purple bg-accent-purple/10 font-medium text-accent-purple"
-                : "border-route-line bg-white text-ink-secondary hover:border-accent-purple hover:text-accent-purple"
-            }`}
           >
             {result.transfer_count === 0 ? "Direct" : "Recommended"}
-          </button>
+          </SelectablePill>
           {result.alternatives.map((alt, i) => (
-            <button
+            <SelectablePill
               key={`${alt.label}-${i}`}
-              type="button"
               onClick={() => onSelectedIndexChange(i)}
-              aria-pressed={selectedIndex === i}
+              selected={selectedIndex === i}
               aria-label={`${ALTERNATIVE_LABELS[alt.label]}: ${formatAltSummary(alt)}`}
-              className={`inline-flex min-h-11 shrink-0 items-center rounded-full border px-3 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-purple ${
-                selectedIndex === i
-                  ? "border-accent-purple bg-accent-purple/10 font-medium text-accent-purple"
-                  : "border-route-line bg-white text-ink-secondary hover:border-accent-purple hover:text-accent-purple"
-              }`}
             >
               {ALTERNATIVE_LABELS[alt.label]}
-            </button>
+            </SelectablePill>
           ))}
         </div>
       )}

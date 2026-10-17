@@ -698,3 +698,66 @@ describe("RouteResultPanel itinerary/map selection", () => {
   });
 });
 
+describe("RouteResultPanel alternative pills", () => {
+  const alternative: RouteAlternative = {
+    label: "shortest_distance",
+    total_cost: 1200,
+    transfer_count: 1,
+    legs: [makeLeg()],
+    fare: null,
+    total_estimated_duration_s: 900,
+  };
+
+  // The option pills moved into the shared SelectablePill primitive; this
+  // locks the consumer wiring (group name, accessible names, pressed state,
+  // selection callbacks) so the refactor cannot silently change behaviour.
+  it("keeps the option group, pressed state and selection callbacks", () => {
+    const onSelectedIndexChange = vi.fn();
+    render(
+      <RouteResultPanel
+        result={{ found: true, ...makeResult({ alternatives: [alternative] }) }}
+        loading={false}
+        error={null}
+        selectedIndex={-1}
+        onSelectedIndexChange={onSelectedIndexChange}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Route alternatives" })).toBeInTheDocument();
+
+    const primary = screen.getByRole("button", { name: "Direct route" });
+    expect(primary).toHaveAttribute("aria-pressed", "true");
+    expect(primary).toHaveTextContent("Direct");
+
+    const alt = screen.getByRole("button", { name: /Least distance:/ });
+    expect(alt).toHaveAttribute("aria-pressed", "false");
+    expect(alt).toHaveTextContent("Least distance");
+
+    fireEvent.click(alt);
+    expect(onSelectedIndexChange).toHaveBeenCalledWith(0);
+
+    fireEvent.click(primary);
+    expect(onSelectedIndexChange).toHaveBeenCalledWith(-1);
+  });
+
+  it("marks the selected alternative as pressed", () => {
+    render(
+      <RouteResultPanel
+        result={{ found: true, ...makeResult({ alternatives: [alternative] }) }}
+        loading={false}
+        error={null}
+        selectedIndex={0}
+        onSelectedIndexChange={() => {}}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /Least distance:/ })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+    expect(screen.getByRole("button", { name: "Direct route" })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    );
+  });
+});
