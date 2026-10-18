@@ -50,6 +50,7 @@ from app.db.id_generator import next_route_id, next_stop_id
 from app.db.queries import apply_stop_sequence_change, bump_graph_version, sync_route_total_stops
 from app.db.session import get_db
 from app.routing.graph_builder import get_cached_graph
+from app.models import Operator as OperatorORM
 from app.models import Route as RouteORM
 from app.models import RouteStop as RouteStopORM
 from app.models import Stop as StopORM
@@ -221,6 +222,13 @@ def create_route(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Stop {payload.start_stop_id} not found.")
     if db.get(StopORM, payload.end_stop_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Stop {payload.end_stop_id} not found.")
+    # operator_id is a FK to operators.operator_id. Checking it here turns a
+    # bogus id into a clear 404 instead of an IntegrityError 500 at commit.
+    if payload.operator_id is not None and db.get(OperatorORM, payload.operator_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Operator {payload.operator_id} not found.",
+        )
 
     route_id = next_route_id(db)
     row = RouteORM(
@@ -382,12 +390,31 @@ def remove_route_stop(
     db.flush()
     # Close the gap: re-sequence every higher row down by one so the
     # sequence stays contiguous (add_route_stop relies on that invariant).
+    #
+    # Two-pass with a large positive offset, exactly like
+    # queries.apply_stop_sequence_change: a single
+    # "SET sequence_no = sequence_no - 1" collides with its own composite
+    # PK (route_id, sequence_no) when PostgreSQL happens to update a
+    # higher row before the row it targets has moved, raising an
+    # IntegrityError (row order is plan-dependent). Parking every higher
+    # row at sequence_no + OFFSET first -- kept positive, since
+    # sequence_no has a > 0 check constraint -- then landing it on
+    # sequence_no - OFFSET - 1 makes each target unique.
+    _RESEQ_OFFSET = 1_000_000
     db.execute(
         text(
-            "UPDATE route_stops SET sequence_no = sequence_no - 1 "
+            "UPDATE route_stops SET sequence_no = sequence_no + :offset "
             "WHERE route_id = :rid AND sequence_no > :seq"
         ),
-        {"rid": route_id, "seq": sequence_no},
+        {"offset": _RESEQ_OFFSET, "rid": route_id, "seq": sequence_no},
+    )
+    db.execute(
+        text(
+            "UPDATE route_stops "
+            "SET sequence_no = sequence_no - :offset - 1 "
+            "WHERE route_id = :rid AND sequence_no > :seq + :offset"
+        ),
+        {"offset": _RESEQ_OFFSET, "rid": route_id, "seq": sequence_no},
     )
     bump_graph_version(db)
     sync_route_total_stops(db, route_id)

@@ -94,6 +94,58 @@ def test_read_stop_exposes_aliases_landmark_and_ward(client):
             session.close()
 
 
+def test_read_stop_exposes_amenity_flags(client):
+    """StopOut must carry the amenity booleans the admin create path
+    (StopCreate -> app/api/admin.py::create_stop) persists. They were
+    written to the DB but dropped from every read response, so the
+    frontend had no way to render them."""
+    created = "S__E2E_AMENITY_FLAGS"
+    session = SessionLocal()
+    try:
+        session.add(
+            Stop(
+                stop_id=created,
+                stop_name="__e2e amenity flags, delete me",
+                lat=27.7515,
+                lng=85.402,
+                status="active",
+                is_major_stop=True,
+                has_shelter=True,
+                has_ticket_counter=True,
+                is_interchange=True,
+                wheelchair_access=True,
+                audio_support=True,
+                geo_out_of_bounds=False,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    try:
+        res = client.get(f"/stops/{created}")
+        assert res.status_code == 200
+        body = res.json()
+        for field in (
+            "is_major_stop",
+            "has_shelter",
+            "has_ticket_counter",
+            "is_interchange",
+            "wheelchair_access",
+            "audio_support",
+        ):
+            assert body[field] is True, f"{field} was dropped from StopOut"
+    finally:
+        session = SessionLocal()
+        try:
+            stop = session.get(Stop, created)
+            if stop is not None:
+                session.delete(stop)
+                session.commit()
+        finally:
+            session.close()
+
+
 def test_stops_nearby_not_shadowed_by_stop_id_route(client):
     """Regression guard: /stops/nearby must still resolve to the nearby
     handler, not get swallowed by /stops/{stop_id} matching 'nearby' as a

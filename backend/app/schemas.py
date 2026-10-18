@@ -70,7 +70,11 @@ class StopOut(BaseModel):
     ward: Optional[int] = None
     landmark: Optional[str] = None
     is_major_stop: bool
+    has_shelter: bool = False
+    has_ticket_counter: bool = False
     is_interchange: bool
+    wheelchair_access: bool = False
+    audio_support: bool = False
     status: str
 
 
@@ -435,11 +439,11 @@ class StopCreate(BaseModel):
     stop_name: str = Field(min_length=1, max_length=150)
     lat: float = Field(ge=-90, le=90)
     lng: float = Field(ge=-180, le=180)
-    aliases: str | None = None
-    zone: str | None = None
-    district: str | None = None
+    aliases: str | None = Field(default=None, max_length=500)
+    zone: str | None = Field(default=None, max_length=100)
+    district: str | None = Field(default=None, max_length=100)
     ward: int | None = None
-    landmark: str | None = None
+    landmark: str | None = Field(default=None, max_length=255)
     is_major_stop: bool = False
     has_shelter: bool = False
     has_ticket_counter: bool = False
@@ -465,9 +469,9 @@ class RouteCreate(BaseModel):
     vehicle_type: str = Field(min_length=1, max_length=50)
     route_type: str | None = Field(default=None, max_length=50)
     operator: str | None = Field(default=None, max_length=100)
-    operator_id: str | None = None
-    start_stop_id: str
-    end_stop_id: str
+    operator_id: str | None = Field(default=None, max_length=50)
+    start_stop_id: str = Field(min_length=1, max_length=20)
+    end_stop_id: str = Field(min_length=1, max_length=20)
     total_stops: int = Field(ge=0)
     is_bidirectional: bool = False
     has_ac: bool = False

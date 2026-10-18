@@ -20,8 +20,14 @@ depends_on = None
 
 def upgrade() -> None:
 
-    # PostGIS extension should be created by database administrator:
-    # CREATE EXTENSION IF NOT EXISTS postgis;
+    # PostGIS must exist before the first Geometry column and its GiST
+    # index below. Historically this ran only in 0002, so the chain applied
+    # on the postgis/postgis image (which pre-enables the extension in
+    # template1) and in CI, but failed at this migration on any other
+    # PostgreSQL where PostGIS is installed but not yet created. Idempotent,
+    # so databases that already have it -- including via 0002 -- are
+    # unaffected.
+    op.execute("CREATE EXTENSION IF NOT EXISTS postgis")
 
 
     # -------------------------

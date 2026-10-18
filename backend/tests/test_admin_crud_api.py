@@ -275,6 +275,58 @@ def test_create_route_404s_for_unknown_end_stop(client, two_stops, admin_headers
     assert resp.status_code == 404
 
 
+def test_create_route_404s_for_unknown_operator(client, two_stops, admin_headers):
+    """operator_id is a FK to operators; an unknown one must be a clear 404,
+    not an IntegrityError 500 at commit (AUD-011)."""
+    start, end = two_stops
+    resp = client.post(
+        "/routes",
+        json={
+            "route_name": "Bad Operator Route",
+            "vehicle_type": "bus",
+            "operator_id": "OP_DOES_NOT_EXIST",
+            "start_stop_id": start,
+            "end_stop_id": end,
+            "total_stops": 2,
+        },
+        headers=admin_headers,
+    )
+    assert resp.status_code == 404
+
+
+def test_create_route_rejects_overlong_operator_id(client, two_stops, admin_headers):
+    start, end = two_stops
+    resp = client.post(
+        "/routes",
+        json={
+            "route_name": "Long Operator Route",
+            "vehicle_type": "bus",
+            "operator_id": "O" * 51,
+            "start_stop_id": start,
+            "end_stop_id": end,
+            "total_stops": 2,
+        },
+        headers=admin_headers,
+    )
+    assert resp.status_code == 422
+
+
+def test_create_stop_rejects_overlong_free_text(client, admin_headers):
+    """Free-text stop fields are bounded so an admin write can't store an
+    arbitrarily large string (AUD-011)."""
+    resp = client.post(
+        "/stops",
+        json={
+            "stop_name": "Overlong Alias Stop",
+            "lat": 27.71,
+            "lng": 85.31,
+            "aliases": "x" * 501,
+        },
+        headers=admin_headers,
+    )
+    assert resp.status_code == 422
+
+
 # --- POST /routes/{route_id}/stops ------------------------------------------
 
 
@@ -432,6 +484,52 @@ def test_remove_route_stop_succeeds_and_resequences(client, route_with_three_sto
     session.close()
     # The old position 3 shifted down to 2; no gap.
     assert seqs == [1, 2]
+    assert total == 2
+
+
+def test_remove_route_stop_resequences_physically_shuffled_rows(
+    client, route_with_three_stops, admin_headers
+):
+    """Regression for AUD-005: resequencing must not depend on physical row
+    order. Rewrite the route's three rows as fresh INSERTs listed in
+    descending sequence_no order, then delete the first stop and assert the
+    remaining rows are contiguous 1..2. The pre-fix single
+    'SET sequence_no = sequence_no - 1' updates one row at a time against
+    the composite PK (route_id, sequence_no), so a plan that visits the
+    higher rows first tries to move seq 3 onto the not-yet-moved seq 2 and
+    raises an IntegrityError; the two-pass offset makes the target of every
+    row unique regardless of order."""
+    route_id, stop_ids = route_with_three_stops
+
+    session = SessionLocal()
+    session.execute(text("DELETE FROM route_stops WHERE route_id = :rid"), {"rid": route_id})
+    session.execute(
+        text(
+            "INSERT INTO route_stops (route_id, stop_id, sequence_no) "
+            "VALUES (:rid, :s3, 3), (:rid, :s2, 2), (:rid, :s1, 1)"
+        ),
+        {"rid": route_id, "s1": stop_ids[0], "s2": stop_ids[1], "s3": stop_ids[2]},
+    )
+    session.commit()
+    session.close()
+
+    resp = client.delete(f"/routes/{route_id}/stops/1", headers=admin_headers)
+    assert resp.status_code == 204, resp.text
+
+    session = SessionLocal()
+    rows = session.execute(
+        text(
+            "SELECT stop_id, sequence_no FROM route_stops "
+            "WHERE route_id = :rid ORDER BY sequence_no"
+        ),
+        {"rid": route_id},
+    ).all()
+    total = session.execute(
+        text("SELECT total_stops FROM routes WHERE route_id = :rid"), {"rid": route_id}
+    ).scalar_one()
+    session.close()
+    assert [r.sequence_no for r in rows] == [1, 2]
+    assert [r.stop_id for r in rows] == [stop_ids[1], stop_ids[2]]
     assert total == 2
 
 
