@@ -25,6 +25,34 @@
 const isProduction = process.env.NODE_ENV === "production";
 
 /**
+ * Fail fast on a malformed NEXT_PUBLIC_API_BASE_URL. The value is inlined
+ * into the client bundle and folded into connect-src below, so a typo would
+ * otherwise surface as runtime CORS/CSP failures rather than a build error.
+ *
+ * An *unset* value is deliberately allowed here: CI and local `next build`
+ * rely on the :8000 fallback, and rejecting it would break them. The
+ * stricter "a production bundle must name its API origin" check lives in
+ * scripts/check-api-base.mjs, which `npm run build:production` runs first.
+ */
+(function validateApiBaseOverride() {
+  const raw = process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (!raw) return;
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(
+      `NEXT_PUBLIC_API_BASE_URL is not a valid absolute URL: ${JSON.stringify(raw)}`,
+    );
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(
+      `NEXT_PUBLIC_API_BASE_URL must use http or https, got ${url.protocol}`,
+    );
+  }
+})();
+
+/**
  * Build connect-src.
  *
  * The API is NOT same-origin: lib/apiBase.ts resolves it to

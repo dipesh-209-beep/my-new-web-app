@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",
+    "build:production": "npm run check:api-base && next build",
+    "check:api-base": "node scripts/check-api-base.mjs",
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run",

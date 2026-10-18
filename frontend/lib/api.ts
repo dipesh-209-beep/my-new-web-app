@@ -140,16 +140,23 @@ export async function getAllStops(options?: RequestOptions): Promise<Stop[]> {
   const first = await getStops({ limit: pageSize, offset: 0 }, options);
   const all: Stop[] = [...first.items];
 
-  const remainingOffsets: number[] = [];
-  for (let offset = pageSize; offset < first.total; offset += pageSize) {
-    remainingOffsets.push(offset);
-  }
+  // Step by the page size the server actually honoured, not the one we
+  // requested: if the server caps page length below `pageSize`, the returned
+  // page is shorter and stepping by the request would silently skip rows
+  // between pages.
+  const step = first.items.length;
+  if (step > 0) {
+    const remainingOffsets: number[] = [];
+    for (let offset = step; offset < first.total; offset += step) {
+      remainingOffsets.push(offset);
+    }
 
-  if (remainingOffsets.length > 0) {
-    const pages = await Promise.all(
-      remainingOffsets.map((offset) => getStops({ limit: pageSize, offset }, options))
-    );
-    for (const page of pages) all.push(...page.items);
+    if (remainingOffsets.length > 0) {
+      const pages = await Promise.all(
+        remainingOffsets.map((offset) => getStops({ limit: pageSize, offset }, options))
+      );
+      for (const page of pages) all.push(...page.items);
+    }
   }
 
   return all;

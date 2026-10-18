@@ -27,10 +27,21 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 
 ### Production build
 
+The API origin is inlined into the bundle at build time (`NEXT_PUBLIC_*` is
+not a runtime value), so it must be set when you build, not when you start:
+
 ```bash
-npm run build
+NEXT_PUBLIC_API_BASE_URL=https://api.example.com npm run build:production
 npm run start
 ```
+
+`build:production` runs `npm run check:api-base` first, which refuses to
+build when the variable is unset or points at `localhost` — either would
+ship a frontend that only works when the API is directly reachable on port
+8000 (which a proxy serving only 80/443 does not expose). Plain
+`npm run build` skips that check and is what CI uses for a compile-only
+build. Remember the frontend's own origin must be in the backend's
+`PUBLIC_CORS_ORIGINS`.
 
 ### Tests
 

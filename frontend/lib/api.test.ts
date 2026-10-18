@@ -130,6 +130,25 @@ describe("getAllStops pagination", () => {
     expect(all[0].stop_id).toBe("S0000");
     expect(all[all.length - 1].stop_id).toBe(`S${String(total - 1).padStart(4, "0")}`);
   });
+
+  it("steps by the page size the server actually returned, so a server-side cap below the requested limit does not skip rows", async () => {
+    const total = 90;
+    const serverCap = 40; // honours fewer rows than the requested limit of 100
+    const fetchMock = fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (url: string) => {
+      const offset = Number(new URL(url).searchParams.get("offset"));
+      const count = Math.max(0, Math.min(serverCap, total - offset));
+      const pageItems = Array.from({ length: count }, (_, i) =>
+        makeStop(`S${String(offset + i).padStart(4, "0")}`)
+      );
+      return jsonResponse({ total, limit: serverCap, offset, items: pageItems });
+    });
+
+    const all = await getAllStops();
+    expect(all.map((s) => s.stop_id)).toEqual(
+      Array.from({ length: total }, (_, i) => `S${String(i).padStart(4, "0")}`)
+    );
+  });
 });
 
 describe("findRoute 404 handling", () => {

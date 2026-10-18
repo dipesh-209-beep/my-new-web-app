@@ -450,6 +450,29 @@ non-empty database unless you also pass `FORCE_REPLACE=1`, and which takes a saf
 backup of the target first. Keep the dumps somewhere the host does not, and
 test a restore — an unverified backup is not a backup.
 
+### Frontend
+
+There is no `frontend` service in any compose file: the stack above serves
+the API only, and the Next.js UI is built and served separately (here or on a
+static host). It is its own origin, so its URL must also appear in the
+backend's `PUBLIC_CORS_ORIGINS`.
+
+The API origin is baked into the client bundle at build time — Next.js
+inlines `NEXT_PUBLIC_API_BASE_URL`, so it is **not** a runtime value and
+editing `.env` after `next build` changes nothing:
+
+```bash
+cd frontend
+NEXT_PUBLIC_API_BASE_URL=https://api.ktm-bus.example.com npm run build:production
+npm run start            # serves on :3000 by default
+```
+
+`build:production` runs `npm run check:api-base` first, which fails if the
+variable is unset (the bundle would fall back to `<page host>:8000`) or
+points at `localhost`; either would ship a frontend that only works when the
+API is directly reachable on port 8000. Plain `npm run build` skips that
+check and is what CI uses for a compile-only build.
+
 ## Known Limitations
 
 - No real-time bus location/GPS tracking or live schedules — routing is based on the static stop/route dataset, and the congestion overlay is historical (day-of-week/time-bucket averages), not live traffic.
