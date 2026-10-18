@@ -295,6 +295,36 @@ def test_list_suggestions_marks_voted_by_me_with_auth(client, two_users, one_sto
     assert resp.json()[0]["voted_by_me"] is True
 
 
+def test_list_suggestions_is_paginated(client, two_users, one_stop):
+    """The public listing is capped and pageable, so an unbounded number of
+    pending suggestions can't be returned (or N+1 looked up) in one request."""
+    for i in range(3):
+        payload = _stop_name_change(one_stop, f"Page {i} {uuid.uuid4().hex[:4]}")
+        assert (
+            client.post(
+                "/suggestions", json=payload, headers=_auth(two_users[0])
+            ).status_code
+            == 201
+        )
+
+    page1 = client.get("/suggestions", params={"limit": 2}).json()
+    assert len(page1) == 2
+    # Batched author lookup still fills submitted_by for every row.
+    assert all(s["submitted_by"] is not None for s in page1)
+
+    page2 = client.get("/suggestions", params={"limit": 2, "offset": 2}).json()
+    assert len(page2) == 1
+    assert {s["suggestion_id"] for s in page1}.isdisjoint(
+        {s["suggestion_id"] for s in page2}
+    )
+
+
+def test_list_suggestions_rejects_bad_paging(client):
+    assert client.get("/suggestions", params={"limit": 0}).status_code == 422
+    assert client.get("/suggestions", params={"limit": 201}).status_code == 422
+    assert client.get("/suggestions", params={"offset": -1}).status_code == 422
+
+
 # --- GET /admin/suggestions -------------------------------------------------
 
 
@@ -550,3 +580,96 @@ def test_auto_apply_does_not_apply_below_threshold(client, two_users, one_stop, 
         assert row == original_name
     finally:
         session.close()
+
+
+# --- AUD-002: auto-apply must be attributable and single-winner -------------
+
+
+def test_auto_apply_writes_an_audit_row(client, two_users, one_stop, low_threshold):
+    """A live-data change applied by crossing the vote threshold must leave
+    an audit record. Before AUD-002 it applied with no attribution at all --
+    the manual review path logged, the auto-apply path did not."""
+    from sqlalchemy import select
+
+    from app.models import AdminAuditLog
+
+    payload = _stop_name_change(one_stop, f"Audited {uuid.uuid4().hex[:4]}")
+    client.post("/suggestions", json=payload, headers=_auth(two_users[0]))
+    voted = client.post("/suggestions", json=payload, headers=_auth(two_users[1]))
+    assert voted.status_code == 200, voted.text
+    suggestion_id = voted.json()["suggestion_id"]
+    assert voted.json()["status"] == "auto_applied"
+
+    session = SessionLocal()
+    try:
+        rows = session.scalars(
+            select(AdminAuditLog).where(
+                AdminAuditLog.action == "suggestion.auto_apply",
+                AdminAuditLog.resource_id == str(suggestion_id),
+            )
+        ).all()
+        assert len(rows) == 1, "exactly one audit row per auto-application"
+        row = rows[0]
+        assert row.success is True
+        # Anonymous actor (no admin behind an auto-apply) with the vote that
+        # crossed the line named in detail, so the change is still traceable.
+        assert row.actor_type == "anonymous"
+        assert row.actor_id is None
+        assert row.detail["to"] == "auto_applied"
+        assert row.detail["threshold"] == 2
+        assert isinstance(row.detail["triggering_user_id"], int)
+    finally:
+        session.close()
+
+
+def test_auto_apply_vote_count_matches_vote_rows(client, two_users, one_stop, low_threshold):
+    """The denormalized vote_count must equal the number of actual vote rows
+    at the moment of auto-apply, or the threshold is being crossed on a
+    counter that has drifted from reality."""
+    payload = _stop_name_change(one_stop, f"Counted {uuid.uuid4().hex[:4]}")
+    client.post("/suggestions", json=payload, headers=_auth(two_users[0]))
+    voted = client.post("/suggestions", json=payload, headers=_auth(two_users[1]))
+    assert voted.json()["status"] == "auto_applied"
+
+    session = SessionLocal()
+    try:
+        suggestion_id = voted.json()["suggestion_id"]
+        vote_count = session.execute(
+            text("SELECT vote_count FROM route_suggestions WHERE suggestion_id = :sid"),
+            {"sid": suggestion_id},
+        ).scalar_one()
+        actual_votes = session.execute(
+            text("SELECT COUNT(*) FROM suggestion_votes WHERE suggestion_id = :sid"),
+            {"sid": suggestion_id},
+        ).scalar_one()
+        assert vote_count == actual_votes == 2
+    finally:
+        session.close()
+
+
+def test_claim_pending_has_exactly_one_winner(client, two_users, one_stop):
+    """The pending->terminal transition is single-winner. A second claim on
+    the same suggestion (in a fresh transaction, as a concurrent voter or
+    reviewer would run) must fail, so a change cannot be applied twice."""
+    from app.api.suggestions import _claim_pending
+    from app.models import RouteSuggestion
+
+    payload = _stop_name_change(one_stop, f"Claim {uuid.uuid4().hex[:4]}")
+    created = client.post("/suggestions", json=payload, headers=_auth(two_users[0]))
+    assert created.status_code == 201, created.text
+    suggestion_id = created.json()["suggestion_id"]
+
+    winner = SessionLocal()
+    try:
+        suggestion = winner.get(RouteSuggestion, suggestion_id)
+        assert _claim_pending(winner, suggestion, to_status="approved") is True
+        winner.commit()
+    finally:
+        winner.close()
+
+    loser = SessionLocal()
+    try:
+        suggestion = loser.get(RouteSuggestion, suggestion_id)
+        assert _claim_pending(loser, suggestion, to_status="rejected") is False
+    finally:
+        loser.close()

@@ -84,6 +84,48 @@ def _invalidate_after_apply(suggestion: RouteSuggestion) -> None:
             invalidate_cache(key)
 
 
+def _claim_pending(
+    db: Session,
+    suggestion: RouteSuggestion,
+    *,
+    to_status: str,
+    reviewed_by: int | None = None,
+) -> bool:
+    """Atomically move a still-'pending' suggestion to a terminal status.
+
+    Returns True only for the caller that won the transition, False for a
+    loser. Without this, two requests that push the same suggestion over
+    the auto-apply threshold at once -- or an auto-apply racing a manual
+    review -- would each read 'pending' and each apply the change, applying
+    it twice. The conditional UPDATE takes the row lock; the loser then
+    re-evaluates the `status = 'pending'` predicate after the winner
+    commits, matches nothing, and gets 0 rows back. Exactly one caller
+    proceeds. Callers must treat a False result as "already decided".
+    """
+    values: dict = {"status": to_status, "reviewed_at": datetime.now(timezone.utc)}
+    if reviewed_by is not None:
+        values["reviewed_by"] = reviewed_by
+    claimed = db.execute(
+        update(RouteSuggestion)
+        .where(
+            RouteSuggestion.suggestion_id == suggestion.suggestion_id,
+            RouteSuggestion.status == "pending",
+        )
+        .values(**values)
+    ).rowcount
+    if not claimed:
+        return False
+    # Mirror the claim onto the in-session object. SQLAlchemy flushes the
+    # same values back (an identical UPDATE, harmless under the row lock we
+    # now hold), keeping the object consistent for the audit detail and the
+    # response without a separate refresh.
+    suggestion.status = to_status
+    suggestion.reviewed_at = values["reviewed_at"]
+    if reviewed_by is not None:
+        suggestion.reviewed_by = reviewed_by
+    return True
+
+
 def _suggestion_out(
     suggestion: RouteSuggestion, db: Session, votes_user_id: int | None = None
 ) -> SuggestionOut:
@@ -113,6 +155,73 @@ def _suggestion_out(
             )
             is not None
         )
+    return out
+
+
+def _suggestions_out(
+    suggestions: list[RouteSuggestion],
+    db: Session,
+    votes_user_id: int | None = None,
+) -> list[SuggestionOut]:
+    """Build SuggestionOut for many rows without _suggestion_out's per-row
+    N+1 lookups: authors, reviewers and the caller's votes are fetched in a
+    fixed number of batched queries regardless of how many rows there are.
+    """
+    if not suggestions:
+        return []
+
+    author_ids = {s.user_id for s in suggestions if s.user_id is not None}
+    reviewer_ids = {s.reviewed_by for s in suggestions if s.reviewed_by is not None}
+
+    authors: dict[int, str] = {}
+    if author_ids:
+        authors = dict(
+            db.execute(
+                select(User.user_id, User.username).where(User.user_id.in_(author_ids))
+            ).all()
+        )
+    reviewers: dict[int, str] = {}
+    if reviewer_ids:
+        reviewers = dict(
+            db.execute(
+                select(AdminUser.admin_id, AdminUser.username).where(
+                    AdminUser.admin_id.in_(reviewer_ids)
+                )
+            ).all()
+        )
+
+    voted_ids: set[int] = set()
+    if votes_user_id is not None:
+        voted_ids = set(
+            db.scalars(
+                select(SuggestionVote.suggestion_id).where(
+                    SuggestionVote.user_id == votes_user_id,
+                    SuggestionVote.suggestion_id.in_(
+                        [s.suggestion_id for s in suggestions]
+                    ),
+                )
+            ).all()
+        )
+
+    out: list[SuggestionOut] = []
+    for s in suggestions:
+        item = SuggestionOut(
+            suggestion_id=s.suggestion_id,
+            target_type=s.target_type,
+            target_id=s.target_id,
+            suggestion_type=s.suggestion_type,
+            payload=s.payload,
+            status=s.status,
+            vote_count=s.vote_count,
+            created_at=s.created_at.isoformat(),
+        )
+        if s.user_id is not None:
+            item.submitted_by = authors.get(s.user_id)
+        if s.reviewed_by is not None:
+            item.reviewed_by = reviewers.get(s.reviewed_by)
+        if votes_user_id is not None:
+            item.voted_by_me = s.suggestion_id in voted_ids
+        out.append(item)
     return out
 
 
@@ -215,17 +324,41 @@ def create_suggestion(
     applied = False
     threshold = get_settings().AUTO_APPLY_VOTE_THRESHOLD
     if suggestion.status == "pending" and suggestion.vote_count >= threshold:
-        # Auto-apply: this request pushed the suggestion over the line. Status
-        # flip + data change + audit timestamp commit atomically below -- if
-        # the change can't be applied the whole vote/suggestion rolls back.
-        suggestion.status = "auto_applied"
-        suggestion.reviewed_at = datetime.now(timezone.utc)
-        applied = True
-        try:
-            apply_suggestion(db, suggestion)
-        except TargetMissingError as exc:
-            db.rollback()
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        # Auto-apply: this request pushed the suggestion over the line. The
+        # transition is claimed atomically so two votes crossing the threshold
+        # at once cannot each apply the change; only the winner proceeds.
+        if _claim_pending(db, suggestion, to_status="auto_applied"):
+            try:
+                apply_suggestion(db, suggestion)
+            except TargetMissingError as exc:
+                db.rollback()
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            # Every applied live-data change must be attributable. The row
+            # commits in the same transaction as the change (see
+            # app/core/admin_audit.py), so an auto-apply cannot succeed while
+            # going unrecorded. There is no admin behind an auto-apply, so the
+            # actor is anonymous and the vote that crossed the line is named.
+            record_audit(
+                db,
+                principal=None,
+                action="suggestion.auto_apply",
+                resource_type="route_suggestion",
+                resource_id=str(suggestion.suggestion_id),
+                success=True,
+                request_id=getattr(request.state, "request_id", None),
+                client_ip=getattr(request.state, "client_ip", None),
+                detail={
+                    "from": "pending",
+                    "to": "auto_applied",
+                    "target_type": suggestion.target_type,
+                    "target_id": suggestion.target_id,
+                    "suggestion_type": suggestion.suggestion_type,
+                    "vote_count": suggestion.vote_count,
+                    "threshold": threshold,
+                    "triggering_user_id": user.user_id,
+                },
+            )
+            applied = True
 
     db.commit()
     if applied:
@@ -236,18 +369,32 @@ def create_suggestion(
 
 @router.get("/suggestions", response_model=list[SuggestionOut])
 def list_suggestions(
+    limit: int = Query(
+        100,
+        ge=1,
+        le=200,
+        description=(
+            "Maximum number of pending suggestions to return. The listing is "
+            "public and its size is otherwise unbounded, so it is capped; "
+            "page with `offset` for more."
+        ),
+    ),
+    offset: int = Query(0, ge=0, description="Rows to skip, for paging."),
     current_user: User | None = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ) -> list[SuggestionOut]:
-    """Public listing of pending suggestions, most-supported first. Optional
-    auth lets the frontend mark which ones the current user already backed."""
+    """Public listing of pending suggestions, most-supported first, paged.
+    Optional auth lets the frontend mark which ones the current user already
+    backed."""
     rows = db.scalars(
         select(RouteSuggestion)
         .where(RouteSuggestion.status == "pending")
         .order_by(RouteSuggestion.vote_count.desc(), RouteSuggestion.suggestion_id.desc())
+        .limit(limit)
+        .offset(offset)
     ).all()
     votes_user_id = current_user.user_id if current_user is not None else None
-    return [_suggestion_out(s, db, votes_user_id=votes_user_id) for s in rows]
+    return _suggestions_out(rows, db, votes_user_id=votes_user_id)
 
 
 @router.get("/admin/suggestions", response_model=list[SuggestionOut])
@@ -276,7 +423,10 @@ def admin_list_suggestions(
         .where(RouteSuggestion.status == suffix_status)
         .order_by(RouteSuggestion.vote_count.desc(), RouteSuggestion.suggestion_id.desc())
     ).all()
-    return [_suggestion_out(s, db) for s in rows]
+    # Batched author/reviewer lookups (the admin queue is unbounded and was
+    # paying one query per row); it stays unpaged because a reviewer has to
+    # see the whole status, not a page of it.
+    return _suggestions_out(rows, db)
 
 
 @router.patch("/admin/suggestions/{suggestion_id}", response_model=SuggestionOut)
@@ -309,22 +459,27 @@ def review_suggestion(
     # reviewed_by is a FK to admin_users, so a service credential (which
     # has no admin account behind it) leaves it NULL. The audit row still
     # records the credential's key_id, so the review is attributable even
-    # though this column can't be.
-    suggestion.reviewed_by = principal.admin_id
-    suggestion.reviewed_at = datetime.now(timezone.utc)
+    # though this column can't be. The transition is claimed atomically so a
+    # review racing the auto-apply threshold (or a second reviewer) cannot
+    # apply the same change twice.
     previous_status = suggestion.status
+    to_status = "approved" if payload.action == "approve" else "rejected"
+    if not _claim_pending(
+        db, suggestion, to_status=to_status, reviewed_by=principal.admin_id
+    ):
+        db.refresh(suggestion)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Suggestion is no longer pending (currently '{suggestion.status}').",
+        )
 
-    applied = False
-    if payload.action == "approve":
-        suggestion.status = "approved"
-        applied = True
+    applied = to_status == "approved"
+    if applied:
         try:
             apply_suggestion(db, suggestion)
         except TargetMissingError as exc:
             db.rollback()
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    else:
-        suggestion.status = "rejected"
 
     # Staged before the commit, so the status flip, the applied data
     # change, and the record of who decided it are one atomic unit. A
