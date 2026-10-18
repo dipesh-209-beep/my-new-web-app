@@ -1,13 +1,20 @@
 import math
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Depends
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Depends, Request, Response
 from sqlalchemy.orm import Session
 from typing import Optional
 
+from app.core.config import get_settings
+from app.core.rate_limit import limiter
 from app.routing.osrm_client import get_route_geometry, OSRMError
 from app.routing.graph_builder import haversine_distance_m
-from app.routing.constants import BUS_AVG_SPEED_MPS, WALK_SPEED_MPS, BOARD_WAIT_S
+from app.routing.constants import (
+    BUS_AVG_SPEED_MPS,
+    WALK_SPEED_MPS,
+    BOARD_WAIT_S,
+    CONGESTION_LAMBDA,
+)
 from app.routing.time_buckets import day_and_bucket_for, now_in_nepal
 from app.db.session import get_db, SessionLocal
 from app.db import queries
@@ -31,6 +38,18 @@ from app.schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["route-finder"])
+
+# Hard cap on intermediate via stops, from Settings. Evaluated once at import
+# (FastAPI needs a literal for the query schema's maxItems); a change takes
+# effect on restart, same as every other Settings-derived default.
+MAX_VIA_STOPS = get_settings().MAX_VIA_STOPS
+
+
+def _route_finder_rate_limit() -> str:
+    """Rate-limit string for GET /route-finder, read per request so it can be
+    tuned from configuration without a code change. The limiter accepts a
+    callable for exactly this."""
+    return get_settings().ROUTE_FINDER_RATE_LIMIT
 
 # Stops closer together than this are treated as effectively the same
 # point for OSRM waypoint purposes. Forcing OSRM through every single
@@ -288,9 +307,15 @@ def _leg_estimated_duration_s(leg: RouteLeg, source: DistanceSource) -> float:
     The OSRM driving-profile duration is deliberately NOT used -- it
     describes a private car at free-flow speed, not a bus making stops.
     Same assumptions the pathfinder's "fastest_estimated" ranking uses,
-    so the UI never shows a figure the search never used."""
+    so the UI never shows a figure the search never used: a ride segment's
+    congestion ratio (when the search opted into congestion) is applied to
+    the leg's displayed time with the same CONGESTION_LAMBDA the ranking
+    used, so a leg the search judged slow never displays as fast."""
     speed = WALK_SPEED_MPS if leg.route_id == "TRANSFER" else BUS_AVG_SPEED_MPS
-    return _leg_distance_m(leg, source) / speed
+    duration = _leg_distance_m(leg, source) / speed
+    if leg.route_id != "TRANSFER" and leg.congestion_ratio > 1:
+        duration *= 1 + CONGESTION_LAMBDA * (leg.congestion_ratio - 1)
+    return duration
 
 
 def _annotate_leg_estimated_durations(
@@ -432,6 +457,9 @@ def _build_legs(
     so no DB access is needed here."""
 
     legs: list[RouteLeg] = []
+    # Distance weight accumulated per leg, parallel to `legs`, for the
+    # distance-weighted congestion-ratio blend below.
+    leg_distance: list[float] = []
     for seg in segments:
         seg_route_id = seg.route_id or "TRANSFER"
         to_stop = stop_map[seg.to_stop_id]
@@ -439,6 +467,19 @@ def _build_legs(
             legs[-1].alight_stop = to_stop
             legs[-1].num_ride_segments += 1
             legs[-1].stops.append(to_stop)
+            # Distance-weighted blend of the leg's segment congestion ratios.
+            # Applying this ratio to the leg's summed distance is exactly the
+            # sum of the per-edge inflated durations the ranking minimized
+            # (the inflation factor is linear in the ratio), so the displayed
+            # duration matches the basis the search used (AUD-021).
+            prev_d = leg_distance[-1]
+            total_d = prev_d + seg.weight
+            if total_d > 0:
+                legs[-1].congestion_ratio = (
+                    legs[-1].congestion_ratio * prev_d
+                    + seg.congestion_ratio * seg.weight
+                ) / total_d
+            leg_distance[-1] = total_d
         else:
             from_stop = stop_map[seg.from_stop_id]
             legs.append(
@@ -453,8 +494,10 @@ def _build_legs(
                     alight_stop=to_stop,
                     num_ride_segments=1,
                     stops=[from_stop, to_stop],
+                    congestion_ratio=seg.congestion_ratio,
                 )
             )
+            leg_distance.append(seg.weight)
     return legs
 
 
@@ -570,15 +613,19 @@ def find_route(
     ),
     via: list[str] = Query(
         [],
+        max_length=MAX_VIA_STOPS,
         description=(
             "Zero or more intermediate stop_ids the trip must pass "
             "through, in order, between origin and destination (e.g. "
             "?via=S0042&via=S0107). Each origin->via->...->destination "
             "leg is solved independently and chained together, the same "
             "way an \"add a stop\" feature works in a driving-directions "
-            "app. `include_alternatives` is ignored when this is set -- "
-            "chaining per-leg alternatives would combinatorially explode "
-            "into a confusing number of whole-trip options."
+            f"app. At most {MAX_VIA_STOPS} via stops are accepted; a longer "
+            "list is rejected (422) before any routing work runs, since each "
+            "leg is an independent, non-cheap solve. `include_alternatives` "
+            "is ignored when this is set -- chaining per-leg alternatives "
+            "would combinatorially explode into a confusing number of "
+            "whole-trip options."
         ),
     ),
     db: Session = Depends(get_db),

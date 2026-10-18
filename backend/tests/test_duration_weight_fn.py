@@ -25,7 +25,12 @@ from app.routing.constants import (
     CONGESTION_LAMBDA,
     WALK_SPEED_MPS,
 )
-from app.routing.pathfinder import _duration_weight_fn
+from app.routing.pathfinder import (
+    RouteFinderResult,
+    PathSegment,
+    _annotate_segment_congestion,
+    _duration_weight_fn,
+)
 
 
 def _ride_edge(distance_m, route_id="R1"):
@@ -102,6 +107,82 @@ def test_ratios_combine_via_max_organic_beats_zone(monkeypatch):
     base_duration = 1000 / BUS_AVG_SPEED_MPS
     expected = base_duration * (1 + CONGESTION_LAMBDA * (5.0 - 1))  # organic (5.0) beats zone (1.3)
     assert weight("A", "B", _ride_edge(1000)) == pytest.approx(expected)
+
+
+def _congestion_graph():
+    graph = nx.DiGraph()
+    graph.add_node(("A", "R1", 1), lat=27.70, lng=85.31)
+    graph.add_node(("B", "R1", 2), lat=27.71, lng=85.32)
+    graph.add_edge(
+        ("A", "R1", 1),
+        ("B", "R1", 2),
+        kind="ride",
+        route_id="R1",
+        distance_m=1000.0,
+        weight=1000.0,
+    )
+    return graph
+
+
+def test_annotation_carries_ranking_ratio_onto_segments(monkeypatch):
+    """_annotate_segment_congestion stamps each ride segment with the same
+    blended ratio the ranking used, so the API can scale the durations it
+    displays onto that basis (AUD-021)."""
+    monkeypatch.setattr(cz, "load_zones", lambda: [])
+    result = RouteFinderResult(
+        segments=[PathSegment("A", "B", "R1", False, 1000.0)],
+        total_distance_m=1000.0,
+        transfer_count=0,
+        stop_sequence=["A", "B"],
+    )
+    annotated = _annotate_segment_congestion(
+        _congestion_graph(), [], {("R1", "A", "B"): 2.0}, result
+    )
+    assert annotated.segments[0].congestion_ratio == pytest.approx(2.0)
+
+
+def test_annotated_ratio_reproduces_ranking_duration(monkeypatch):
+    """The displayed duration (distance/speed scaled by the annotated ratio)
+    must equal the duration _duration_weight_fn ranked with -- this is the
+    whole point of carrying the ratio, and what makes the "fastest_estimated"
+    label honest."""
+    monkeypatch.setattr(cz, "load_zones", lambda: [])
+    graph = _congestion_graph()
+    lookup = {("R1", "A", "B"): 2.0}
+    result = RouteFinderResult(
+        segments=[PathSegment("A", "B", "R1", False, 1000.0)],
+        total_distance_m=1000.0,
+        transfer_count=0,
+        stop_sequence=["A", "B"],
+    )
+    annotated = _annotate_segment_congestion(graph, [], lookup, result)
+    seg = annotated.segments[0]
+
+    display = (
+        seg.weight
+        / BUS_AVG_SPEED_MPS
+        * (1 + CONGESTION_LAMBDA * (seg.congestion_ratio - 1))
+    )
+    ranked = _duration_weight_fn(graph, lookup)(
+        "A", "B", graph[("A", "R1", 1)][("B", "R1", 2)]
+    )
+    assert display == pytest.approx(ranked)
+
+
+def test_walk_segment_ratio_is_left_at_one(monkeypatch):
+    """A walking-transfer segment is not a ride -- its ratio stays 1.0 so a
+    transfer never gets its time inflated."""
+    monkeypatch.setattr(cz, "load_zones", lambda: [])
+    result = RouteFinderResult(
+        segments=[PathSegment("A", "B", None, True, 200.0)],
+        total_distance_m=200.0,
+        transfer_count=1,
+        stop_sequence=["A", "B"],
+    )
+    annotated = _annotate_segment_congestion(
+        _congestion_graph(), [], {("R1", "A", "B"): 5.0}, result
+    )
+    assert annotated.segments[0].congestion_ratio == 1.0
 
 
 def test_walk_and_board_edges_stay_unaffected_by_congestion(monkeypatch):

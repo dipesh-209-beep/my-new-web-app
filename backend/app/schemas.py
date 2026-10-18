@@ -285,6 +285,12 @@ class RouteLeg(BaseModel):
     # a multi-transfer trip is charged once per bus boarded rather than once
     # over the summed distance.
     fare: Optional[FareOut] = None
+    # Internal, excluded from the response: the distance-weighted congestion
+    # ratio of this leg's ride segments. estimated_duration_s is scaled by it
+    # so the displayed time shares the congestion-aware basis the search
+    # ranked candidates on (AUD-021). Always 1.0 for a walking-transfer leg
+    # and for any search that didn't opt into congestion.
+    congestion_ratio: float = Field(default=1.0, exclude=True)
 
 
 # Which distance basis a route result's figures are on. One basis is chosen

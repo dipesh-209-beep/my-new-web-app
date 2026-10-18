@@ -172,6 +172,12 @@ def cached_response(namespace: str, ttl_seconds: float, key_params: tuple[str, .
             bucket[key] = (now + ttl_seconds, result)
             return result
 
+        # Explicit, non-ambiguous marker that this endpoint is response-cached.
+        # functools.wraps (used both here and by slowapi's limiter) sets
+        # __wrapped__, so a test cannot use that attribute to tell a cache
+        # wrapper from any other decorator; this attribute names the cache
+        # namespace instead.
+        wrapper.__response_cache_namespace__ = namespace
         return wrapper
 
     return decorator

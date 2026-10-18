@@ -268,6 +268,21 @@ class Settings(BaseSettings):
     # push a change through alone.
     AUTO_APPLY_VOTE_THRESHOLD: int = 26
 
+    # Maximum number of intermediate `via` stops accepted by a single
+    # GET /route-finder request (AUD-003). Each via leg is a full independent
+    # routing solve -- direct-route scan, Dijkstra, and its own DB access --
+    # so an unbounded list lets one unauthenticated request multiply server
+    # work arbitrarily. 5 keeps the worst case bounded at 6 legs; raise it
+    # only alongside a matching rate limit and a cost review.
+    MAX_VIA_STOPS: int = 5
+
+    # Per-client rate limit for GET /route-finder, layered on top of nginx's
+    # coarse global limit. The endpoint is unauthenticated and each request
+    # does real graph + OSRM work, so it gets its own application-level bucket
+    # the way /suggestions and the auth endpoints do. Read per request (the
+    # limiter takes a callable), so tuning it needs no code change.
+    ROUTE_FINDER_RATE_LIMIT: str = "60/minute"
+
     # Path to the geographic congestion-zone CSV
     # (app/routing/congestion_zones.py). This is a *file*, not database
     # data, so it cannot come from the DB the way the organic

@@ -502,13 +502,15 @@ def test_congestion_default_and_opt_in_do_not_share_a_result(
 def test_route_finder_endpoint_is_not_response_cached():
     """The route-finder must stay uncached (its ranking depends on
     avoid_congestion/include_alternatives, and cache keys would have to
-    distinguish them). cached_response uses functools.wraps, setting
-    __wrapped__; FastAPI's router decorator does not. If someone wraps
-    /route-finder without keying those params, this fails."""
+    distinguish them). cached_response stamps
+    __response_cache_namespace__ on its wrapper; its absence is what proves
+    the endpoint isn't cached. (It can't be checked via __wrapped__, which
+    functools.wraps sets for any decorator -- slowapi's rate limiter sets
+    it too.)"""
     from app.api import routing
 
-    assert not hasattr(routing.find_route, "__wrapped__")
-    assert not hasattr(routing.walking_route, "__wrapped__")
+    assert not hasattr(routing.find_route, "__response_cache_namespace__")
+    assert not hasattr(routing.walking_route, "__response_cache_namespace__")
 
 
 # --- congestion-aware cost agrees with the documented policy ---

@@ -19,7 +19,12 @@ from app.api.routing import (
     _ride_only_distance_m,
     _total_estimated_duration_s,
 )
-from app.routing.constants import BOARD_WAIT_S, BUS_AVG_SPEED_MPS, WALK_SPEED_MPS
+from app.routing.constants import (
+    BOARD_WAIT_S,
+    BUS_AVG_SPEED_MPS,
+    CONGESTION_LAMBDA,
+    WALK_SPEED_MPS,
+)
 from app.routing.graph_builder import haversine_distance_m
 from app.schemas import RouteLeg, StopOut
 
@@ -183,3 +188,46 @@ def test_walking_only_trip_has_no_ride_distance_on_either_basis():
     )
     assert _ride_only_distance_m([walk], "osrm") == 0
     assert _ride_only_distance_m([walk], "graph") == 0
+
+
+def test_ride_leg_duration_is_congestion_scaled():
+    """When the search opted into congestion, a ride leg's displayed duration
+    carries the same CONGESTION_LAMBDA inflation the ranking used -- so a leg
+    ranked as slow can never display as fast (AUD-021)."""
+    leg = make_leg(
+        "R1",
+        make_stop("S1", "A", lat=27.7000, lng=85.3100),
+        make_stop("S2", "B", lat=27.7100, lng=85.3100),
+        distance_m=1300,
+    )
+    base = _leg_estimated_duration_s(leg, "osrm")
+    leg.congestion_ratio = 2.0
+    scaled = _leg_estimated_duration_s(leg, "osrm")
+    assert scaled == pytest.approx(base * (1 + CONGESTION_LAMBDA * (2.0 - 1)))
+
+
+def test_transfer_leg_duration_ignores_congestion():
+    """Congestion only ever inflates rides; a walking-transfer leg is never
+    scaled, even if a ratio somehow lands on it."""
+    leg = make_leg(
+        "TRANSFER",
+        make_stop("S1", "A", lat=27.7000, lng=85.3100),
+        make_stop("S2", "B", lat=27.7100, lng=85.3100),
+        distance_m=1300,
+    )
+    base = _leg_estimated_duration_s(leg, "osrm")
+    leg.congestion_ratio = 5.0
+    assert _leg_estimated_duration_s(leg, "osrm") == pytest.approx(base)
+
+
+def test_congestion_ratio_is_excluded_from_response_payload():
+    """congestion_ratio is an internal display-scaling input, not part of the
+    public RouteLeg shape."""
+    leg = make_leg(
+        "R1",
+        make_stop("S1", "A", lat=27.7000, lng=85.3100),
+        make_stop("S2", "B", lat=27.7100, lng=85.3100),
+        distance_m=1300,
+    )
+    leg.congestion_ratio = 3.0
+    assert "congestion_ratio" not in leg.model_dump()

@@ -21,7 +21,7 @@ Loop routes are handled correctly even when the same physical stop occurs
 multiple times in the same route.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, Optional
 import heapq
 
@@ -53,6 +53,12 @@ class PathSegment:
     route_id: Optional[str]
     is_transfer: bool
     weight: float
+    # The blended organic/zone congestion ratio this ride edge was ranked
+    # with, when the search opted into congestion (otherwise 1.0). Carried
+    # so the API can put the *displayed* leg/total durations on the same
+    # congestion-aware basis the ranking used -- see
+    # _annotate_segment_congestion. Not part of the public response.
+    congestion_ratio: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -453,6 +459,50 @@ def _congestion_aware_cost(
         else:
             total += segment.weight
     return total
+
+
+def _annotate_segment_congestion(
+    graph: nx.DiGraph,
+    zones: list,
+    congestion_lookup: dict[tuple, float],
+    result,
+):
+    """Return `result` (a RouteFinderResult or RouteAlternative) with each
+    ride segment's `congestion_ratio` set to the same blended organic/zone
+    ratio the congestion-aware edge weighting ranked it with.
+
+    Ranking already accounts for congestion (see _congestion_weight_fn /
+    _duration_weight_fn), but the API computes the durations it *displays*
+    later, from segment distances alone. Without this the
+    "fastest_estimated" alternative can be ranked on congestion-inflated
+    times yet shown with a smaller congestion-free time than the option it
+    beat. Carrying the per-segment ratio lets the API scale the displayed
+    durations onto the same basis.
+    """
+    ratio_by_key: dict[tuple, float] = {}
+    for u, v, data in graph.edges(data=True):
+        if data.get("kind") != "ride":
+            continue
+        key = (_physical_stop_id(u), _physical_stop_id(v), data.get("route_id"))
+        if key not in ratio_by_key:
+            ratio_by_key[key] = _ride_congestion_ratio(
+                graph, zones, congestion_lookup, u, v, data
+            )
+
+    annotated = [
+        seg
+        if seg.route_id is None
+        else replace(
+            seg,
+            congestion_ratio=ratio_by_key.get(
+                (seg.from_stop_id, seg.to_stop_id, seg.route_id), 1.0
+            ),
+        )
+        for seg in result.segments
+    ]
+    return replace(result, segments=annotated)
+
+
 def _path_to_result(graph: nx.DiGraph, path: list) -> RouteFinderResult:
     """Shared conversion from a raw NetworkX path (a list of graph nodes)
     into a RouteFinderResult, regardless of which weight function chose
@@ -1079,6 +1129,19 @@ def find_shortest_path(
         congestion_aware=congestion_lookup is not None,
         congestion_flipped=congestion_flipped,
     )
+
+    # Carry each ride edge's congestion ratio onto the segments the API will
+    # turn into displayed durations, so ranking and display agree when the
+    # caller opted into congestion (AUD-021). Done after all ranking and the
+    # rank explanation, which don't read the annotation.
+    if congestion_lookup is not None:
+        primary = _annotate_segment_congestion(
+            graph, zones, congestion_lookup, primary
+        )
+        alternatives = [
+            _annotate_segment_congestion(graph, zones, congestion_lookup, alt)
+            for alt in alternatives
+        ]
 
     return RouteFinderResult(
         segments=primary.segments,

@@ -138,3 +138,59 @@ def test_route_finder_max_transfers_validation(client):
         params={"origin": "S0384", "destination": "S0408", "max_transfers": -1},
     )
     assert resp.status_code == 422
+
+
+# --- via cap + rate limit (AUD-003) ----------------------------------------
+
+
+def test_route_finder_rejects_more_than_max_via(client):
+    """An over-long via list is refused by query validation before any
+    routing work runs -- not by grinding through an unbounded number of
+    independent leg solves."""
+    from app.api.routing import MAX_VIA_STOPS
+
+    params = [("origin", "S0384")]
+    params += [("via", "S0107") for _ in range(MAX_VIA_STOPS + 1)]
+    params += [("destination", "S0056")]
+    resp = client.get("/route-finder", params=params)
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"][0]["loc"] == ["query", "via"]
+    assert resp.json()["detail"][0]["type"] == "too_long"
+
+
+def test_route_finder_accepts_up_to_max_via(client):
+    """The documented maximum still passes validation and routes."""
+    from app.api.routing import MAX_VIA_STOPS
+
+    params = [("origin", "S0384")]
+    params += [("via", "S0107") for _ in range(MAX_VIA_STOPS)]
+    params += [("destination", "S0056")]
+    resp = client.get("/route-finder", params=params)
+    assert resp.status_code != 422, resp.text
+
+
+def test_route_finder_is_rate_limited(client, monkeypatch):
+    """GET /route-finder carries its own per-client application rate limit
+    (not only nginx's global one). The limit is read per request from
+    Settings, so a tiny value can be injected to prove enforcement without
+    hammering the endpoint."""
+    import app.api.routing as routing
+    from app.core.config import Settings
+    from app.core.rate_limit import limiter
+
+    class _TinyLimitSettings(Settings):
+        ROUTE_FINDER_RATE_LIMIT: str = "2/minute"
+
+    monkeypatch.setattr(routing, "get_settings", lambda: _TinyLimitSettings())
+    limiter.reset()
+    try:
+        statuses = [
+            client.get(
+                "/route-finder", params={"origin": "S0384", "destination": "S0056"}
+            ).status_code
+            for _ in range(3)
+        ]
+        assert statuses[0] != 429 and statuses[1] != 429
+        assert statuses[2] == 429, f"expected the 3rd request to be limited, got {statuses}"
+    finally:
+        limiter.reset()
