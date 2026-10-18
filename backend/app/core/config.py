@@ -45,12 +45,15 @@ def _dotenv_if_readable() -> Path | None:
     This file is mode 0600 on purpose: it holds the Postgres password, the
     Redis password, the admin API key and the JWT signing key, and
     scripts/gen_backend_env.py tightens the mode on any checkout it sees.
-    In Docker, the backend service runs with `cap_drop: ALL`, which
-    includes CAP_DAC_OVERRIDE -- so the container's root process cannot
-    read a 0600 file owned by the host user, and pydantic's dotenv source
-    raised PermissionError before any settings were assembled. The service
-    then failed its health check and nginx returned 504 for the whole
-    stack, with the cause buried in a dotenv traceback.
+    In Docker, the service runs with `cap_drop: ALL` (which includes
+    CAP_DAC_OVERRIDE), so a process that does not own the file cannot read
+    it -- and pydantic's dotenv source raised PermissionError before any
+    settings were assembled. The service then failed its health check and
+    nginx returned 504 for the whole stack, with the cause buried in a
+    dotenv traceback. (Development's override now re-grants
+    CAP_DAC_OVERRIDE so the bind-mounted .env is readable, but skipping the
+    read entirely is what makes the failure impossible rather than
+    merely avoided.)
 
     None of that read was necessary. In a container the values arrive
     through Compose's `env_file:`, which the Docker daemon reads as root

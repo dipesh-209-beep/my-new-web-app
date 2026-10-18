@@ -13,7 +13,7 @@ either way so the response can't be used to distinguish "no such user"
 from "wrong password" (and neither can the audit log).
 
 Rate limiting: 10 attempts/minute per client IP, in addition to the
-nginx-level limit in deploy/nginx.prod.conf. The previous 5/minute was
+nginx-level limit in deploy/nginx.https.conf. The previous 5/minute was
 tight enough to be a real operational hazard -- a handful of admins
 behind one NAT address (a shared office, a university VPN) share a
 single bucket, and a handful of fat-fingered password entries could

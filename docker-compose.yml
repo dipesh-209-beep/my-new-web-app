@@ -32,8 +32,10 @@
 # useless, which matters because none of these base images are distroless.
 #
 # `cap-strict` -- no capabilities at all. Correct for the backend: uvicorn
-# listens on 8000 (>1024, so no NET_BIND_SERVICE) and the image runs as
-# root without dropping privileges, so it never needs one.
+# listens on 8000 (>1024, so no NET_BIND_SERVICE) and the image runs as the
+# unprivileged `appuser` (see backend/Dockerfile), so it never needs one.
+# The DAC_OVERRIDE grant that development's 0600 backend/.env requires is
+# NOT here -- it lives in docker-compose.override.yml, which only dev loads.
 #
 # `cap-entrypoint` -- drop ALL, then add back exactly the four-ish
 # capabilities a privilege-dropping entrypoint needs. The official postgres,
@@ -95,6 +97,13 @@ services:
       start_period: 30s
     shm_size: 256mb
     <<: *cap-entrypoint
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+    networks:
+      - internal
     # Schema is created via Alembic migrations (backend/migrations), not an init script.
     # Run `alembic upgrade head` from backend/ after the db container is up.
 
@@ -137,6 +146,13 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required - run `make backend-env`}
     <<: *cap-entrypoint
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+    networks:
+      - internal
 
   backend:
     build: ./backend
@@ -215,33 +231,20 @@ services:
       # socket dir.
       - /tmp:rw,noexec,nosuid,size=64m
     <<: *cap-strict
-    # DAC_OVERRIDE, deliberately, on this one service.
-    #
-    # backend/.env is mode 0600 (scripts/gen_backend_env.py enforces it)
-    # and the development override bind-mounts the whole backend/ directory,
-    # so /app/.env exists in the container owned by the host user. The
-    # container runs as root, but `cap_drop: ALL` includes
-    # CAP_DAC_OVERRIDE, so root could not read it -- and two libraries
-    # independently try: pydantic-settings, and the starlette Config that
-    # slowapi builds for its own environment lookups. Both raised
-    # PermissionError during import, which took the service down at its
-    # health check and returned 504 through nginx for the whole stack.
-    #
-    # The alternative -- running the container as the host uid so the file
-    # is owned rather than merely readable -- is not portable: the uid
-    # differs per machine and per CI runner, and hardcoding one produces
-    # either a permission error or a needlessly permissive mode.
-    #
-    # This is a narrow grant on a service with no published port, reachable
-    # only from the compose network, and the capability it buys is "read a
-    # file this container was explicitly given a copy of". Note it is only
-    # needed in development, where the bind mount drags the file in;
-    # docker-compose.prod.yml does not bind-mount backend/, so the
-    # container's configuration comes entirely from `env_file:` (read by
-    # the Docker daemon as root) and the file is never opened by the
-    # process.
-    cap_add:
-      - DAC_OVERRIDE
+    # No capabilities at all, and specifically no DAC_OVERRIDE. That
+    # capability is only ever needed in development, where the override
+    # bind-mounts backend/.env (mode 0600) over the image's copy -- the
+    # grant, and the explanation, live in docker-compose.override.yml.
+    # Production never bind-mounts backend/, so /app/.env does not exist
+    # and the process reads configuration only from the environment the
+    # daemon injects (see `env_file:` above and docker-compose.prod.yml).
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+    networks:
+      - internal
 
   # The only service with a published port. Single ingress point for the
   # whole stack; see deploy/nginx.conf.
@@ -268,17 +271,37 @@ services:
       - /var/run:rw,noexec,nosuid,size=1m
       - /tmp:rw,noexec,nosuid,size=32m
     healthcheck:
-      test: ["CMD-SHELL", "nginx -t"]
+      # A real request, not `nginx -t`: -t validates the config file in
+      # isolation and succeeds even when nginx is not actually serving
+      # (upstream down, certificate unreadable). /nginx-health is answered
+      # by nginx itself and never proxied, so a 200 means a worker is up.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/nginx-health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 10s
     <<: *cap-entrypoint
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+    networks:
+      # edge for the published listener; internal so it can reach `backend`,
+      # which in production is internal-only.
+      - edge
+      - internal
 
   # Internal-only. Not proxied by nginx (see deploy/nginx.conf) and not
   # published: these are dependencies of the backend, not something a
   # browser calls.
   osrm:
-    image: osrm/osrm-backend
+    # Pinned by digest, not tag: osrm/osrm-backend publishes no v5.26.0 tag
+    # (versioned tags stop at v5.25.0), and `latest` is what currently loads
+    # the pre-built nepal-latest.osrm extracts. This digest is immutable and
+    # is exactly the running, health-checked image; re-point it only alongside
+    # a fresh `make osrm` extract so engine and data format stay in step.
+    image: osrm/osrm-backend@sha256:af5d4a83fb90086a43b1ae2ca22872e6768766ad5fcbb07a29ff90ec644ee409
     container_name: osrm_ktm
     restart: unless-stopped
     command: osrm-routed --algorithm mld /data/nepal-latest.osrm
@@ -286,14 +309,33 @@ services:
       - "5000"
     volumes:
       - ./backend:/data:ro
+    healthcheck:
+      # The osrm image ships neither curl nor wget, but it does include
+      # bash, so open the port with bash's /dev/tcp. osrm-routed starts
+      # listening only after the .osrm files have loaded, so an accepted
+      # connection is a real readiness signal; the backend's depends_on
+      # only waits for the process to start, not for that load.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/5000' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     <<: *cap-strict
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    networks:
+      - internal
 
   # Separate instance for pedestrian directions (walking to the nearest
   # stop). A single osrm-routed process only serves the profile its .osrm
   # file was extracted with, so this needs its own extract
   # (nepal-latest-foot.osrm, built with foot.lua) and its own port.
   osrm-foot:
-    image: osrm/osrm-backend
+    # Same digest pin as the driving instance above (see that comment).
+    image: osrm/osrm-backend@sha256:af5d4a83fb90086a43b1ae2ca22872e6768766ad5fcbb07a29ff90ec644ee409
     container_name: osrm_ktm_foot
     restart: unless-stopped
     command: osrm-routed --algorithm mld /data/nepal-latest-foot.osrm
@@ -301,7 +343,36 @@ services:
       - "5000"
     volumes:
       - ./backend:/data:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/5000' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     <<: *cap-strict
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    networks:
+      - internal
+
+networks:
+  # Two networks, because `internal: true` and published ports are mutually
+  # exclusive: Docker registers a published port only when the container is
+  # attached to at least one non-internal network (an internal network has no
+  # gateway to DNAT through). So:
+  #
+  #   * `edge` is a normal bridge. ONLY `proxy` joins it, which keeps it the
+  #     single externally-reachable surface in production. The dev override
+  #     also attaches db/redis/backend/osrm to it, because those are the
+  #     services dev publishes to loopback.
+  #   * `internal` has no route off the host, so a compromised data-plane
+  #     container (db, redis, backend, osrm) cannot exfiltrate the dataset.
+  edge:
+  internal:
+    internal: true
 
 volumes:
   pgdata:

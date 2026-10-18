@@ -36,20 +36,21 @@ services:
       - /tmp:rw,noexec,nosuid,size=32m
 
   backend:
-    # Replaces the image's plain CMD. Two flags, one purpose: teach
-    # uvicorn that the peer address it sees is the compose network, and
-    # that X-Forwarded-For from `proxy` is therefore worth believing.
-    # Without --forwarded-allow-ips uvicorn ignores the header, and
-    # TRUST_PROXY_HEADERS=true below would make the app trust a header
-    # that never arrives -- every request would appear to come from the
-    # proxy, and the per-IP rate limit would be one global bucket.
+    # Replaces the image's plain CMD with the same stable process plus
+    # uvicorn's proxy handling. The client IP used for rate limiting and
+    # audit rows does NOT flow through uvicorn's rewrite any more: nginx
+    # OVERWRITES X-Forwarded-For/X-Real-IP with $remote_addr
+    # (deploy/proxy_params.conf), and the app reads that single value
+    # (app/core/request_context.py::get_client_ip). --proxy-headers stays
+    # so that X-Forwarded-Proto is still consulted for scheme detection.
     #
-    # 172.16.0.0/12 is RFC1918 space, which covers this compose bridge
-    # (observed as 172.18.x). Prefer a narrower value -- a single /32 --
-    # if the proxy has a fixed address, since this range also matches any
-    # other container on the same bridge. The safety property that matters
-    # is that the backend's own published ports stay closed, which is why
-    # this is only correct in the prod overlay.
+    # `--forwarded-allow-ips` is a list of exact peer addresses, matched
+    # as literal strings by the pinned uvicorn (0.30.1); it does NOT expand
+    # CIDR, so a "172.16.0.0/12" value here would never match the proxy and
+    # would simply disable uvicorn's own rewrite. That is now harmless --
+    # no security decision depends on it -- but do not read it as a trust
+    # boundary. The real boundary is that the backend publishes no port, so
+    # `proxy` is the only path in; see the TRUST_PROXY_HEADERS note below.
     command:
       - uvicorn
       - app.main:app
@@ -70,8 +71,11 @@ services:
       # of those refusals silently.
       ENVIRONMENT: production
       # Safe here, and only here: the base file publishes no backend port,
-      # so `proxy` is the sole path in and X-Forwarded-For cannot be
-      # forged by a client. This is the same precondition documented on
+      # so `proxy` is the sole path in. nginx overwrites X-Forwarded-For /
+      # X-Real-IP with the real client (deploy/proxy_params.conf) and the
+      # app accepts a forwarded address only when it is a single valid IP
+      # (app/core/request_context.py), so a client cannot choose its own
+      # rate-limit bucket. This is the same precondition documented on
       # TRUSTED_HOSTS/TRUST_PROXY_HEADERS in backend/app/core/config.py.
       TRUST_PROXY_HEADERS: "true"
       # Mirrors the flags in `command` above, for

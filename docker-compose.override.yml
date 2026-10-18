@@ -6,9 +6,11 @@
 # every item is here precisely so that the base file does not have to be
 # unsafe by default:
 #
-#   * published ports for db/redis/backend/osrm/osrm-foot
+#   * published ports for db/redis/backend/osrm/osrm-foot (loopback only)
 #   * the ./backend bind mount, so editing code doesn't need a rebuild
 #   * uvicorn --reload
+#   * the container user forced back to root, plus CAP_DAC_OVERRIDE, so the
+#     bind-mounted 0600 backend/.env is readable
 #
 # The backend Dockerfile itself defaults to a STABLE uvicorn (no --reload).
 # Development overlays the reload flag here instead of baking it into the
@@ -22,13 +24,31 @@
 # and the Makefile's `up-prod` target are safe even with this file present.
 services:
   backend:
+    # The image runs as the unprivileged `appuser` (backend/Dockerfile).
+    # Development overrides that back to root and re-adds CAP_DAC_OVERRIDE,
+    # because the bind mount below drags in backend/.env, which
+    # scripts/gen_backend_env.py creates mode 0600. The base file's
+    # `cap_drop: ALL` includes CAP_DAC_OVERRIDE, so without it two libraries
+    # that read the file during import (pydantic-settings, and the starlette
+    # Config slowapi builds) raise PermissionError and the service dies at
+    # its health check. Production neither bind-mounts backend/ nor grants
+    # this capability, so /app/.env never exists there.
+    user: "0:0"
+    cap_add:
+      - DAC_OVERRIDE
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
-      # localhost only, not "0.0.0.0:8000". Binding the whole interface
-      # publish to LAN for dev access (do not leave this way in prod)
-      - "8000:8000"
+      # Loopback only. A bare "8000:8000" publishes the dev backend, and
+      # through it the whole dataset, to the LAN; a laptop dev stack has no
+      # reason to be reachable from another machine.
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./backend:/app
+    # Attach to the publishable network. The base file keeps every
+    # data-plane service on the internal, egress-free network; a published
+    # port only works from a non-internal network, so dev opts in here.
+    networks:
+      - edge
     # A bind-mounted source tree plus --reload means every file write under
     # backend/ restarts the worker, and tmpfs /tmp is still wanted so
     # `--reload`'s stat polling doesn't have to write through to the host.
@@ -38,15 +58,23 @@ services:
   db:
     ports:
       - "127.0.0.1:5432:5432"
+    networks:
+      - edge
 
   redis:
     ports:
       - "127.0.0.1:6379:6379"
+    networks:
+      - edge
 
   osrm:
     ports:
       - "127.0.0.1:5000:5000"
+    networks:
+      - edge
 
   osrm-foot:
     ports:
       - "127.0.0.1:5001:5000"
+    networks:
+      - edge

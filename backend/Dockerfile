@@ -20,6 +20,16 @@ RUN pip install --no-cache-dir --upgrade "pip>=26.2" "setuptools>=83.0.0" \
 
 COPY . .
 
+# Run as an unprivileged user. Nothing here needs to be writable at
+# runtime: docker-compose.yml mounts the root filesystem read_only, so the
+# only writable paths are the tmpfs mounts (/tmp), and a non-root UID means
+# a compromised process can neither modify the image nor bind a privileged
+# port. Development is the deliberate exception and says so in
+# docker-compose.override.yml (`user: "0:0"` plus CAP_DAC_OVERRIDE), because
+# the dev bind mount drags in backend/.env, which is mode 0600.
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser
+USER appuser
+
 # Stable server by default (no --reload). Local dev hot-reloads via the
 # --reload command added by docker-compose.override.yml (auto-loaded by
 # `docker compose` in dev); a Deployment that runs this image directly or
