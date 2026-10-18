@@ -57,7 +57,12 @@ audit found them:
   as open licensing. Unchecked.
 - **Fares are estimates.** The `fare_rules` table is a desk estimate, not
   field-verified (see the audit note in `data/README.md`). Do not present
-  fares as authoritative; label them as estimates.
+  fares as authoritative; label them as estimates. The values are also not
+  reconcilable with the source cited in `fare_rules.verification_note`: the
+  stored bands do not follow from the cited ~25.96% hike or its
+  ~NPR 24.50–47 anchors, and neither a prior fare table nor a source file
+  exists in this repository or its git history. They have no reproducible
+  provenance.
 - **Congestion severity origin.** `congestion_loss_table.csv` (and the
   `congestion_zones.csv` / `stop_congestion_scores.csv` files derived from
   it) carry no author, date, method or citation in this repository, and no

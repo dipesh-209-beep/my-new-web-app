@@ -100,6 +100,43 @@ def route_service_checks(routes: pd.DataFrame) -> dict[str, int]:
     return checks
 
 
+def consecutive_duplicate_stops(
+    route_stops: pd.DataFrame,
+) -> dict[str, list[str]]:
+    """Routes with the same stop_id at two adjacent sequence_no values.
+
+    Returns {route_id: ["seq 8/9 S0304", ...]} for every such run. The
+    validator used to check only orphan/non-contiguous sequence numbers, so
+    these slipped through entirely (AUD-007); the graph turns each pair into
+    a distinct ride node with a zero-length ride edge. Whether a given run is
+    an intentional loop revisit or a data error is a data-owner decision, so
+    callers report this rather than treating it as automatically fatal.
+    Columns absent from the frame yield an empty mapping.
+    """
+    if not {"route_id", "stop_id", "sequence_no"}.issubset(route_stops.columns):
+        return {}
+
+    found: dict[str, list[str]] = {}
+    for route_id, group in route_stops.groupby("route_id"):
+        # sequence_no is read as str, so order numerically (as bad_sequence
+        # above does) or "10" sorts before "2".
+        ordered = sorted(
+            (
+                (int(seq), stop_id)
+                for seq, stop_id in zip(group["sequence_no"], group["stop_id"])
+            ),
+            key=lambda pair: pair[0],
+        )
+        pairs = [
+            f"seq {ordered[i][0]}/{ordered[i + 1][0]} {ordered[i][1]}"
+            for i in range(len(ordered) - 1)
+            if ordered[i][1] == ordered[i + 1][1]
+        ]
+        if pairs:
+            found[str(route_id)] = pairs
+    return found
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", type=Path, default=Path("data/processed"))
@@ -195,6 +232,8 @@ def main() -> int:
 
     checks.update(route_service_checks(routes))
 
+    consec_dupes = consecutive_duplicate_stops(route_stops)
+
     ok = True
     print(f"{'CHECK':<62}{'COUNT':>8}  STATUS")
     print("-" * 82)
@@ -205,6 +244,18 @@ def main() -> int:
         print(f"{name:<62}{count:>8}  {status}")
 
     print()
+    if consec_dupes:
+        # Reported, not failed: the current dataset's runs are override-kept
+        # revisits pending a data-owner keep/drop decision (AUD-007).
+        print(
+            f"WARNING: {len(consec_dupes)} route(s) have adjacent identical "
+            f"stops (consecutive duplicate sequence_no):",
+            file=sys.stderr,
+        )
+        for route_id, pairs in consec_dupes.items():
+            print(f"  {route_id}: {', '.join(pairs)}", file=sys.stderr)
+        print(file=sys.stderr)
+
     if not ok:
         print("One or more checks FAILED — see above.", file=sys.stderr)
         return 1

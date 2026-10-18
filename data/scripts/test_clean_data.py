@@ -10,8 +10,10 @@ logic without a test failing.
 import pandas as pd
 import pytest
 
-from clean_data import CleaningStats, clean_route_stops, clean_routes, clean_stops, dedup_stops, dedup_routes, _stop_set_similarity
-from validate_clean import route_service_checks
+from pathlib import Path
+
+from clean_data import CleaningStats, clean_route_stops, clean_routes, clean_stops, dedup_stops, dedup_routes, _stop_set_similarity, overrides_path
+from validate_clean import consecutive_duplicate_stops, route_service_checks
 
 
 @pytest.fixture
@@ -133,6 +135,63 @@ def test_stop_set_similarity_basic():
     assert _stop_set_similarity(a, b) == pytest.approx(2 / 4)
     assert _stop_set_similarity(frozenset(), frozenset()) == 1.0
     assert _stop_set_similarity(a, a) == 1.0
+
+
+def test_consecutive_duplicate_stops_flags_adjacent_repeats():
+    # AUD-007: adjacent identical stops used to slip past the validator.
+    rs = pd.DataFrame([
+        {"route_id": "R1", "stop_id": "S1", "sequence_no": "1"},
+        {"route_id": "R1", "stop_id": "S2", "sequence_no": "2"},
+        {"route_id": "R1", "stop_id": "S2", "sequence_no": "3"},  # adjacent dup
+        {"route_id": "R1", "stop_id": "S1", "sequence_no": "4"},
+        {"route_id": "R2", "stop_id": "S9", "sequence_no": "1"},
+        {"route_id": "R2", "stop_id": "S8", "sequence_no": "2"},
+    ])
+
+    assert consecutive_duplicate_stops(rs) == {"R1": ["seq 2/3 S2"]}
+
+
+def test_consecutive_duplicate_stops_orders_sequence_numerically():
+    # sequence_no is str in the processed CSVs; a lexicographic sort would
+    # put "10" before "2" and miss the 9/10 pair.
+    rs = pd.DataFrame([
+        {"route_id": "R1", "stop_id": "A", "sequence_no": "9"},
+        {"route_id": "R1", "stop_id": "A", "sequence_no": "10"},
+        {"route_id": "R1", "stop_id": "B", "sequence_no": "2"},
+    ])
+
+    assert consecutive_duplicate_stops(rs) == {"R1": ["seq 9/10 A"]}
+
+
+def test_consecutive_duplicate_stops_handles_missing_columns():
+    assert consecutive_duplicate_stops(pd.DataFrame({"route_id": ["R1"]})) == {}
+
+
+def test_overrides_path_resolves_next_to_script_not_cwd(monkeypatch, tmp_path):
+    # AUD-016: CI runs the pipeline from `data/`, so a cwd-relative
+    # Path("data/scripts/...") became data/data/scripts/... and every
+    # override was silently skipped. Resolution must follow the script.
+    import clean_data
+
+    monkeypatch.chdir(tmp_path)
+    resolved = overrides_path("stop_dedup_overrides.yaml")
+
+    assert resolved.is_absolute()
+    assert resolved.parent == Path(clean_data.__file__).resolve().parent
+    assert resolved.exists()
+
+
+def test_missing_override_file_warns_instead_of_silently_skipping(tmp_path, caplog):
+    stops = pd.DataFrame([
+        {"stop_id": "S001", "stop_name": "A", "lat": 27.7000, "lng": 85.3000},
+        {"stop_id": "S002", "stop_name": "A dup", "lat": 27.70010, "lng": 85.3000},
+    ])
+    missing = tmp_path / "does_not_exist.yaml"
+
+    with caplog.at_level("WARNING", logger="clean_data"):
+        dedup_stops(stops, CleaningStats(), overrides_path=missing)
+
+    assert "does_not_exist.yaml" in caplog.text
 
 
 def test_dedup_stops_proposes_but_does_not_merge_without_overrides():

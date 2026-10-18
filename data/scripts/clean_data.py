@@ -342,6 +342,11 @@ def dedup_stops(
 
     confirmed: dict[str, str] = {}
 
+    if overrides_path is not None and not overrides_path.exists():
+        # Never silently degrade: an override that names human-confirmed
+        # merges/verdicts changes the cleaned output, so a missing file must
+        # be visible rather than swallowed.
+        log.warning("override file %s not found -- continuing without it", overrides_path)
     if overrides_path and overrides_path.exists():
         import yaml
 
@@ -549,6 +554,11 @@ def dedup_routes(
 
     confirmed: dict[str, dict] = {}
 
+    if overrides_path is not None and not overrides_path.exists():
+        # Never silently degrade: an override that names human-confirmed
+        # merges/verdicts changes the cleaned output, so a missing file must
+        # be visible rather than swallowed.
+        log.warning("override file %s not found -- continuing without it", overrides_path)
     if overrides_path and overrides_path.exists():
         import yaml
 
@@ -759,6 +769,11 @@ def resolve_revisits(
 
     verdicts: dict[str, str] = {}
 
+    if overrides_path is not None and not overrides_path.exists():
+        # Never silently degrade: an override that names human-confirmed
+        # merges/verdicts changes the cleaned output, so a missing file must
+        # be visible rather than swallowed.
+        log.warning("override file %s not found -- continuing without it", overrides_path)
     if overrides_path and overrides_path.exists():
         import yaml
 
@@ -1939,6 +1954,18 @@ RAW_FILENAMES = {
 # Main
 # ---------------------------------------------------------------------
 
+def overrides_path(name: str) -> Path:
+    """Path to an override YAML shipped next to this script.
+
+    Resolved from the script's own location, not the process cwd: CI runs
+    `python scripts/clean_data.py --raw-dir raw --out-dir processed` with
+    `working-directory: data`, where a bare `Path("data/scripts/...")`
+    resolved to `data/data/scripts/...` and every override was silently
+    skipped, so the regenerated dataset (412 stops / 119 routes) did not
+    match the committed one (396 / 113). (AUD-016)"""
+    return Path(__file__).resolve().parent / name
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -1966,6 +1993,26 @@ def main() -> int:
     )
 
     args = ap.parse_args()
+
+    # These overrides carry human-confirmed merges/verdicts and materially
+    # change the cleaned output; running without them silently produces a
+    # different dataset than the one committed (AUD-016). Fail loudly rather
+    # than emit a dataset with no provenance.
+    missing_overrides = [
+        path
+        for path in (
+            overrides_path("stop_dedup_overrides.yaml"),
+            overrides_path("return_leg_overrides.yaml"),
+            overrides_path("route_dedup_overrides.yaml"),
+        )
+        if not path.exists()
+    ]
+    if missing_overrides:
+        log.error(
+            "Required override file(s) missing next to clean_data.py: %s",
+            ", ".join(str(p) for p in missing_overrides),
+        )
+        return 2
 
     args.out_dir.mkdir(
         parents=True,
@@ -2022,9 +2069,7 @@ def main() -> int:
     stops, stop_id_remap = dedup_stops(
         stops,
         stats,
-        overrides_path=Path(
-            "data/scripts/stop_dedup_overrides.yaml"
-        ),
+        overrides_path=overrides_path("stop_dedup_overrides.yaml"),
     )
 
     route_stops_raw = remap_stop_ids(
@@ -2036,9 +2081,7 @@ def main() -> int:
         route_stops_raw,
         stops,
         stats,
-        revisit_overrides_path=Path(
-            "data/scripts/return_leg_overrides.yaml"
-        ),
+        revisit_overrides_path=overrides_path("return_leg_overrides.yaml"),
     )
 
     (
@@ -2051,9 +2094,7 @@ def main() -> int:
         route_stops,
         route_operators,
         stats,
-        overrides_path=Path(
-            "data/scripts/route_dedup_overrides.yaml"
-        ),
+        overrides_path=overrides_path("route_dedup_overrides.yaml"),
     )
 
     routes = clean_routes(

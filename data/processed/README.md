@@ -43,9 +43,9 @@ lives in `../scripts/` alongside the rest of the pipeline.
 | `../schema.sql` | Table definitions, indexes, triggers, constraints. Run first (via Alembic in the live app — see `data/README.md`). |
 | `../scripts/import_data.py` | Loads all 6 CSVs via `COPY` + sanity checks. Run second. |
 | `operators_clean.csv` | 29 rows — bus/microbus/tempo operators |
-| `stops_clean.csv` | 376 rows — physical stops (lat/lng, amenities) |
+| `stops_clean.csv` | 396 rows — physical stops (lat/lng, amenities) |
 | `routes_clean.csv` | 113 rows — routes (distance, timing, operator link) |
-| `route_stops_clean.csv` | 1,849 rows — ordered route ↔ stop mapping |
+| `route_stops_clean.csv` | 1,901 rows — ordered route ↔ stop mapping |
 | `route_operators_clean.csv` | 106 rows — route ↔ operator (M:N, one primary each) |
 | `fare_rules_clean.csv` | 5 rows — distance-banded fare lookup |
 | `report.md` | Full audit trail, regenerated every run — read before trusting a number |
@@ -95,7 +95,13 @@ read `0` except `fare_rules row count`, which should read `5`.
   and has been corrected rather than carried forward.)
 - **`fare_rules.verification_note`** flags the fare figures as a
   2026-08 desk estimate, pending confirmation against the official Bagmati
-  Province gazette notice — not yet independently verified.
+  Province gazette notice — not yet independently verified. The values are
+  also **not reproducible from their own cited note**: the stored bands
+  (`F01 [0,5] 20–25`, `F05 [20,99] 45–80`) do not follow from the cited
+  ~25.96% hike or its anchors (~NPR 24.50 min / ~47 max), and no prior fare
+  table or source file exists in this repository or its git history. Treat
+  every figure as an unverified desk estimate, not a computed or gazetted
+  rate.
 - **`routes.frequency_min` / `service_start_time` / `service_end_time`** are
   **scheduled/estimated figures from the source data, not operator-confirmed
   and not live**, and have no documented provenance beyond that. The shipped
@@ -105,3 +111,17 @@ read `0` except `fare_rules row count`, which should read `5`.
   not "no service". `validate_clean.py` flags malformed values, and the API
   (`RouteOut` in `backend/app/schemas.py`) surfaces any unusable value as
   `null` rather than presenting it as a schedule.
+- **Regeneration is not byte-for-byte reproducible.** Re-running
+  `scripts/clean_data.py` produces semantically equivalent data, but
+  `routes_clean.csv` and `stops_clean.csv` differ from the committed files:
+  `clean_data.py` re-stamps `created_at` and `updated_at` with the run time
+  (the raw inputs carry no such columns). Row order and every other column
+  are unchanged; `route_stops_clean.csv`, `operators_clean.csv` and
+  `route_operators_clean.csv` regenerate byte-identically. The committed
+  `routes_clean.csv` also mixes `created_at` formats — 11 of 113 rows use the
+  space+offset form (`YYYY-MM-DD HH:MM:SS+00:00`) while the rest end in `Z`.
+  Diff by content, not bytes, and do not assert deterministic regeneration.
+- **`fare_rules_clean.csv` is committed data, not pipeline output.**
+  `clean_data.py` writes only the five `*_clean.csv` files listed above and
+  never touches fares, so the fare table sits outside the reproducible
+  pipeline entirely.
