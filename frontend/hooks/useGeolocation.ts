@@ -99,7 +99,10 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
     [stops, onStopFound]
   );
 
-  function useMyLocation() {
+  // useCallback so a caller that passes this down through a memoized
+  // component keeps a stable prop identity; it only changes when
+  // locateNearestStop does (i.e. when `stops` or `onStopFound` change).
+  const useMyLocation = useCallback(() => {
     if (!navigator.geolocation) {
       setLocateError("Geolocation isn't available in this browser. Please search for a stop manually.");
       return;
@@ -135,7 +138,7 @@ export function useGeolocation({ stops, onStopFound }: UseGeolocationOptions): U
       },
       { timeout: 8000, enableHighAccuracy: true }
     );
-  }
+  }, [locateNearestStop]);
 
   return { userLocation, nearestStop, walkingRoute, locating, locateError, locateStatus, useMyLocation };
 }

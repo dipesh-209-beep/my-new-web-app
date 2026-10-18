@@ -431,6 +431,136 @@ describe("BusMap", () => {
     });
   });
 
+  describe("route-result junction markers", () => {
+    function makeRideLeg(overrides: Partial<RouteLeg> = {}): RouteLeg {
+      const board = makeStop({ stop_id: "S0001", stop_name: "Ratna Park" });
+      const alight = makeStop({ stop_id: "S0002", stop_name: "Koteshwor" });
+      return {
+        route_id: "R0001",
+        route_name: "Route 1",
+        board_stop: board,
+        alight_stop: alight,
+        num_ride_segments: 1,
+        stops: [board, alight],
+        road_geometry: null,
+        ...overrides,
+      };
+    }
+
+    function transferPins() {
+      return leafletState.markers.filter(
+        (m) => m.kind === "marker" && m.popup?.content.includes("Transfer point")
+      );
+    }
+
+    it("draws a shared interchange once when adjacent legs board where the previous leg alighted", () => {
+      const interchange = makeStop({ stop_id: "S0002", stop_name: "Koteshwor" });
+      const result: RouteSearchResult = {
+        found: true,
+        origin_stop_id: "S0001",
+        destination_stop_id: "S0003",
+        total_cost: 10,
+        transfer_count: 1,
+        fare: null,
+        alternatives: [],
+        legs: [
+          makeRideLeg({
+            route_id: "R0001",
+            alight_stop: interchange,
+            stops: [makeStop({ stop_id: "S0001" }), interchange],
+          }),
+          makeRideLeg({
+            route_id: "R0002",
+            board_stop: interchange,
+            alight_stop: makeStop({ stop_id: "S0003", stop_name: "Tinkune" }),
+            stops: [interchange, makeStop({ stop_id: "S0003", stop_name: "Tinkune" })],
+          }),
+        ],
+      };
+
+      render(<BusMap result={result} />);
+
+      // One transfer pin for the shared stop, not one per touching leg.
+      expect(transferPins()).toHaveLength(1);
+      expect(transferPins()[0].latlng).toEqual([interchange.lat, interchange.lng]);
+    });
+
+    it("keeps separate markers when adjacent legs connect at genuinely different stops", () => {
+      const result: RouteSearchResult = {
+        found: true,
+        origin_stop_id: "S0001",
+        destination_stop_id: "S0004",
+        total_cost: 10,
+        transfer_count: 1,
+        fare: null,
+        alternatives: [],
+        legs: [
+          makeRideLeg({
+            route_id: "R0001",
+            alight_stop: makeStop({ stop_id: "S0002", stop_name: "Koteshwor", lat: 27.7, lng: 85.3 }),
+          }),
+          makeRideLeg({
+            route_id: "R0002",
+            board_stop: makeStop({ stop_id: "S0003", stop_name: "Tinkune", lat: 27.72, lng: 85.34 }),
+            alight_stop: makeStop({ stop_id: "S0004", stop_name: "Kharibot" }),
+            stops: [
+              makeStop({ stop_id: "S0003", stop_name: "Tinkune", lat: 27.72, lng: 85.34 }),
+              makeStop({ stop_id: "S0004", stop_name: "Kharibot" }),
+            ],
+          }),
+        ],
+      };
+
+      render(<BusMap result={result} />);
+
+      const ids = transferPins().map((m) => (m.latlng as number[]).toString());
+      expect(transferPins()).toHaveLength(2);
+      expect(new Set(ids).size).toBe(2);
+    });
+
+    it("does not deduplicate distinct stops that happen to share a name", () => {
+      const result: RouteSearchResult = {
+        found: true,
+        origin_stop_id: "S0001",
+        destination_stop_id: "S0004",
+        total_cost: 10,
+        transfer_count: 1,
+        fare: null,
+        alternatives: [],
+        legs: [
+          makeRideLeg({
+            route_id: "R0001",
+            alight_stop: makeStop({
+              stop_id: "S0002",
+              stop_name: "Chowk",
+              lat: 27.7,
+              lng: 85.3,
+            }),
+          }),
+          makeRideLeg({
+            route_id: "R0002",
+            board_stop: makeStop({
+              stop_id: "S0003",
+              stop_name: "Chowk",
+              lat: 27.71,
+              lng: 85.32,
+            }),
+            alight_stop: makeStop({ stop_id: "S0004", stop_name: "Kharibot" }),
+            stops: [
+              makeStop({ stop_id: "S0003", stop_name: "Chowk", lat: 27.71, lng: 85.32 }),
+              makeStop({ stop_id: "S0004", stop_name: "Kharibot" }),
+            ],
+          }),
+        ],
+      };
+
+      render(<BusMap result={result} />);
+
+      // Same name, different stop_id and coordinates -> both pins kept.
+      expect(transferPins()).toHaveLength(2);
+    });
+  });
+
   describe("congestion overlay", () => {
     it("colors segments by congestion level and skips segments referencing unknown stops", () => {
       const stops = [
@@ -975,6 +1105,24 @@ describe("BusMap", () => {
       expect(lines[0].options.opacity).toBe(1);
       expect(lines[1].options.opacity).toBe(0.35);
       expect(leafletState.mapInstances[0].fitBoundsCalls).toHaveLength(1);
+    });
+
+    it("re-fits only when the route result changes identity, not on unrelated re-renders", () => {
+      // The page memoizes the object it passes as `result` (app/page.tsx), so
+      // an unrelated state change re-renders BusMap with the SAME object.
+      // That must not tear down the overlay or re-fit the map; a genuinely
+      // new result must still fit.
+      const result = makeSelectionResult();
+      const { rerender } = render(<BusMap result={result} selectedLegIndex={0} />);
+      const map = leafletState.mapInstances[0];
+      expect(map.fitBoundsCalls).toHaveLength(1);
+
+      rerender(<BusMap result={result} selectedLegIndex={0} showAllStops={false} />);
+      expect(map.fitBoundsCalls).toHaveLength(1);
+
+      const nextResult = makeSelectionResult();
+      rerender(<BusMap result={nextResult} selectedLegIndex={0} showAllStops={false} />);
+      expect(map.fitBoundsCalls).toHaveLength(2);
     });
   });
 });

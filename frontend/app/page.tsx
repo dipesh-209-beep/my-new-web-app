@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import SearchForm, { ViaStopField } from "@/components/search/SearchForm";
@@ -60,12 +60,20 @@ function HomeInner() {
   const [pickTarget, setPickTarget] = useState<StopPickTarget>(null);
   const [showAllStops, setShowAllStops] = useState(true);
 
+  // Stable identity: useGeolocation memoizes locateNearestStop on this
+  // callback, so an inline arrow here would make `useMyLocation` -- and thus
+  // SearchForm's `onUseMyLocation` prop -- change on every render, defeating
+  // StopAutocomplete's memo.
+  const handleStopFound = useCallback((label: string) => {
+    // Offer the detected stop as the origin, but only if the user hasn't
+    // already typed/picked something themselves.
+    setOriginText((prev) => prev || label);
+  }, []);
+
   const { userLocation, nearestStop, walkingRoute, locating, locateError, locateStatus, useMyLocation } =
     useGeolocation({
       stops,
-      // Offer the detected stop as the origin, but only if the user hasn't
-      // already typed/picked something themselves.
-      onStopFound: (label) => setOriginText((prev) => prev || label),
+      onStopFound: handleStopFound,
     });
 
   const { result, loading, loadingStage, error, search, retry } = useRouteSearch();
@@ -103,10 +111,22 @@ function HomeInner() {
   // (legs, total_cost, transfer_count, and now fare/estimate too). The
   // spread keeps origin/destination/via_stop_ids from the primary, which
   // are identical across options anyway.
-  const mapResult =
-    result && result.found && selectedAltIndex !== -1
-      ? { ...result, ...result.alternatives[selectedAltIndex] }
-      : result;
+  //
+  // Memoized deliberately: useRouteResultLayer tears down and rebuilds every
+  // leg (and re-fits the map bounds) whenever its `result` prop changes
+  // identity. Building a fresh object on every render would therefore refit
+  // the map on unrelated state changes -- dragging the mobile sheet, the
+  // congestion poll, a geolocation update -- throwing away the user's pan
+  // and zoom and any per-leg visibility toggles. The dependency list keeps a
+  // NEW object only when the search result or the chosen alternative really
+  // changes, which are the two cases that legitimately want a redraw.
+  const mapResult = useMemo(
+    () =>
+      result && result.found && selectedAltIndex !== -1
+        ? { ...result, ...result.alternatives[selectedAltIndex] }
+        : result,
+    [result, selectedAltIndex]
+  );
 
 const congestion = useCongestion();
   const routeBrowser = useRouteBrowser();

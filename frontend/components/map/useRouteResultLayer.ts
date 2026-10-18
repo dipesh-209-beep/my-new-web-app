@@ -121,21 +121,33 @@ export function useRouteResultLayer({
         return;
       }
 
-      const fromMarker = L.marker([leg.board_stop.lat, leg.board_stop.lng], {
-        icon: fromIcon,
-        keyboard: false,
-      });
-      fromMarker.bindPopup(
-        `<strong>${escapeHtml(leg.board_stop.stop_name)}</strong><br/>${
-          isFirstLeg ? "Origin" : "Transfer point"
-        }`
-      );
-      // Pins open a popup on click; make Enter/Space do the same.
-      makeMarkerInteractive(fromMarker, {
-        label: `${leg.board_stop.stop_name} — ${isFirstLeg ? "origin" : "transfer point"}`,
-        onActivate: () => fromMarker.openPopup(),
-      });
-      legLayer.addLayer(fromMarker);
+      // An interior junction -- where the previous leg's alight stop and this
+      // leg's board stop are the same physical stop (a same-stop interchange,
+      // or the stop a walk leg connects) -- is drawn once, by the previous
+      // leg's alight marker. Drawing this leg's board marker too would stack a
+      // second pin, a second popup and a second tab stop on the same point.
+      // Compared by stop_id (the stable identity), never by name, so two
+      // genuinely different stops that share a name keep their own markers.
+      const prevAlightStopId = i > 0 ? result.legs[i - 1].alight_stop.stop_id : null;
+      const sharesBoardWithPrevious = prevAlightStopId === leg.board_stop.stop_id;
+
+      if (!sharesBoardWithPrevious) {
+        const fromMarker = L.marker([leg.board_stop.lat, leg.board_stop.lng], {
+          icon: fromIcon,
+          keyboard: false,
+        });
+        fromMarker.bindPopup(
+          `<strong>${escapeHtml(leg.board_stop.stop_name)}</strong><br/>${
+            isFirstLeg ? "Origin" : "Transfer point"
+          }`
+        );
+        // Pins open a popup on click; make Enter/Space do the same.
+        makeMarkerInteractive(fromMarker, {
+          label: `${leg.board_stop.stop_name} — ${isFirstLeg ? "origin" : "transfer point"}`,
+          onActivate: () => fromMarker.openPopup(),
+        });
+        legLayer.addLayer(fromMarker);
+      }
 
       const toMarker = L.marker([leg.alight_stop.lat, leg.alight_stop.lng], {
         icon: toIcon,

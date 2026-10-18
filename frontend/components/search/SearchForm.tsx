@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Stop, StopPickTarget } from "@/types/route";
 import { buildStopLabel, buildStopLabelIndex } from "@/lib/stopLabel";
 import { normalizeText } from "@/lib/stopSearch";
@@ -203,9 +203,100 @@ export default function SearchForm({
     setFieldError(null);
   }
 
-  function togglePick(target: "origin" | "destination") {
-    onPickTargetChange(pickTarget === target ? null : target);
-  }
+  // StopAutocomplete is wrapped in React.memo, but that only helps if the
+  // props it receives keep a stable identity. Typing in the destination
+  // field re-renders SearchForm (the text is controlled from the parent),
+  // and inline arrow handlers / freshly-built footerActions JSX would give
+  // the untouched origin field new props every time, so it re-rendered too.
+  // These useCallback/useMemo wrappers keep both fields' props stable so the
+  // memo actually skips the field the user is not editing.
+  const togglePick = useCallback(
+    (target: "origin" | "destination") => {
+      onPickTargetChange(pickTarget === target ? null : target);
+    },
+    [onPickTargetChange, pickTarget]
+  );
+
+  const handleOriginInputChange = useCallback(
+    (value: string) => {
+      onOriginTextChange(value);
+      if (fieldError) setFieldError(null);
+    },
+    [onOriginTextChange, fieldError]
+  );
+
+  const handleOriginSelect = useCallback(
+    (stop: Stop) => {
+      onOriginTextChange(buildStopLabel(stop, stops));
+      setOriginSelectedStop(stop);
+      setFieldError(null);
+    },
+    [onOriginTextChange, stops]
+  );
+
+  const handleDestinationInputChange = useCallback(
+    (value: string) => {
+      onDestinationTextChange(value);
+      if (fieldError) setFieldError(null);
+    },
+    [onDestinationTextChange, fieldError]
+  );
+
+  const handleDestinationSelect = useCallback(
+    (stop: Stop) => {
+      onDestinationTextChange(buildStopLabel(stop, stops));
+      setDestinationSelectedStop(stop);
+      setFieldError(null);
+    },
+    [onDestinationTextChange, stops]
+  );
+
+  const originFooterActions = useMemo(
+    () => (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            if (!locating) onUseMyLocation();
+          }}
+          aria-disabled={locating}
+          className="inline-flex min-h-11 items-center gap-1 text-xs text-accent-blue hover:underline aria-disabled:opacity-50"
+        >
+          <LocationIcon size={12} />
+          {locating ? "Locating…" : "Use my location"}
+        </button>
+        <button
+          type="button"
+          onClick={() => togglePick("origin")}
+          aria-pressed={pickTarget === "origin"}
+          className={`inline-flex min-h-11 items-center gap-1 text-xs hover:underline ${
+            pickTarget === "origin" ? "font-semibold text-accent-blue" : "text-ink-secondary"
+          }`}
+        >
+          <CrosshairIcon size={12} />
+          {pickTarget === "origin" ? "Picking…" : "Pick on map"}
+        </button>
+      </>
+    ),
+    [locating, onUseMyLocation, pickTarget, togglePick]
+  );
+
+  const destinationFooterActions = useMemo(
+    () => (
+      <button
+        type="button"
+        onClick={() => togglePick("destination")}
+        aria-pressed={pickTarget === "destination"}
+        className={`inline-flex min-h-11 items-center gap-1 text-xs hover:underline ${
+          pickTarget === "destination" ? "font-semibold text-accent-red" : "text-ink-secondary"
+        }`}
+      >
+        <CrosshairIcon size={12} />
+        {pickTarget === "destination" ? "Picking…" : "Pick on map"}
+      </button>
+    ),
+    [pickTarget, togglePick]
+  );
 
   const originInvalid = fieldError === "origin" || fieldError === "both";
   const destinationInvalid = fieldError === "destination" || fieldError === "both";
@@ -237,45 +328,13 @@ export default function SearchForm({
             stops={stops}
             stopsLoading={stopsLoading}
             inputValue={originText}
-            onInputChange={(v) => {
-              onOriginTextChange(v);
-              if (fieldError) setFieldError(null);
-            }}
-            onSelect={(stop) => {
-              onOriginTextChange(buildStopLabel(stop, stops));
-              setOriginSelectedStop(stop);
-              setFieldError(null);
-            }}
+            onInputChange={handleOriginInputChange}
+            onSelect={handleOriginSelect}
             selectedStop={originSelectedStop}
             invalid={originInvalid}
             describedById={originInvalid ? FIELD_ERROR_ID : undefined}
             placeholder="From: search starting stop…"
-            footerActions={
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!locating) onUseMyLocation();
-                  }}
-                  aria-disabled={locating}
-                  className="inline-flex min-h-11 items-center gap-1 text-xs text-accent-blue hover:underline aria-disabled:opacity-50"
-                >
-                  <LocationIcon size={12} />
-                  {locating ? "Locating…" : "Use my location"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => togglePick("origin")}
-                  aria-pressed={pickTarget === "origin"}
-                  className={`inline-flex min-h-11 items-center gap-1 text-xs hover:underline ${
-                    pickTarget === "origin" ? "font-semibold text-accent-blue" : "text-ink-secondary"
-                  }`}
-                >
-                  <CrosshairIcon size={12} />
-                  {pickTarget === "origin" ? "Picking…" : "Pick on map"}
-                </button>
-              </>
-            }
+            footerActions={originFooterActions}
           />
 
           <StopAutocomplete
@@ -284,32 +343,13 @@ export default function SearchForm({
             stops={stops}
             stopsLoading={stopsLoading}
             inputValue={destinationText}
-            onInputChange={(v) => {
-              onDestinationTextChange(v);
-              if (fieldError) setFieldError(null);
-            }}
-            onSelect={(stop) => {
-              onDestinationTextChange(buildStopLabel(stop, stops));
-              setDestinationSelectedStop(stop);
-              setFieldError(null);
-            }}
+            onInputChange={handleDestinationInputChange}
+            onSelect={handleDestinationSelect}
             selectedStop={destinationSelectedStop}
             invalid={destinationInvalid}
             describedById={destinationInvalid ? FIELD_ERROR_ID : undefined}
             placeholder="To: search destination…"
-            footerActions={
-              <button
-                type="button"
-                onClick={() => togglePick("destination")}
-                aria-pressed={pickTarget === "destination"}
-                className={`inline-flex min-h-11 items-center gap-1 text-xs hover:underline ${
-                  pickTarget === "destination" ? "font-semibold text-accent-red" : "text-ink-secondary"
-                }`}
-              >
-                <CrosshairIcon size={12} />
-                {pickTarget === "destination" ? "Picking…" : "Pick on map"}
-              </button>
-            }
+            footerActions={destinationFooterActions}
           />
         </div>
 
