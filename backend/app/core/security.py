@@ -46,7 +46,7 @@ from passlib.context import CryptContext
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from .config import get_settings
+from .config import JWT_ALLOWED_ALGORITHMS, get_settings
 from ..db.session import get_db
 from ..models import ACTOR_ADMIN_USER, ACTOR_SERVICE_CREDENTIAL, AdminUser, ServiceCredential, User
 
@@ -80,6 +80,19 @@ _ADMIN_TYPE = "admin"
 _USER_TYPE = "user"
 
 
+def _decode_algorithms() -> list[str]:
+    """Algorithms jwt.decode is willing to accept (AUD-004).
+
+    Fails closed: if JWT_ALGORITHM is configured outside
+    JWT_ALLOWED_ALGORITHMS (e.g. "none" or "RS256"), return an empty list so
+    *every* token is rejected rather than trusted. Production already refuses
+    to start on such a value (validate_production_settings); this covers the
+    non-production case, where a typo would otherwise silently turn off
+    signature verification."""
+    algorithm = get_settings().jwt_algorithm.strip()
+    return [algorithm] if algorithm in JWT_ALLOWED_ALGORITHMS else []
+
+
 def create_access_token(admin_id: int, username: str, role: str) -> str:
     settings = get_settings()
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
@@ -104,7 +117,7 @@ def _decode_admin_token(token: str, db: Session) -> Optional[AdminUser]:
     get_current_admin turns a None back into a 401 itself."""
     settings = get_settings()
     try:
-        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=_decode_algorithms())
     except jwt.PyJWTError:
         return None
     # A token signed for a different audience (i.e. a public user token)
@@ -144,7 +157,7 @@ def _decode_user_token(token: str, db: Session) -> Optional[User]:
     user credential, regardless of sub)."""
     settings = get_settings()
     try:
-        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=_decode_algorithms())
     except jwt.PyJWTError:
         return None
     if payload.get("type") != _USER_TYPE:

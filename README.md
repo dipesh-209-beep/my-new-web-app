@@ -214,7 +214,7 @@ Interactive OpenAPI/Swagger docs are available at `http://localhost:8000/docs` o
 | POST | `/graph/reload` | Force-rebuild the cached routing graph | `require_admin` |
 | POST | `/admin/login` | Log in an `AdminUser`, returns a JWT | — |
 
-`require_admin` accepts either the shared `X-Admin-Api-Key` header or a bearer JWT from `POST /admin/login` — see [Admin/Data Management](#admindata-management) below.
+`require_admin` accepts a bearer JWT from `POST /admin/login`, a scoped service credential (`Authorization: SvcKey <key_id>.<secret>`), or — only when `ALLOW_LEGACY_SHARED_ADMIN_KEY=true` (refused in production) — the legacy shared `X-Admin-Api-Key` header. Each guard also checks a specific permission. See [Admin/Data Management](#admindata-management) below.
 
 ## Routing Algorithm
 
@@ -336,7 +336,16 @@ Three credential types, in descending order of preference:
 1. **Admin JWT** — `POST /admin/login` with a person's `AdminUser` account
    (seeded via `python3 -m scripts.seed_admin`) returns
    `Authorization: Bearer <token>`. Attributable to one person, and the
-   only credential the browser `/admin` UI uses.
+   only credential the browser `/admin` UI uses. The token is **stateless
+   and cannot be revoked before it expires** (default 60 minutes,
+   `ACCESS_TOKEN_EXPIRE_MINUTES`); logging out only deletes it client-side,
+   and `JWT_ALGORITHM` is restricted to the HS256/384/512 allowlist (a
+   production process refuses to start on anything else, including `none`).
+   A stolen token therefore stays valid until expiry — an accepted risk,
+   mitigated by the short expiry and the per-request live role/row reload.
+   The frontend holds it in `localStorage` (see `PRIVACY.md`), so any script
+   running on the page can read it. Use a service credential where
+   individual revocation matters.
 2. **Service credential** — `POST /admin/service-credentials` mints a scoped
    key, returned once. Send it as
    `Authorization: SvcKey <key_id>.<secret>`. The secret is stored only as a

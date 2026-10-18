@@ -85,6 +85,15 @@ PRODUCTION = "production"
 TESTING = "test"
 VALID_ENVIRONMENTS = (DEVELOPMENT, PRODUCTION, TESTING)
 
+# Symmetric algorithms this project will sign/verify JWTs with. jwt_secret_key
+# is an HMAC secret, so only the HS* family is meaningful; `none` (unsigned)
+# lets anyone forge a token, and asymmetric algorithms (RS*/ES*) invite the
+# classic key-confusion attack that treats a public key as an HMAC secret.
+# validate_production_settings refuses anything outside this set, and the
+# decoder in core/security.py fails closed (rejects every token) if the
+# configured algorithm is not in it. (AUD-004)
+JWT_ALLOWED_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
+
 # Values that the shipped .env.example / CI / old tutorials use as
 # placeholders. Rejected outright in production so a deployment that
 # copied an example file can't come up "successfully" with a secret
@@ -391,6 +400,13 @@ def validate_production_settings(settings: "Settings | None" = None) -> list[str
             "ADMIN_API_KEY is unset, a placeholder, or shorter than 32 characters. "
             "(It is only consulted when ALLOW_LEGACY_SHARED_ADMIN_KEY is true, but it "
             "must still be a real value in case that flag is ever turned on.)"
+        )
+    if settings.jwt_algorithm.strip() not in JWT_ALLOWED_ALGORITHMS:
+        problems.append(
+            f"JWT_ALGORITHM is {settings.jwt_algorithm!r}, which is not an allowed "
+            f"signing algorithm. Allowed: {', '.join(sorted(JWT_ALLOWED_ALGORITHMS))}. "
+            "'none' (unsigned) would let anyone forge a token, and asymmetric "
+            "algorithms are unsafe with a symmetric HMAC secret."
         )
     if settings.ALLOW_LEGACY_SHARED_ADMIN_KEY:
         problems.append(

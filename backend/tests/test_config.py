@@ -243,6 +243,22 @@ def test_short_jwt_secret_is_refused():
     assert any("JWT_SECRET_KEY" in p for p in problems_for(jwt_secret_key="a" * 16))
 
 
+def test_non_hs_jwt_algorithm_is_refused_in_production():
+    """AUD-004: JWT_ALGORITHM is operator-settable, so production must
+    refuse 'none' (unsigned -> anyone can forge a token) and asymmetric
+    algorithms (unsafe with a symmetric HMAC secret)."""
+    for algorithm in ("none", "RS256", "ES256"):
+        assert any(
+            "JWT_ALGORITHM" in p for p in problems_for(jwt_algorithm=algorithm)
+        ), algorithm
+
+
+def test_allowed_jwt_algorithm_is_accepted_in_production():
+    assert validate_production_settings(
+        make_settings(**{**CLEAN_PRODUCTION, "jwt_algorithm": "HS256"})
+    ) == []
+
+
 def test_wildcard_cors_is_refused():
     assert any("CORS_ORIGINS" in p for p in problems_for(CORS_ORIGINS="*"))
 
