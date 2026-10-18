@@ -68,11 +68,13 @@ limiter = Limiter(
 #     config.py.
 #
 #  2. It was a hard startup failure in Docker. backend/.env is mode 0600
-#     and the backend service runs with `cap_drop: ALL`, which removes
-#     CAP_DAC_OVERRIDE, so the container's root process cannot read a file
-#     owned by the host user. slowapi's read raised PermissionError while
-#     this module was still being imported, taking the service down at
-#     health check and returning 504 through nginx for the entire stack.
+#     and the service runs with `cap_drop: ALL`, which removes
+#     CAP_DAC_OVERRIDE, so a process that did not own the file could not
+#     read it. slowapi's read raised PermissionError while this module was
+#     still being imported, taking the service down at health check and
+#     returning 504 through nginx for the entire stack. (The dev override
+#     now re-grants CAP_DAC_OVERRIDE for the bind-mounted .env, but a
+#     replacement that never looks for the file is the more durable fix.)
 #
 # Config(env_file=None) still reads os.environ -- it just does not go
 # looking for a dotenv file, which is the behaviour the container and a

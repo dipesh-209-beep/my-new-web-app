@@ -107,11 +107,6 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# X-Request-ID generation/echo and single-source client-IP resolution.
-# Registered first so it wraps everything below it, including CORS and
-# the error handlers, so even a rejected request has an id.
-app.middleware("http")(request_context_middleware)
-
 # Host-header validation, always on. Starlette's TrustedHostMiddleware
 # rejects any request whose Host header isn't in the configured list,
 # which is the direct mitigation for the request.url reconstruction
@@ -201,7 +196,7 @@ async def security_headers_middleware(request: Request, call_next):
     cacheable or sniffable. They are deliberately NOT a substitute for
     the real ones: a browser only honours HSTS/CSP/Permissions-Policy
     when they arrive from the HTTPS origin itself, which in a real
-    deployment is nginx (deploy/nginx.prod.conf) -- the app is behind
+    deployment is nginx (deploy/nginx.https.conf) -- the app is behind
     it, not in front of TLS. No-store on API responses is the notable
     one here: it stops a shared cache or the browser's bfcache from
     holding on to a personalized or admin response.
@@ -221,6 +216,19 @@ async def security_headers_middleware(request: Request, call_next):
     )
     response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
     return response
+
+
+# X-Request-ID generation/echo and single-source client-IP resolution.
+#
+# Registered LAST, deliberately. Starlette inserts every `add_middleware` /
+# `@app.middleware` call at the FRONT of its middleware list and then builds
+# the stack by wrapping in reverse, so the *last-registered* middleware is the
+# outermost one. This call used to be registered first, which actually made it
+# the innermost user middleware: a TrustedHost 400 or a CORS 403 -- both
+# produced by middleware sitting outside it -- came back without an
+# X-Request-ID. Registering it here makes it wrap those, so every response,
+# rejected or not, carries an id (AUD-022).
+app.middleware("http")(request_context_middleware)
 
 
 @app.exception_handler(Exception)

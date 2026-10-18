@@ -14,16 +14,26 @@ request_id
 
 client_ip
     request.client.host -- the socket peer -- *unless*
-    TRUST_PROXY_HEADERS is on, in which case X-Forwarded-For is
-    consulted first. The default is not to trust it: the development
-    stack publishes the backend's port directly, so a forged
-    X-Forwarded-For there would hand every request a fresh rate-limit
-    bucket. Production sets TRUST_PROXY_HEADERS together with uvicorn's
-    --proxy-headers/--forwarded-allow-ips, so the peer address has
-    already been rewritten to the real client by the time it gets
-    here.
+    TRUST_PROXY_HEADERS is on and the request carries a single,
+    well-formed forwarded address, in which case that address is used.
+    The default is not to trust the headers: the development stack
+    publishes the backend's port directly, so a forged X-Forwarded-For
+    there would hand every request a fresh rate-limit bucket.
+
+    When TRUST_PROXY_HEADERS is on (production), the trusted edge is
+    nginx and it OVERWRITES both X-Forwarded-For and X-Real-IP with
+    $remote_addr (see deploy/proxy_params.conf), so a well-formed header
+    holds exactly one value: the address nginx accepted the connection
+    from. This function therefore accepts a forwarded value only when it
+    is a single valid IP address; anything else -- a comma-separated
+    chain, junk, a hostname -- is refused and the socket peer is used
+    instead. That refusal is what makes a client-injected X-Forwarded-For
+    useless even if the edge is ever misconfigured to append rather than
+    overwrite: the attacker's value would arrive as part of a chain and
+    be discarded, not selected.
 """
 
+import ipaddress
 import uuid
 
 from fastapi import Request
@@ -55,19 +65,37 @@ def _sanitise_inbound_request_id(raw: str | None) -> str | None:
     return cleaned
 
 
+def _single_forwarded_ip(raw: str | None) -> str | None:
+    """The one client address in a forwarded header, or None.
+
+    Returns a value only when the header holds exactly one entry and that
+    entry parses as an IP address. A chain (more than one comma-separated
+    entry) is deliberately refused rather than picked from: with the
+    trusted edge overwriting the header (deploy/proxy_params.conf) a
+    chain can only mean the edge is misconfigured or the value was
+    injected, and neither case should influence the rate-limit bucket.
+    """
+    if not raw:
+        return None
+    entries = [entry.strip() for entry in raw.split(",") if entry.strip()]
+    if len(entries) != 1:
+        return None
+    try:
+        return str(ipaddress.ip_address(entries[0]))
+    except ValueError:
+        return None
+
+
 def get_client_ip(request: Request) -> str:
     """Best available client address for rate limiting and audit rows."""
     if get_settings().TRUST_PROXY_HEADERS:
-        forwarded_for = request.headers.get("x-forwarded-for")
-        if forwarded_for:
-            # Leftmost entry is the original client; everything after
-            # it was appended by intermediate proxies.
-            first = forwarded_for.split(",")[0].strip()
-            if first:
-                return first
-        real_ip = request.headers.get("x-real-ip")
-        if real_ip:
-            return real_ip.strip()
+        # X-Forwarded-For first; X-Real-IP is an independent single-value
+        # header nginx (and most proxies) set, so it still yields the true
+        # client if the XFF copy is ever a chain.
+        for header in ("x-forwarded-for", "x-real-ip"):
+            client = _single_forwarded_ip(request.headers.get(header))
+            if client is not None:
+                return client
     if request.client is not None:
         return request.client.host
     return "unknown"
