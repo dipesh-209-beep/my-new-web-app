@@ -1,8 +1,10 @@
+import copy
 import math
 import os
 import threading
 import time
 import logging
+from collections import OrderedDict
 from typing import Optional
 
 import httpx
@@ -56,12 +58,20 @@ class CircuitBreaker:
 
     def __init__(self):
         self._lock = threading.Lock()
-        # profile -> {"state": "CLOSED"|"OPEN"|"HALF_OPEN", "failures": int, "last_failure": float, "successes": int}
+        # profile -> {"state": "CLOSED"|"OPEN"|"HALF_OPEN", "failures": int,
+        #             "last_failure": float, "successes": int,
+        #             "probe_in_flight": bool}
         self._state: dict[str, dict] = {}
 
     def _get(self, profile: str) -> dict:
         if profile not in self._state:
-            self._state[profile] = {"state": "CLOSED", "failures": 0, "last_failure": 0.0, "successes": 0}
+            self._state[profile] = {
+                "state": "CLOSED",
+                "failures": 0,
+                "last_failure": 0.0,
+                "successes": 0,
+                "probe_in_flight": False,
+            }
         return self._state[profile]
 
     def can_execute(self, profile: str) -> bool:
@@ -73,15 +83,23 @@ class CircuitBreaker:
                 if time.monotonic() - st["last_failure"] >= _CIRCUIT_RECOVERY_TIME:
                     st["state"] = "HALF_OPEN"
                     st["successes"] = 0
+                    st["probe_in_flight"] = True
                     logger.info("OSRM circuit breaker for %s: OPEN -> HALF_OPEN", profile)
                     return True
                 return False
-            # HALF_OPEN
+            # HALF_OPEN: admit exactly one probe at a time. Letting every
+            # caller through while HALF_OPEN would aim the full request
+            # rate at an OSRM that has only just come back (or is still
+            # down) -- the stampede the breaker exists to prevent.
+            if st["probe_in_flight"]:
+                return False
+            st["probe_in_flight"] = True
             return True
 
     def record_success(self, profile: str) -> None:
         with self._lock:
             st = self._get(profile)
+            st["probe_in_flight"] = False
             if st["state"] == "HALF_OPEN":
                 st["successes"] += 1
                 if st["successes"] >= _CIRCUIT_HALF_OPEN_MAX:
@@ -91,9 +109,22 @@ class CircuitBreaker:
             elif st["state"] == "CLOSED":
                 st["failures"] = 0  # reset on success
 
+    def release_probe(self, profile: str) -> None:
+        """Free the HALF_OPEN probe slot without recording an outcome.
+
+        For a terminal path that is neither a breaker success nor a
+        breaker-relevant failure -- a non-retryable 4xx (a client problem,
+        deliberately not counted) or a 200 whose body failed validation.
+        Without this, a probe that ends that way leaves probe_in_flight
+        stuck True and the profile stranded in HALF_OPEN.
+        """
+        with self._lock:
+            self._get(profile)["probe_in_flight"] = False
+
     def record_failure(self, profile: str) -> None:
         with self._lock:
             st = self._get(profile)
+            st["probe_in_flight"] = False
             st["failures"] += 1
             st["last_failure"] = time.monotonic()
             if st["state"] == "HALF_OPEN":
@@ -118,15 +149,18 @@ _circuit_breaker = CircuitBreaker()
 # app/routing/graph_builder.py if this ever runs with multiple workers.
 _ROUTE_CACHE_TTL_S = 300
 _ROUTE_CACHE_MAX_ENTRIES = 500
-_route_cache: dict[tuple, tuple[float, dict]] = {}
+# OrderedDict so eviction is O(1) (popitem(last=False) drops the oldest
+# inserted entry) instead of a full min() scan over every key on each insert
+# once the cache is full, and so the evicted entry is the documented
+# insertion-order oldest rather than whatever a timestamp comparison yields.
+_route_cache: "OrderedDict[tuple, tuple[float, dict]]" = OrderedDict()
 
 # FastAPI runs sync routes (all of ours) in a threadpool, so concurrent
 # requests can genuinely hit _cache_get/_cache_set on different threads
-# at once. Unlike a plain dict get/set (atomic under the GIL),
-# _cache_set's eviction iterates the dict via min(...) -- if another
-# thread mutates it mid-iteration, that raises "dictionary changed size
-# during iteration". This lock is the same fix graph_builder.py already
-# applies to its own cache/version globals, for the same reason.
+# at once. An OrderedDict mutation (popitem + insert) is not atomic under
+# the GIL the way a plain dict's single get/set is, so both accessors take
+# this lock -- the same fix graph_builder.py already applies to its own
+# cache/version globals.
 _cache_lock = threading.Lock()
 
 
@@ -139,17 +173,26 @@ def _cache_get(key: tuple) -> dict | None:
         if time.monotonic() - cached_at > _ROUTE_CACHE_TTL_S:
             del _route_cache[key]
             return None
-        return value
+    # Return an independent copy: the cached dict (and the nested geometry
+    # coordinates) is shared by every caller for this key, and callers such
+    # as stop-positioning or the API layer hold it as `leg.road_geometry`.
+    # Handing out the shared object would let one caller mutate what the
+    # next caller sees.
+    return copy.deepcopy(value)
 
 
 def _cache_set(key: tuple, value: dict) -> None:
     with _cache_lock:
-        if len(_route_cache) >= _ROUTE_CACHE_MAX_ENTRIES:
-            # Cheap eviction: drop the oldest entry rather than maintaining a
-            # full LRU structure -- this cache is a latency/load optimization,
-            # not a correctness requirement, so approximate is fine.
-            oldest_key = min(_route_cache, key=lambda k: _route_cache[k][0])
-            del _route_cache[oldest_key]
+        if key in _route_cache:
+            # Re-inserting an existing key must not grow the dict past the
+            # cap and should move it to the newest position.
+            del _route_cache[key]
+        elif len(_route_cache) >= _ROUTE_CACHE_MAX_ENTRIES:
+            # O(1) eviction of the oldest inserted entry. This cache is a
+            # latency/load optimization, not a correctness requirement, so
+            # oldest-written is an adequate policy -- no full LRU structure
+            # needed.
+            _route_cache.popitem(last=False)
         _route_cache[key] = (time.monotonic(), value)
 
 
@@ -370,7 +413,11 @@ def get_route_geometry(
             resp = client.get(url, params=params)
             last_response = resp
             resp.raise_for_status()
-            _circuit_breaker.record_success(profile)
+            # Success is recorded only after the body parses and validates
+            # (below), not here: a 200 proves the request was answered, not
+            # that the payload is usable, and counting a truncated HTML
+            # interstitial as a breaker success would let a half-broken OSRM
+            # keep the circuit closed.
             break
         except httpx.HTTPStatusError as exc:
             last_exc = exc
@@ -381,7 +428,9 @@ def get_route_geometry(
                 # way it must not open the circuit breaker: recording these
                 # as failures would let a burst of bad requests trip the
                 # breaker and take down road geometry for *everyone*
-                # -- including requests that would have succeeded.
+                # -- including requests that would have succeeded. Release
+                # the HALF_OPEN probe slot so the next caller can still probe.
+                _circuit_breaker.release_probe(profile)
                 raise OSRMError(f"OSRM returned HTTP {exc.response.status_code}") from exc
             logger.warning("OSRM %s attempt %d failed (HTTP %d), retrying: %s", profile, attempt + 1, exc.response.status_code, exc)
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
@@ -390,19 +439,24 @@ def get_route_geometry(
         except httpx.RequestError as exc:
             last_exc = exc
             _circuit_breaker.record_failure(profile)
-            raise OSRMError(f"OSRM request error: {exc}") from exc
+            # Log the httpx detail server-side; the exception carries the
+            # internal OSRM URL, which must not reach a client through a
+            # downstream 502 detail string.
+            logger.warning("OSRM %s request error: %s", profile, exc)
+            raise OSRMError("OSRM request error") from exc
         else:
             # No exception
             break
 
         if attempt < 2:  # Not the last attempt
-            time.sleep(0.2 * (attempt + 1))  # Exponential backoff: 0.2s, 0.4s
+            time.sleep(0.2 * (2 ** attempt))  # Exponential backoff: 0.2s, 0.4s
     else:
         # All retries exhausted
         _circuit_breaker.record_failure(profile)
         if last_response is not None:
             raise OSRMError(f"OSRM returned HTTP {last_response.status_code} after retries") from last_exc
-        raise OSRMError(f"OSRM request failed after retries: {last_exc}") from last_exc
+        logger.warning("OSRM %s request failed after retries: %s", profile, last_exc)
+        raise OSRMError("OSRM request failed after retries") from last_exc
 
     try:
         data = last_response.json()
@@ -410,9 +464,24 @@ def get_route_geometry(
         # A 200 whose body isn't valid JSON (truncated, an HTML error
         # page, a proxy interstitial) must fail like any other OSRM
         # problem so the caller falls back, not escape as a raw
-        # JSONDecodeError.
+        # JSONDecodeError. Not a breaker success (see above); also not a
+        # breaker failure -- release the HALF_OPEN probe slot only.
+        _circuit_breaker.release_probe(profile)
         raise OSRMError("OSRM returned a response that was not valid JSON") from exc
 
-    result = _parse_route_response(data)
+    try:
+        result = _parse_route_response(data)
+    except OSRMError:
+        # A 200 that fails validation is not counted as a breaker success.
+        # It is also not necessarily an availability problem -- code=NoRoute
+        # is a legitimate answer to un-snappable coordinates -- so it does
+        # not count as a failure either; just release the probe slot.
+        _circuit_breaker.release_probe(profile)
+        raise
+
+    _circuit_breaker.record_success(profile)
     _cache_set(cache_key, result)
-    return result
+    # Independent copy for the caller: `result` stays the cached master (see
+    # _cache_get), so a caller mutating its road_geometry cannot poison the
+    # next caller.
+    return copy.deepcopy(result)

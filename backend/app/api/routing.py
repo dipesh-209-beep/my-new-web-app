@@ -561,12 +561,19 @@ def walking_route(
     try:
         geometry = get_route_geometry([(from_lat, from_lng), (to_lat, to_lng)], profile="foot")
     except OSRMError as exc:
-        raise HTTPException(status_code=502, detail=f"Couldn't compute walking route: {exc}")
+        # Log the OSRM detail; never return it to the client. An OSRMError
+        # can carry the internal OSRM base URL from the underlying httpx
+        # exception, which must not be disclosed in a public 502 body.
+        logger.warning("walking-route OSRM call failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Couldn't compute walking route.")
     return geometry
 
 
 @router.get("/route-finder", response_model=RouteFinderResult)
+@limiter.limit(_route_finder_rate_limit)
 def find_route(
+    request: Request,
+    response: Response,
     background_tasks: BackgroundTasks,
     origin: str = Query(..., description="Origin stop_id, e.g. S0198"),
     destination: str = Query(..., description="Destination stop_id, e.g. S0021"),

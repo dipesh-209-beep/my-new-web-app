@@ -127,6 +127,27 @@ def test_half_open_failure_reopens_immediately(clock):
     assert cb.can_execute("driving") is False
 
 
+def test_half_open_admits_only_one_probe_at_a_time(clock):
+    """A recovering OSRM must not receive the full request rate. While the
+    circuit is HALF_OPEN every caller used to be admitted, so the instant the
+    recovery window elapsed a burst of concurrent searches all probed at once
+    -- the stampede the breaker exists to prevent. Exactly one probe may be in
+    flight; the rest are refused until it resolves."""
+    cb = osrm_client.CircuitBreaker()
+    for _ in range(osrm_client._CIRCUIT_FAILURE_THRESHOLD):
+        cb.record_failure("driving")
+    clock["now"] += osrm_client._CIRCUIT_RECOVERY_TIME + 1
+
+    assert cb.can_execute("driving") is True  # first probe wins the slot
+    assert cb.can_execute("driving") is False  # second must wait
+    assert cb._get("driving")["probe_in_flight"] is True
+
+    # A probe that ends without recording success/failure (e.g. a
+    # non-retryable 4xx) releases the slot without changing state.
+    cb.release_probe("driving")
+    assert cb.can_execute("driving") is True
+
+
 def test_record_failure_timestamps_last_failure(clock):
     cb = osrm_client.CircuitBreaker()
     clock["now"] = 42.0

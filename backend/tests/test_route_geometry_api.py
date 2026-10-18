@@ -19,6 +19,7 @@ from app.db.session import SessionLocal
 from app.models import Route
 from app.routing.osrm_client import OSRMError
 import app.api.routes as routes_api
+import app.api.routing as routing_api
 
 
 @pytest.fixture
@@ -101,6 +102,10 @@ def test_geometry_502_when_osrm_fails(client, monkeypatch):
 
     res = client.get(f"/routes/{route_id}/geometry")
     assert res.status_code == 502
+    # The OSRM detail must not be echoed to the client -- an OSRMError can
+    # carry the internal OSRM URL from the underlying httpx exception. It is
+    # logged server-side only (AUD-021).
+    assert "connection refused" not in res.text
 
 
 def test_geometry_422_for_route_with_fewer_than_two_stops(client, monkeypatch):
@@ -249,3 +254,20 @@ def test_stops_direction_parameter_passed_to_osrm(client, monkeypatch):
     assert calls[0]["coords"] != calls[1]["coords"]
     # Both should have same number of coords (same stops, different order)
     assert len(calls[0]["coords"]) == len(calls[1]["coords"])
+
+
+def test_walking_route_502_does_not_leak_osrm_detail(client, monkeypatch):
+    """The walking-route 502 must be a fixed message, not the OSRMError text
+    -- which can carry the internal OSRM base URL (AUD-021)."""
+
+    def _raise(coords, profile="driving", bearings=None, radiuses=None):
+        raise OSRMError("http://osrm.internal:5000 connect failed")
+
+    monkeypatch.setattr(routing_api, "get_route_geometry", _raise)
+
+    res = client.get(
+        "/walking-route",
+        params={"from_lat": 27.7, "from_lng": 85.3, "to_lat": 27.71, "to_lng": 85.31},
+    )
+    assert res.status_code == 502
+    assert "osrm.internal" not in res.text

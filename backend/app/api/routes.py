@@ -258,6 +258,13 @@ def read_route_geometry(
         try:
             return get_route_geometry(coords)
         except OSRMError as exc2:
+            # Log the OSRM detail; never return it. An OSRMError can carry
+            # the internal OSRM base URL (from the underlying httpx
+            # exception), which must not be disclosed in a public 502 body.
+            logger.warning(
+                "route_geometry: unconstrained OSRM call also failed for "
+                "route %s (direction=%s): %s", route_id, direction, exc2,
+            )
             raise HTTPException(
-                status_code=502, detail=f"Couldn't compute route geometry: {exc2}"
+                status_code=502, detail="Couldn't compute route geometry."
             )

@@ -121,6 +121,53 @@ def test_valid_payload_is_cached(monkeypatch):
 # --- malformed body / top level -------------------------------------------
 
 
+def test_cache_returns_independent_copies(monkeypatch):
+    """The cached route dict and its nested geometry coordinates are shared
+    by every caller for a key, and callers keep it as `leg.road_geometry`.
+    Each call must get its own copy, or one caller mutating it would change
+    what the next caller sees."""
+    first = _call(monkeypatch, _valid_payload())
+    first["distance_m"] = -1
+    first["geometry"]["coordinates"].append([0.0, 0.0])
+
+    second = osrm_client.get_route_geometry(_COORDS)
+    assert second["distance_m"] == 1234.5
+    assert second["geometry"]["coordinates"] == [[85.30, 27.70], [85.31, 27.71]]
+
+
+def test_validated_success_closes_half_open(monkeypatch):
+    """A usable 200 is what records a breaker success -- and it is recorded
+    only after the body parses and validates."""
+    monkeypatch.setattr(osrm_client, "_CIRCUIT_RECOVERY_TIME", 0.0)
+    monkeypatch.setattr(osrm_client, "_CIRCUIT_HALF_OPEN_MAX", 1)
+    cb = osrm_client._circuit_breaker
+    for _ in range(osrm_client._CIRCUIT_FAILURE_THRESHOLD):
+        cb.record_failure("driving")
+    assert cb._get("driving")["state"] == "OPEN"
+
+    _call(monkeypatch, _valid_payload())
+    assert cb._get("driving")["state"] == "CLOSED"
+
+
+def test_unparseable_200_is_not_a_breaker_success(monkeypatch):
+    """Before this, record_success ran as soon as raise_for_status passed, so
+    a truncated/proxied 200 -- unusable to every caller -- kept the breaker
+    closed. A 200 whose body fails validation must not count as a success,
+    and its HALF_OPEN probe slot must be released (this is not a
+    breaker-relevant failure either, so the state stays HALF_OPEN)."""
+    monkeypatch.setattr(osrm_client, "_CIRCUIT_RECOVERY_TIME", 0.0)
+    cb = osrm_client._circuit_breaker
+    for _ in range(osrm_client._CIRCUIT_FAILURE_THRESHOLD):
+        cb.record_failure("driving")
+    assert cb._get("driving")["state"] == "OPEN"
+
+    with pytest.raises(OSRMError):
+        _call(monkeypatch, bad_json=True)
+
+    assert cb._get("driving")["state"] == "HALF_OPEN"
+    assert cb._get("driving")["probe_in_flight"] is False
+
+
 def test_non_json_body_raises_osrm_error(monkeypatch):
     with pytest.raises(OSRMError):
         _call(monkeypatch, bad_json=True)
