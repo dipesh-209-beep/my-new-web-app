@@ -24,6 +24,9 @@ SHELL := /bin/bash
 COMPOSE := docker compose
 # Production: explicit -f list, so docker-compose.override.yml is ignored.
 PROD_COMPOSE := docker compose -f docker-compose.yml -f docker-compose.prod.yml
+# Test-only Redis (dedicated server, loopback port 6380). Explicit -f list,
+# so neither the dev override nor the base stack is pulled in.
+COMPOSE_TEST := docker compose -f docker-compose.test.yml
 DATA_SCRIPTS := data/scripts
 PROCESSED_DIR := data/processed
 SCRIPTS := scripts
@@ -39,6 +42,7 @@ endif
 .PHONY: setup data validate env backend-env db-up backend-env-check migrate import \
         seed-admin osrm osrm-up osrm-route-distances backend-build up down logs psql \
         test test-backend test-frontend lint frontend-install \
+        test-redis-up test-redis-down test-redis-guard \
         nginx-check prod-check up-prod down-prod backup restore-backup \
         certs renew-certs
 
@@ -162,15 +166,30 @@ psql:
 ## TEST_DATABASE_URL if you need a different one; set it to the dev database
 ## only deliberately.
 ##
-## It also needs the dev stack up (`make up`) for the Postgres and Redis
-## ports, and the disposable database to exist and be migrated:
+## It also needs the dev stack up (`make up`) for the Postgres port, and the
+## disposable database to exist and be migrated:
 ##   docker exec -it ktm_bus_db psql -U ktm_bus -d postgres \
 ##     -c "CREATE DATABASE ktm_bus_sectest"
 ##   cd backend && DATABASE_URL=.../ktm_bus_sectest alembic upgrade head
 ##
-## REDIS_URL is exported from the root .env because the compose Redis runs
-## with a password (--requirepass) and the cache tests would otherwise skip
-## -- silently, which is exactly the failure mode that hides bugs.
+## Redis is NOT taken from the dev stack. The suite runs an autouse fixture
+## that invalidates every `respcache:*` key, and the app's response cache and
+## rate limiter both read REDIS_URL -- so pointing the tests at the
+## development Redis (docker-compose.yml's `redis`, host port 6379) would let
+## a test run wipe the running stack's cache. TEST_REDIS_URL must therefore
+## name a dedicated test server, and the guard below refuses to run without
+## one (no silent fallback). Start the disposable Redis this repo ships:
+##   make test-redis-up
+##   export TEST_REDIS_URL='redis://:test-redis-pass@localhost:6380/0'
+## scripts/check_test_redis.py rejects anything resolving to the development
+## endpoint (localhost/127.0.0.1/::1/redis on 6379), even on a different
+## database index. The validated endpoint is exported to pytest as REDIS_URL
+## so the app, cache and rate limiter all use it. No credential is printed.
+##
+## The guard runs with --ping: it dials the validated endpoint (bounded
+## timeout, never the development Redis) and aborts BEFORE pytest if the server
+## does not answer. Without that, a configured-but-down test Redis would let
+## every Redis-backed test skip, turning a broken environment into a green run.
 ##
 ## The interpreter is backend/venv/bin/python, not `python3`. The system
 ## interpreter has no fastapi/networkx/alembic, so `python3 -m pytest` fails
@@ -192,11 +211,35 @@ test-backend:
 	   echo "set TEST_DATABASE_URL to a disposable database, e.g. ktm_bus_sectest." >&2; \
 	   exit 1 ;; \
 	 esac; \
-	 echo "backend tests -> $$db"; \
+	 if [ -z "$$TEST_REDIS_URL" ]; then \
+	   echo "TEST_REDIS_URL is not set; refusing to run the suite against the" >&2; \
+	   echo "development Redis. Start the dedicated test Redis and retry:" >&2; \
+	   echo "  make test-redis-up" >&2; \
+	   echo "  export TEST_REDIS_URL='redis://:test-redis-pass@localhost:6380/0'" >&2; \
+	   exit 1; \
+	 fi; \
+	 "$$py" scripts/check_test_redis.py --ping || exit 1; \
+	 echo "backend tests -> $$db (test Redis from TEST_REDIS_URL)"; \
 	 cd backend && \
 	 DATABASE_URL="$$db" \
-	 REDIS_URL="redis://:$$REDIS_PASSWORD@localhost:6379/0" \
+	 REDIS_URL="$$TEST_REDIS_URL" \
 	 "$$OLDPWD/$$py" -m pytest -v
+
+## Start the dedicated, disposable Redis the backend suite runs against. It is
+## a separate server from the development Redis (loopback port 6380, not 6379),
+## has no persistence, and is removed by `make test-redis-down`. It is never
+## started by `make up` / `make up-prod`.
+test-redis-up:
+	$(COMPOSE_TEST) up -d redis-test
+
+## Stop and remove the disposable test Redis (and its container).
+test-redis-down:
+	$(COMPOSE_TEST) down
+
+## Run just the TEST_REDIS_URL guard's own unit tests. Pure Python: needs no
+## Redis, no Postgres, and no .env.
+test-redis-guard:
+	@backend/venv/bin/python -m pytest -v scripts/test_check_test_redis.py
 
 ## Frontend lint + tests + production build. No .env needed (Next.js reads
 ## NEXT_PUBLIC_* at build time, not from this stack).

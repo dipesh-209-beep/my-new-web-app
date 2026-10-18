@@ -1,0 +1,81 @@
+# Disposable Redis for the backend test suite ONLY.
+#
+# Why a second Redis server
+# -------------------------
+# `make test-backend` runs an autouse fixture that invalidates every
+# `respcache:*` key, and the application's response cache and rate limiter
+# both read their store from REDIS_URL (app/core/redis_client.py:get_redis,
+# app/core/rate_limit.py). Pointing the suite at the development Redis
+# (docker-compose.yml's `redis`, host loopback port 6379, database 0) would
+# let a test run clear the running stack's cache.
+#
+# This file provides a second, throwaway Redis on its own loopback port with
+# no persistence, so the suite can never touch the development one. It is
+# never loaded by `make up` / `make up-prod`: those name their compose files
+# explicitly (base + override, or base + prod), and an explicit `-f` list
+# suppresses auto-loaded overrides, so this file's service exists only when a
+# developer asks for it:
+#
+#   make test-redis-up
+#   export TEST_REDIS_URL='redis://:test-redis-pass@localhost:6380/0'
+#   make test-backend
+#   make test-redis-down
+#
+# `make test-backend` refuses to run unless TEST_REDIS_URL is set and passes
+# scripts/check_test_redis.py, which rejects the development endpoint.
+#
+# Own project name
+# ----------------
+# `docker compose -f <file>` otherwise derives the project name from the
+# directory, which here is the *same* project as the development stack
+# (docker-compose.yml). That would make `make test-redis-down` share the dev
+# stack's default network. A distinct top-level `name` gives this file its own
+# project and network, so up/down here can never touch the dev stack.
+#
+# Ports and password
+# ------------------
+# Loopback only, port 6380 (the development Redis owns 6379). The password is
+# a fixed, non-secret, test-only value on purpose: this server is reachable
+# only from the host's loopback interface, holds no data worth keeping, and is
+# destroyed by `make test-redis-down`. It is deliberately NOT the deployment
+# `REDIS_PASSWORD`, so nothing in this file is a credential.
+name: ktm-bus-test
+services:
+  redis-test:
+    image: redis:7-alpine
+    container_name: ktm_bus_redis_test
+    command:
+      - redis-server
+      - --requirepass
+      - test-redis-pass
+      # No persistence: a disposable cache that should start empty every time
+      # and cannot be mistaken for state worth preserving.
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    ports:
+      # Loopback-bound test endpoint. Nothing outside this host can reach it.
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a test-redis-pass ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # Mirrors the base compose file's hardening for the development redis
+    # (security_opt + the entrypoint capabilities the official image needs).
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 128M

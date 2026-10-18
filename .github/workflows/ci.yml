@@ -24,20 +24,27 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       # The response-cache and cache-isolation suites exercise the shared
-      # Redis tier (and the cache tests error -- not skip -- when no
-      # REDIS_URL is configured: get_settings() is cached at import, so a
-      # no-Redis CI env used to turn those tests into AttributeErrors).
-      # Production refuses to start without a shared Redis, so CI matching
-      # that shape is the test environment, not an extra. Mirrors
-      # docker-compose.yml's redis service, password and requirepass
-      # included, so a passing CI proves the authenticated-URL path.
+      # Redis tier. A no-Redis CI env makes those tests skip (the `redis_url`
+      # fixture resolves to None and `_require_redis` skips rather than
+      # falling back to localhost:6379), so CI provides a real one to keep the
+      # coverage -- and it is this job's own disposable service, so the
+      # autouse `respcache:*` wipe cannot touch anything shared. Production
+      # refuses to start without a shared Redis, so CI matching that shape is
+      # the test environment, not an extra. Mirrors docker-compose.yml's redis
+      # service, password and requirepass included, so a passing CI proves the
+      # authenticated-URL path. (Locally, `make test-backend` uses a dedicated
+      # TEST_REDIS_URL instead -- see docker-compose.test.yml.)
       redis:
         image: redis:7-alpine
         env:
           REDIS_PASSWORD: ci-test-redis-pass
         ports:
           - 6379:6379
-        command: ["redis-server", "--requirepass", "ci-test-redis-pass"]
+        # serviceContainer.command must be a single string (GitHub's workflow
+        # schema types it as `string`), not a YAML sequence -- a sequence makes
+        # the whole workflow invalid ("A sequence was not expected"), so GitHub
+        # starts zero jobs. Passed as args after the image, overriding CMD.
+        command: redis-server --requirepass ci-test-redis-pass
         options: >-
           --health-cmd "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"
           --health-interval 10s
@@ -88,6 +95,14 @@ jobs:
         working-directory: .
         run: python data/scripts/import_data.py
       - run: pytest
+      - name: Run the TEST_REDIS_URL guard tests
+        # scripts/test_check_test_redis.py lives outside backend/, so the
+        # `pytest` step above -- which runs with working-directory: backend --
+        # never collects it. The file is pure URL parsing plus liveness via an
+        # *injected* connector (no Redis, no database), and runs here with the
+        # interpreter and dependencies installed earlier in this job.
+        working-directory: .
+        run: pytest scripts/test_check_test_redis.py
 
   data-pipeline-tests:
     runs-on: ubuntu-latest

@@ -3,7 +3,6 @@ tests/conftest.py
 
 Shared pytest fixtures across the whole backend test suite.
 """
-import os
 import uuid
 
 import pytest
@@ -11,6 +10,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.core import redis_client
 from app.core.response_cache import invalidate_all
 from app.core.security import (
     EDITOR_PERMISSIONS,
@@ -23,51 +23,31 @@ from app.core.security import (
 )
 from app.db.session import SessionLocal
 from app.models import AdminAuditLog, AdminUser, ServiceCredential
+from tests import redis_test_support
 
 TEST_PASSWORD = "correct-horse-battery-staple"
 
-# The Redis the cache tests should talk to. Previously hardcoded as
-# "redis://localhost:6379/0" in three places, which silently skipped those
-# tests the moment Redis was given a password -- and "the tests skip" is
-# exactly the kind of thing nobody notices until the code is broken.
-#
-# Resolution order:
-#   1. TEST_REDIS_URL -- for CI, where the host/port differ from a dev box
-#   2. REDIS_URL      -- what the running stack is actually configured with
-#   3. the local default, for a bare `redis-server` on a dev machine
-#
-# The compose stack runs Redis with --requirepass (see
-# docker-compose.yml), so on a dev machine `make test` needs REDIS_URL set
-# to the authenticated URL -- `make test` does that for you. Anyone
-# running pytest by hand will see the cache tests skip, which is the
-# correct and intended behaviour rather than a failure.
-DEFAULT_TEST_REDIS_URL = "redis://localhost:6379/0"
-
 
 @pytest.fixture
-def redis_url() -> str:
-    """The Redis the cache tests should talk to.
+def redis_url() -> str | None:
+    """The Redis the Redis-specific tests should talk to.
 
-    Previously hardcoded as "redis://localhost:6379/0" in three places,
-    which silently skipped those tests the moment Redis was given a
-    password -- and "the tests skip" is exactly the kind of thing nobody
-    notices until the code is broken.
+    Resolution order (see redis_test_support.resolve_redis_url):
+      1. TEST_REDIS_URL -- the dedicated test endpoint
+                           (docker-compose.test.yml, loopback port 6380)
+      2. REDIS_URL      -- what the running stack / CI is configured with
 
-    Resolution order:
-      1. TEST_REDIS_URL -- for CI, where host/port differ from a dev box
-      2. REDIS_URL      -- what the running stack is actually configured with
-      3. the local default, for a bare `redis-server` on a dev machine
-
-    The compose stack runs Redis with --requirepass (see
-    docker-compose.yml), so `make test` sets REDIS_URL to the
-    authenticated URL. Anyone running pytest by hand will see the cache
-    tests skip, which is the intended behaviour rather than a failure.
+    There is deliberately **no** third, hardcoded default. Resolving to None
+    means "no Redis configured": the Redis-specific tests skip cleanly rather
+    than falling back to the development endpoint at localhost:6379, which a
+    test run must never clear. `make test-backend` guarantees TEST_REDIS_URL
+    is set (and validated by scripts/check_test_redis.py) before pytest runs.
     """
-    return os.getenv("TEST_REDIS_URL") or os.getenv("REDIS_URL") or DEFAULT_TEST_REDIS_URL
+    return redis_test_support.resolve_redis_url()
 
 
 @pytest.fixture(autouse=True)
-def _reset_response_cache():
+def _reset_response_cache(monkeypatch):
     """The in-process response cache (app/core/response_cache.py) is a
     module-level dict that persists for the life of the test process --
     same as it does in production, since that's the whole point of it.
@@ -85,10 +65,18 @@ def _reset_response_cache():
     Clearing on both sides of every test keeps this cache from ever
     leaking state across tests, the same way test_pathfinder_alternatives.py
     already resets the routing-graph cache around each of its tests.
+
+    It also pins the app's Redis client at the isolated test endpoint
+    (redis_test_support.pin_test_redis) and drops any memoized client, so
+    invalidate_all() below can only ever reach the dedicated test Redis --
+    never the development one -- and no client bound to a previous endpoint
+    can survive into the next test.
     """
+    redis_test_support.pin_test_redis(monkeypatch)
     invalidate_all()
     yield
     invalidate_all()
+    redis_client._reset_for_tests()
 
 
 # ---------------------------------------------------------------------------

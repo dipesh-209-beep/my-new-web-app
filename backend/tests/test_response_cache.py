@@ -112,6 +112,12 @@ class TestJsonSerialization:
 class TestWithRedis:
     @pytest.fixture(autouse=True)
     def _require_redis(self, monkeypatch, redis_url):
+        if redis_url is None:
+            pytest.skip(
+                "No test Redis configured (set TEST_REDIS_URL, e.g. "
+                "'make test-redis-up' + "
+                "TEST_REDIS_URL=redis://:test-redis-pass@localhost:6380/0)"
+            )
         # Point the cached Settings singleton at the test Redis rather than
         # only the environment: get_settings() is @lru_cache'd and reads
         # REDIS_URL once per process, so by the time this fixture runs it has

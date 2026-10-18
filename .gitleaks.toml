@@ -1,0 +1,40 @@
+# Repository gitleaks configuration.
+#
+# gitleaks resolves its config in this order: `--config/-c`, then the
+# GITLEAKS_CONFIG env var, then GITLEAKS_CONFIG_TOML, then
+# `(scan source)/.gitleaks.toml`, then the built-in default. This file is
+# therefore picked up automatically by `gitleaks/gitleaks-action`
+# (it runs `gitleaks detect` with the repository root as the source and
+# passes no `--config`), so no workflow change is needed. It EXTENDS the
+# built-in default rule set rather than replacing it.
+#
+# The single entry below suppresses one verified FALSE POSITIVE. The
+# `generic-api-key` rule matches the prose "...accessible names,
+# parent/child relationships..." in frontend/ACCESSIBILITY.md: the rule
+# sees the keyword "access" (from "accessible") and then the low-value
+# token "parent/child" (entropy 3.58, just over the rule's 3.5 floor).
+#
+# The exception is deliberately as narrow as gitleaks allows:
+#   * it is scoped to the `generic-api-key` RULE, not the whole rule set,
+#     and the rule is NOT disabled -- every other generic-api-key match
+#     still fires;
+#   * it is scoped to the exact offending LINE (`regexTarget = "line"`),
+#     NOT to the file or a directory -- a secret on any other line of
+#     frontend/ACCESSIBILITY.md is still reported.
+#
+# Verified against the exact gitleaks version this repo's CI pins
+# (gitleaks-action's default, 8.24.3): with this config the working-tree
+# scan and the full-history scan are both clean, while two deliberately
+# planted dummy secrets (on another line of frontend/ACCESSIBILITY.md and
+# in an unrelated file) are still detected. The same checks pass with
+# gitleaks 8.30.1.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "False positive: prose 'accessible names, parent/child relationships' in frontend/ACCESSIBILITY.md, not a secret."
+regexTarget = "line"
+regexes = ['''That catches structural and ARIA problems \(roles, accessible names,''']

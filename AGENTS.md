@@ -44,7 +44,13 @@ keeps `backend/.env`'s `DATABASE_URL` password in sync with the root
 placeholders, which the app refuses in production.
 
 Run the tests with `make test` from the repo root — see the Testing Strategy
-section for why not to point pytest at the dataset database.
+section for why not to point pytest at the dataset database. The backend
+suite also runs against its **own** Redis: `make test-backend` requires
+`TEST_REDIS_URL` and refuses to run without it (an autouse fixture clears
+`respcache:*` keys, so it must never reach the dev Redis on 6379). Start the
+disposable one with `make test-redis-up`, export
+`TEST_REDIS_URL='redis://:test-redis-pass@localhost:6380/0'`, then
+`make test-backend`; `make test-redis-down` removes it.
 
 ### Frontend
 ```bash
@@ -95,6 +101,7 @@ make seed-admin  # Create first admin login
 - **Security regression tests**: `tests/test_privileged_routes_are_gated.py` (structural + behavioural audit of every privileged route), `tests/test_service_credentials_api.py`, `tests/test_admin_roles.py`, `tests/test_config.py`. When you add a privileged endpoint, extend the structural test — it fails if a new mutating route is ungated.
 - **Frontend**: `lib/` (pure helpers) + `hooks/` (mocked API)
 - **Data pipeline**: `data/scripts/test_clean_data.py` + full pipeline validation in CI
+- **Test-Redis isolation**: `tests/test_test_redis_isolation.py` (fixture resolution + propagation, no network) and `scripts/test_check_test_redis.py` (the `TEST_REDIS_URL` guard). Keep both green when touching `conftest.py`, `redis_client` or the `Makefile` test target.
 
 ### Never run the suite against the dataset database
 
@@ -107,9 +114,28 @@ database leaves it mutated with no record of what changed.
 Set it up once:
 
 ```bash
-docker compose up -d db redis
+docker compose up -d db
 docker exec ktm_bus_db psql -U ktm_bus -d postgres -c "CREATE DATABASE ktm_bus_sectest"
 cd backend && DATABASE_URL="postgresql://ktm_bus:$POSTGRES_PASSWORD@localhost:5432/ktm_bus_sectest" alembic upgrade head
+```
+
+### Never run the suite against the development Redis
+
+The autouse `_reset_response_cache` fixture in `backend/tests/conftest.py`
+deletes every `respcache:*` key, and the app's response cache + rate limiter
+read `REDIS_URL`. Pointing the suite at the dev Redis would wipe the running
+stack's cache. `make test-backend` therefore **requires** `TEST_REDIS_URL`,
+runs `scripts/check_test_redis.py` (which rejects the dev endpoint —
+`localhost`/`127.0.0.1`/`::1`/`redis` on 6379, any database index), and
+exports the validated URL to pytest as `REDIS_URL`. A dedicated server is the
+only accepted design; a different database index on the shared server is
+refused. Start the disposable one this repo ships:
+
+```bash
+make test-redis-up      # docker-compose.test.yml: loopback port 6380, no persistence
+export TEST_REDIS_URL='redis://:test-redis-pass@localhost:6380/0'
+make test-backend
+make test-redis-down
 ```
 
 ## Environment Variables

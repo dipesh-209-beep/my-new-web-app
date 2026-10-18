@@ -265,17 +265,39 @@ dependencies installed.
 To set that database up once:
 
 ```bash
-docker compose up -d db redis
+docker compose up -d db
 docker exec ktm_bus_db psql -U ktm_bus -d postgres \
   -c "CREATE DATABASE ktm_bus_sectest"
 cd backend && DATABASE_URL="postgresql://ktm_bus:$POSTGRES_PASSWORD@localhost:5432/ktm_bus_sectest" \
   alembic upgrade head
 ```
 
+The suite also needs its **own** Redis, separate from the development one:
+an autouse fixture deletes every `respcache:*` key, and the app's response
+cache and rate limiter read `REDIS_URL`, so a test run must never reach the
+stack's Redis on port 6379. `make test-redis-up` starts a disposable Redis
+on a loopback-only port (6380) with no persistence; `make test-redis-down`
+removes it:
+
+```bash
+make test-redis-up
+export TEST_REDIS_URL='redis://:test-redis-pass@localhost:6380/0'
+make test-backend
+make test-redis-down
+```
+
+`make test-backend` refuses to run unless `TEST_REDIS_URL` is set, and
+`scripts/check_test_redis.py` rejects anything that resolves to the
+development endpoint (`localhost`/`127.0.0.1`/`::1`/`redis` on port 6379,
+even on a different database index). The target exports the validated URL to
+pytest as `REDIS_URL`, so the app, the response cache and the rate limiter all
+use the isolated instance. CI supplies its own disposable `REDIS_URL` service.
+
 To run pytest directly instead, `cd backend && ./venv/bin/python -m pytest -v`
 works with no environment overrides: `backend/.env` already points at
 `localhost` with a password that `make env` keeps in sync with the root
-`.env`.
+`.env`. With no `TEST_REDIS_URL` or `REDIS_URL` set, the Redis-specific tests
+skip cleanly rather than falling back to the development Redis.
 
 - `tests/test_routing.py`, `tests/test_pathfinder_alternatives.py`, `tests/test_stop_positioning_adversarial.py` — unit tests for graph construction, the pathfinder (bidirectional/one-directional edges, transfer edges, direct-vs-transfer preference, graph caching, route alternatives), and the stop-placement heuristics (closed-loop / ring-road routes, snap-radius-constrained failures, monotonic-cursor regressions), no database required.
 - `tests/test_congestion_weight_fn.py`, `tests/test_duration_weight_fn.py`, `tests/test_congestion_zones.py` — unit tests for the congestion-aware and estimated-duration edge-weighting functions used by `avoid_congestion` and the `fastest_estimated` alternative.
@@ -326,6 +348,7 @@ Created by `make env` from `.env.example`. Read by Compose, not by the app.
 | `ENVIRONMENT` | No (defaults to `development`) | `development`, `production` or `test` only. The prod overlay sets `production` itself. |
 | `TRUST_PROXY_HEADERS` | No (defaults to `false`) | Only `true` when the sole path to the backend is through nginx. |
 | `HTTP_PORT` | No (defaults to `80`) | Host port for the nginx ingress. |
+| `TEST_REDIS_URL` | For `make test-backend` | Dedicated test Redis for the backend suite. Read by the Makefile, not Compose; the target refuses to run without it and rejects the development endpoint. |
 
 Both files are gitignored, must stay mode `600`, and are never committed.
 

@@ -110,6 +110,12 @@ class TestRoutesCacheWithRedis:
 
     @pytest.fixture(autouse=True)
     def _require_redis(self, monkeypatch, redis_url):
+        if redis_url is None:
+            pytest.skip(
+                "No test Redis configured (set TEST_REDIS_URL, e.g. "
+                "'make test-redis-up' + "
+                "TEST_REDIS_URL=redis://:test-redis-pass@localhost:6380/0)"
+            )
         # Point the cached Settings singleton at the test Redis, not just the
         # environment: get_settings() is @lru_cache'd (populated before this
         # fixture runs), so monkeypatch.setenv would be ignored and
@@ -216,6 +222,12 @@ class TestStopsCacheWithRedis:
 
     @pytest.fixture(autouse=True)
     def _require_redis(self, monkeypatch, redis_url):
+        if redis_url is None:
+            pytest.skip(
+                "No test Redis configured (set TEST_REDIS_URL, e.g. "
+                "'make test-redis-up' + "
+                "TEST_REDIS_URL=redis://:test-redis-pass@localhost:6380/0)"
+            )
         # Point the cached Settings singleton at the test Redis, not just the
         # environment: get_settings() is @lru_cache'd (populated before this
         # fixture runs), so monkeypatch.setenv would be ignored and
