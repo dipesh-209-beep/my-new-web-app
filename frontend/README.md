@@ -127,13 +127,16 @@ types/route.ts  mirrors backend/app/schemas.py. Keep in sync if the
 display), `app/icon.tsx`/`app/apple-icon.tsx` generate the icons it
 references, and `ServiceWorkerRegistration.tsx` registers
 `public/sw.js` on mount (fails silently if unsupported -- progressive
-enhancement, not a requirement). The service worker cache-first-serves
-the app shell and stale-while-revalidates `/stops`, `/routes`, and
-`/congestion`; live/OSRM-dependent calls (`/route-finder`,
-`/walking-route`, `/routes/{id}/geometry`) are deliberately left
-network-only so a stale cached response can't show a wrong route. See
-`public/sw.js` for the full rationale, and `app/offline/page.tsx` for
-what an uncached navigation shows while offline.
+enhancement, not a requirement). The service worker serves the app shell
+network-first (falling back to cache, then to `/offline`, when the network is
+gone) and serves `/stops`, `/routes` and `/congestion`
+stale-while-revalidate with a 30-minute age ceiling and a bounded number of
+cached entries; when it has to serve a stale or offline copy it posts a status
+message that `CacheFreshnessNotice` renders as a small "showing saved data"
+note. Live/OSRM-dependent calls (`/route-finder`, `/walking-route`,
+`/routes/{id}/geometry`) are deliberately left network-only so a stale cached
+response can't show a wrong route. See `public/sw.js` for the full rationale,
+and `app/offline/page.tsx` for what an uncached navigation shows while offline.
 
 ## Accessibility
 

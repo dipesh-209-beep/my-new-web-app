@@ -21,6 +21,7 @@ import { MapErrorBoundary } from "@/components/MapErrorBoundary";
 import LayerToggle from "@/components/ui/LayerToggle";
 import SheetSnapControl from "@/components/ui/SheetSnapControl";
 import StopsLoadError from "@/components/search/StopsLoadError";
+import CacheFreshnessNotice from "@/components/CacheFreshnessNotice";
 
 // Leaflet touches `window`, so the map must load client-side only.
 const BusMap = dynamic(() => import("@/components/BusMap"), {
@@ -266,6 +267,11 @@ const congestion = useCongestion();
 
         {!showMinimized && (
           <>
+            {/* Surfaces when the service worker is serving list data from a
+                stale cache or the device is offline (AUD-014). Renders
+                nothing in the normal fresh/online case. */}
+            <CacheFreshnessNotice />
+
             <SearchForm
               stops={stops}
               stopsLoading={stopsLoading}

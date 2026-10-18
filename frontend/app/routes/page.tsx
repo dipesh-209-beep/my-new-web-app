@@ -6,6 +6,7 @@ import { useRouteBrowser } from "@/hooks/useRouteBrowser";
 import { formatRouteDistance } from "@/lib/routeDistance";
 import { BusIcon } from "@/components/icons/TransitIcons";
 import InlineAlert from "@/components/ui/InlineAlert";
+import CacheFreshnessNotice from "@/components/CacheFreshnessNotice";
 
 export default function RoutesPage() {
   const { routes, total, loading, loadingMore, error, retry, searchQuery, setSearchQuery, hasMore, loadMore } =
@@ -85,6 +86,10 @@ export default function RoutesPage() {
       <p role="status" aria-live="polite" className="sr-only">
         {listStatus}
       </p>
+
+      {/* Visible freshness note when the list came from the service worker's
+          cache (stale or offline); nothing when the data is live. */}
+      <CacheFreshnessNotice />
 
       <label htmlFor="routes-search" className="sr-only">
         Search by route name or number…
