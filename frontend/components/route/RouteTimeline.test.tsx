@@ -218,6 +218,21 @@ describe("RouteTimeline", () => {
     expect(screen.getByText("Get off at B")).toBeTruthy();
     expect(screen.getByText("1 stop")).toBeTruthy();
   });
+
+  it("paints the transfer/walk icon with design tokens, not hardcoded hex", () => {
+    const walk: RouteLeg = {
+      route_id: "TRANSFER",
+      route_name: "Transfer (walk)",
+      board_stop: makeStop({ stop_id: "S1", stop_name: "A" }),
+      alight_stop: makeStop({ stop_id: "S2", stop_name: "B" }),
+      num_ride_segments: 1,
+      stops: [],
+    };
+    const { container } = render(<RouteTimeline legs={[walk]} />);
+    const icon = container.querySelector("span.bg-surface-sunken");
+    expect(icon).not.toBeNull();
+    expect(icon!.className).toContain("text-ink-secondary");
+  });
 });
 
 describe("RouteTimeline step selection", () => {

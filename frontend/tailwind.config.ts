@@ -57,7 +57,7 @@ const config: Config = {
           //
           // The `green`/`yellow`/`red` values are chosen to read correctly
           // as map lines, fills and hovers against white and against each
-          // other -- the congestion ramp and the destination pin live in
+          // other -- the congestion colours and the destination pin live in
           // that space, and changing it would change the map. As *text*
           // sitting on a tint of themselves (bg-accent-red/5 etc.) they
           // fail: #DC2626 on a 5% red tint is 4.47:1 and #CA8A04 on a 5%

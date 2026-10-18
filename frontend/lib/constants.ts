@@ -1,3 +1,5 @@
+import type { CongestionLevel } from "@/types/route";
+
 // Route-leg palette, shared between components/BusMap.tsx (polylines on
 // the map) and app/page.tsx (the matching sidebar legend). Previously
 // defined independently in both files with a "kept in sync" comment --
@@ -6,23 +8,44 @@
 // redefining.
 export const LEG_COLORS = ["#2563EB", "#0D9488", "#EA580C", "#DB2777"];
 
-// Congestion-level palette, shared between components/map/useCongestionLayer.ts
-// (the map polylines) and components/CongestionPanel.tsx (the matching
-// legend) -- previously each defined this map independently, the same
-// "kept in sync by hand" risk LEG_COLORS above already had.
-export const CONGESTION_COLORS: Record<string, string> = {
+// Congestion severity palette, keyed by the backend's congestion_level
+// (backend/app/api/congestion.py `_classify`). This is the single
+// severity->colour contract: the map polylines
+// (components/map/useCongestionLayer.ts) and BOTH legends (the Traffic
+// panel and the on-map key) resolve a severity through this one map, so a
+// colour cannot mean "moderate" on the map and "heavy" in a legend. It is
+// keyed by level rather than by raw ratio precisely because a continuous
+// ratio ramp cannot be reproduced by a three-label legend -- that mismatch
+// was the bug this replaced (see lib/congestionColor.ts).
+//
+// `unknown` is used: it is the explicit fallback for a severity this build
+// does not recognise. The frontend CongestionLevel type permits it (see
+// types/route.ts) even though the current API only ever emits
+// free_flow/moderate/heavy, so a future level renders neutral grey instead
+// of the wrong colour -- see congestionLevelColor() in lib/congestionColor.ts.
+export const CONGESTION_COLORS: Record<CongestionLevel, string> = {
   free_flow: "#22C55E",
   moderate: "#F59E0B",
   heavy: "#EF4444",
   unknown: "#6B7280",
 };
 
-// Hairline outline for the two congestion legend bars (the Traffic panel bar
-// and the on-map key bar) and the on-map key's container border, so the
-// legend reads as a bounded graphical object on white: WCAG 1.4.11 wants
-// >=3:1 for non-text indicators, and `ink.tertiary` #767194 is 4.61:1. This
-// only bounds the legend -- it does NOT make the gradient FILLS compliant;
-// their light end sits below 3:1 (see ACCESSIBILITY.md, gap 5).
+// The ordered (low -> high) severity rows every congestion legend renders:
+// one swatch + one text label each. Text labels (not colour alone) carry the
+// meaning, and sharing this one list keeps the Traffic panel and the on-map
+// key in the same order with the same wording.
+export const CONGESTION_LEGEND: { level: CongestionLevel; label: string }[] = [
+  { level: "free_flow", label: "Low" },
+  { level: "moderate", label: "Moderate" },
+  { level: "heavy", label: "Heavy" },
+];
+
+// Hairline outline for the congestion legend swatches and the on-map key's
+// container, so the legend reads as a bounded graphical object on white:
+// WCAG 1.4.11 wants >=3:1 for non-text indicators, and `ink.tertiary`
+// #767194 is 4.61:1. This only bounds the swatches -- it does NOT make the
+// fills themselves compliant (their light end sits below 3:1; see
+// ACCESSIBILITY.md, gap 5).
 export const CONGESTION_LEGEND_OUTLINE = "#767194";
 
 // Route-finder "transfer" legs are identified on the client by this sentinel

@@ -26,6 +26,9 @@ describe("LayerToggle", () => {
     renderToggle();
     expect(screen.getByText("Traffic")).toBeInTheDocument();
     expect(screen.getByText("Show live traffic overlay")).toBeInTheDocument();
+    // The layer title is the section heading, so it joins the page's heading
+    // outline rather than being an unlabelled paragraph.
+    expect(screen.getByRole("heading", { name: "Traffic" })).toBeInTheDocument();
     const button = screen.getByRole("button", { name: "Traffic" });
     expect(button).toHaveTextContent("Off");
     expect(button).toHaveAttribute("aria-pressed", "false");

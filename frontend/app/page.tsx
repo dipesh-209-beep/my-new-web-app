@@ -336,9 +336,9 @@ const congestion = useCongestion();
 
             {visibleRouteId && (
               <div className="rounded-xl border border-route-line bg-surface-raised p-4 shadow-card">
-                <p className="text-xs font-semibold uppercase tracking-wide text-accent-purple mb-2">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-accent-purple mb-2">
                   Browsing route
-                </p>
+                </h2>
                 <p className="text-sm font-medium text-ink mb-3">
                   {routeBrowser.visibleRouteStops.length > 0
                     ? routeBrowser.visibleRouteStops[0].stop.stop_name

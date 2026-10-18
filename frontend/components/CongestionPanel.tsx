@@ -2,7 +2,7 @@
 
 import { useRef } from "react";
 import { LayersIcon } from "@/components/icons/TransitIcons";
-import { CONGESTION_COLORS, CONGESTION_LEGEND_OUTLINE } from "@/lib/constants";
+import { CONGESTION_COLORS, CONGESTION_LEGEND, CONGESTION_LEGEND_OUTLINE } from "@/lib/constants";
 import LayerToggle from "@/components/ui/LayerToggle";
 import { CongestionProvenance } from "@/types/route";
 
@@ -172,22 +172,28 @@ export default function CongestionPanel({
             )}
           </div>
 
-          <div className="flex flex-col gap-1">
-            <div
-              aria-hidden
-              className="h-2 w-full rounded-full"
-              style={{
-                background: `linear-gradient(to right, ${CONGESTION_COLORS.free_flow}, ${CONGESTION_COLORS.moderate}, ${CONGESTION_COLORS.heavy})`,
-                // Bounds the bar so the legend object stays perceivable on
-                // white (1.4.11); the fills themselves are not all >=3:1.
-                border: `1px solid ${CONGESTION_LEGEND_OUTLINE}`,
-              }}
-            />
-            <div className="flex justify-between text-xs text-ink-secondary">
-              <span>Low</span>
-              <span>Moderate</span>
-              <span>Heavy</span>
-            </div>
+          {/* Discrete severity swatches, not a continuous gradient: the map
+              paints each segment with its severity's colour, so a smooth bar
+              here would imply a scale the map doesn't draw. Text labels carry
+              the meaning independently of colour. */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-secondary">
+            {CONGESTION_LEGEND.map(({ level, label }) => (
+              <span key={level} className="inline-flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  data-congestion-swatch={level}
+                  className="h-2 w-6 shrink-0 rounded-sm"
+                  style={{
+                    background: CONGESTION_COLORS[level],
+                    // Bounds each swatch so the legend object stays
+                    // perceivable on white (1.4.11); the fills themselves are
+                    // not all >=3:1.
+                    border: `1px solid ${CONGESTION_LEGEND_OUTLINE}`,
+                  }}
+                />
+                {label}
+              </span>
+            ))}
           </div>
 
           <p className="font-mono text-xs text-ink-secondary">{summary}</p>

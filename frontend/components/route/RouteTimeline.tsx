@@ -71,11 +71,10 @@ export default function RouteTimeline({
 
         const iconNode = (
           <span
-            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full"
-            style={{
-              backgroundColor: isWalk ? "#ECEAF3" : LEG_COLORS[i % LEG_COLORS.length],
-              color: isWalk ? "#5B5876" : "#FFFFFF",
-            }}
+            className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
+              isWalk ? "bg-surface-sunken text-ink-secondary" : "text-white"
+            }`}
+            style={isWalk ? undefined : { backgroundColor: LEG_COLORS[i % LEG_COLORS.length] }}
             aria-hidden
           >
             {isWalk ? <WalkIcon size={13} /> : <BusIcon size={13} />}

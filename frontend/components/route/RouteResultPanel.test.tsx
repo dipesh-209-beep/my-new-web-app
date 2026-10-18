@@ -106,6 +106,28 @@ describe("RouteResultPanel time and fare honesty", () => {
     expect(screen.queryByText("5")).toBeNull();
   });
 
+  it("renders a sub-minute estimate as '<1 min', never a bare '0 min'", () => {
+    // 20s rounds to 0 whole minutes; "0 min" would read as no time at all.
+    renderPanel(
+      makeResult({ legs: [makeLeg({ estimated_duration_s: 20 })], total_estimated_duration_s: 20 })
+    );
+    expect(screen.getByText("<1")).toBeTruthy();
+    expect(screen.getByText("min")).toBeTruthy();
+    expect(screen.queryByText("0")).toBeNull();
+  });
+
+  it("still shows '0 min' when the backend genuinely estimates zero", () => {
+    renderPanel(
+      makeResult({ legs: [makeLeg({ estimated_duration_s: 0 })], total_estimated_duration_s: 0 })
+    );
+    expect(screen.getByText("0")).toBeTruthy();
+  });
+
+  it("exposes the result card label as a heading for the page's outline", () => {
+    renderPanel(makeResult());
+    expect(screen.getByRole("heading", { name: "Direct" })).toBeTruthy();
+  });
+
   it("shows the selected alternative's own fare, not the primary result's", () => {
     const alt: RouteAlternative = {
       label: "shortest_distance",

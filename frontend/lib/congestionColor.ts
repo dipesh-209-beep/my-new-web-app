@@ -1,39 +1,36 @@
-// Piecewise-linear RGB gradient keyed to the backend's actual congestion
-// thresholds (_MODERATE_RATIO, _HEAVY_RATIO, score_to_ratio(10) ceiling),
-// NOT an arbitrary 0–1 scale.
-const STOPS: { ratio: number; r: number; g: number; b: number }[] = [
-  { ratio: 1.00, r: 0x22, g: 0xc5, b: 0x5e }, // #22C55E green  — free-flow
-  { ratio: 1.15, r: 0xf5, g: 0x9e, b: 0x0b }, // #F59E0B yellow — _MODERATE_RATIO
-  { ratio: 1.50, r: 0xf9, g: 0x73, b: 0x16 }, // #F97316 orange — _HEAVY_RATIO
-  { ratio: 2.50, r: 0xef, g: 0x44, b: 0x44 }, // #EF4444 red
-  { ratio: 4.20, r: 0x7f, g: 0x1d, b: 0x1d }, // #7F1D1D dark red — score_to_ratio(10)
-];
+import { CONGESTION_COLORS } from "@/lib/constants";
+import type { CongestionLevel } from "@/types/route";
 
-function lerp(a: number, b: number, t: number): number {
-  return Math.round(a + (b - a) * t);
+// Frontend mirror of the backend's ratio thresholds
+// (backend/app/api/congestion.py `_MODERATE_RATIO` / `_HEAVY_RATIO`). The
+// API already sends a `congestion_level` per segment; these exist so a bare
+// ratio (e.g. from a payload that omitted the level) is classified the same
+// way. If they ever drift from the backend, a segment could be labelled
+// "heavy" in its popup but drawn "moderate" on the map.
+export const MODERATE_RATIO = 1.15;
+export const HEAVY_RATIO = 1.5;
+
+/** Map a congestion ratio to the backend's severity buckets. A non-numeric
+ * ratio (NaN) has no severity, so it resolves to `unknown` rather than being
+ * silently clamped to an arbitrary end of the scale. */
+export function classifyCongestionRatio(ratio: number): CongestionLevel {
+  if (Number.isNaN(ratio)) return "unknown";
+  if (ratio >= HEAVY_RATIO) return "heavy";
+  if (ratio >= MODERATE_RATIO) return "moderate";
+  return "free_flow";
 }
 
-function toHex(n: number): string {
-  return n.toString(16).padStart(2, "0");
+/** The one severity->colour lookup. Falls back to `unknown` for a level this
+ * build does not recognise, so an unrecognised severity is neutral grey
+ * rather than a wrong colour (see CONGESTION_COLORS in lib/constants.ts). */
+export function congestionLevelColor(level: CongestionLevel): string {
+  return CONGESTION_COLORS[level] ?? CONGESTION_COLORS.unknown;
 }
 
+/** Colour for a raw ratio. Kept as the ratio-friendly entry point; it simply
+ * classifies the ratio and defers to congestionLevelColor, so the map and the
+ * legends resolve through the same severity->colour contract and cannot
+ * disagree. */
 export function getCongestionColor(ratio: number): string {
-  const r = Math.max(1.0, Math.min(4.2, ratio));
-
-  if (r <= STOPS[0].ratio) {
-    const s = STOPS[0];
-    return `#${toHex(s.r)}${toHex(s.g)}${toHex(s.b)}`;
-  }
-
-  for (let i = 0; i < STOPS.length - 1; i++) {
-    const a = STOPS[i];
-    const b = STOPS[i + 1];
-    if (r <= b.ratio) {
-      const t = (r - a.ratio) / (b.ratio - a.ratio);
-      return `#${toHex(lerp(a.r, b.r, t))}${toHex(lerp(a.g, b.g, t))}${toHex(lerp(a.b, b.b, t))}`;
-    }
-  }
-
-  const last = STOPS[STOPS.length - 1];
-  return `#${toHex(last.r)}${toHex(last.g)}${toHex(last.b)}`;
+  return congestionLevelColor(classifyCongestionRatio(ratio));
 }

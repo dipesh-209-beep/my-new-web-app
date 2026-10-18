@@ -1,6 +1,6 @@
 // Dependency-free WCAG 2.x contrast math. Used by the tests that guard the
 // congestion legend outline (WCAG 1.4.11 non-text contrast) and pin the known
-// ramp fill values, so a palette edit has to be deliberate.
+// severity fill values, so a palette edit has to be deliberate.
 //
 // Only 6-digit `#RRGGBB` is supported, which is all the design tokens use.
 

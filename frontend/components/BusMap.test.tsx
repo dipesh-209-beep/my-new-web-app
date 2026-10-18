@@ -9,7 +9,7 @@ import type {
 } from "@/types/route";
 import { leafletState } from "@/test/leaflet-mock";
 import { getCongestionColor } from "@/lib/congestionColor";
-import { CONGESTION_LEGEND_OUTLINE } from "@/lib/constants";
+import { CONGESTION_COLORS, CONGESTION_LEGEND, CONGESTION_LEGEND_OUTLINE } from "@/lib/constants";
 
 vi.mock("leaflet", async () => {
   const { createLeafletMock } = await import("@/test/leaflet-mock");
@@ -473,8 +473,8 @@ describe("BusMap", () => {
       );
 
       expect(leafletState.polylines).toHaveLength(1);
-      // Derived from the real gradient fn rather than a hardcoded hex, so
-      // this can't go stale again if the gradient stops are retuned.
+      // Derived from the real severity-colour fn rather than a hardcoded hex,
+      // so this can't go stale again if the palette is retuned.
       expect(leafletState.polylines[0].options.color).toBe(getCongestionColor(2));
     });
 
@@ -561,7 +561,7 @@ describe("BusMap", () => {
       expect(legend).toBeDefined();
       const div = legend!.div!;
       // An accessible name for the group, and real text labels so the
-      // meaning does not depend on the gradient colours alone.
+      // meaning does not depend on the severity colours alone.
       expect(div.getAttribute("role")).toBe("group");
       expect(div.getAttribute("aria-label")).toBe("Congestion key");
       expect(div.textContent).toContain("Low");
@@ -569,18 +569,25 @@ describe("BusMap", () => {
       expect(div.textContent).toContain("Heavy");
     });
 
-    it("outlines the key bar and container so the legend object is perceivable", () => {
+    it("shows one outlined swatch per severity, matching the drawn line colours", () => {
       render(<BusMap allStops={stops} congestionSegments={[makeCongestionSegment()]} />);
       const div = activeCongestionLegend()!.div!;
       // The container border was `route.line` (#DEDCF0, 1.35:1) -- below the
-      // 3:1 non-text minimum. It and the gradient bar now share the compliant
+      // 3:1 non-text minimum; it and the swatches now share the compliant
       // neutral outline.
       expect(div.style.border).toBe(`1px solid ${rgbString(CONGESTION_LEGEND_OUTLINE)}`);
-      const bar = Array.from(div.children).find(
-        (el) => (el as HTMLElement).style.background.includes("linear-gradient")
-      ) as HTMLElement | undefined;
-      expect(bar).toBeDefined();
-      expect(bar!.style.border).toBe(`1px solid ${rgbString(CONGESTION_LEGEND_OUTLINE)}`);
+      const swatches = Array.from(
+        div.querySelectorAll<HTMLElement>("[data-congestion-swatch]")
+      );
+      expect(swatches).toHaveLength(CONGESTION_LEGEND.length);
+      CONGESTION_LEGEND.forEach(({ level }) => {
+        const swatch = div.querySelector<HTMLElement>(`[data-congestion-swatch="${level}"]`);
+        expect(swatch).not.toBeNull();
+        // The swatch colour is exactly the colour the polyline uses for that
+        // severity, so the key can't mislabel a line.
+        expect(swatch!.style.background).toBe(rgbString(CONGESTION_COLORS[level]));
+        expect(swatch!.style.border).toBe(`1px solid ${rgbString(CONGESTION_LEGEND_OUTLINE)}`);
+      });
     });
 
     it("places the key in the corner free of the other map controls", () => {

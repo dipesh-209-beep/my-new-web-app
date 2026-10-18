@@ -4,20 +4,14 @@ import { useEffect, useRef } from "react";
 import L from "leaflet";
 import { CongestionSegment, Stop } from "@/types/route";
 import { escapeHtml } from "@/lib/escapeHtml";
-import { getCongestionColor } from "@/lib/congestionColor";
-import { CONGESTION_COLORS, CONGESTION_LEGEND_OUTLINE } from "@/lib/constants";
+import { congestionLevelColor } from "@/lib/congestionColor";
+import { CONGESTION_COLORS, CONGESTION_LEGEND, CONGESTION_LEGEND_OUTLINE } from "@/lib/constants";
 
 interface UseCongestionLayerProps {
   map: L.Map | null;
   congestionSegments: CongestionSegment[];
   allStops: Stop[];
 }
-
-// The three named points of the overlay key, in order (low to high). The
-// gradient itself is built from the same CONGESTION_COLORS map the Traffic
-// panel legend uses, so the two keys can't drift; these labels are the
-// non-colour path to the same meaning.
-const LEGEND_LABELS = ["Low", "Moderate", "Heavy"] as const;
 
 export function useCongestionLayer({
   map,
@@ -47,7 +41,7 @@ export function useCongestionLayer({
         return;
       }
 
-      const color = getCongestionColor(seg.congestion_ratio);
+      const color = congestionLevelColor(seg.congestion_level);
       const line = L.polyline(
         [
           [from.lat, from.lng],
@@ -116,25 +110,37 @@ export function useCongestionLayer({
         caption.style.marginBottom = "4px";
         div.appendChild(caption);
 
-        const bar = document.createElement("div");
-        bar.setAttribute("aria-hidden", "true");
-        bar.style.height = "8px";
-        bar.style.borderRadius = "9999px";
-        bar.style.background = `linear-gradient(to right, ${CONGESTION_COLORS.free_flow}, ${CONGESTION_COLORS.moderate}, ${CONGESTION_COLORS.heavy})`;
-        // Outline the bar so the legend object has a perceivable boundary on
-        // white (1.4.11); the fills are not all >=3:1 (see ACCESSIBILITY.md).
-        bar.style.border = `1px solid ${CONGESTION_LEGEND_OUTLINE}`;
-        div.appendChild(bar);
+        // One row per severity: a bounded colour swatch plus its text label,
+        // rendered from the same CONGESTION_LEGEND contract the Traffic panel
+        // uses. The swatch colours are exactly the polyline colours (both
+        // resolve through CONGESTION_COLORS by level), so the key cannot
+        // mislabel a line -- and the text label is the non-colour path to the
+        // same meaning.
+        CONGESTION_LEGEND.forEach(({ level, label }) => {
+          const row = document.createElement("div");
+          row.style.display = "flex";
+          row.style.alignItems = "center";
+          row.style.gap = "6px";
 
-        const labels = document.createElement("div");
-        labels.style.display = "flex";
-        labels.style.justifyContent = "space-between";
-        LEGEND_LABELS.forEach((label) => {
-          const span = document.createElement("span");
-          span.textContent = label;
-          labels.appendChild(span);
+          const swatch = document.createElement("span");
+          swatch.setAttribute("data-congestion-swatch", level);
+          swatch.style.display = "inline-block";
+          swatch.style.width = "14px";
+          swatch.style.height = "8px";
+          swatch.style.flexShrink = "0";
+          swatch.style.borderRadius = "2px";
+          swatch.style.background = CONGESTION_COLORS[level];
+          // Outline the swatch so the legend reads as a bounded object on
+          // white (1.4.11); the fills are not all >=3:1 (see ACCESSIBILITY.md).
+          swatch.style.border = `1px solid ${CONGESTION_LEGEND_OUTLINE}`;
+          row.appendChild(swatch);
+
+          const labelEl = document.createElement("span");
+          labelEl.textContent = label;
+          row.appendChild(labelEl);
+
+          div.appendChild(row);
         });
-        div.appendChild(labels);
 
         L.DomEvent.disableClickPropagation(div);
         return div;

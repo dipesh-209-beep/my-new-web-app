@@ -92,6 +92,9 @@ function formatAltSummary(alt: RouteAlternative): string {
 
 function formatDuration(totalSeconds: number): { value: string; unit: string } {
   const minutes = Math.round(totalSeconds / 60);
+  // A sub-30s estimate rounds to 0; showing "0 min" reads as no time at all.
+  // Render it as "<1 min" instead (a genuine 0 stays "0 min").
+  if (minutes === 0 && totalSeconds > 0) return { value: "<1", unit: "min" };
   if (minutes < 60) return { value: String(minutes), unit: "min" };
   const hours = Math.floor(minutes / 60);
   const remaining = minutes % 60;
@@ -305,7 +308,7 @@ export default function RouteResultPanel({
       )}
 
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-accent-purple">{cardLabel}</p>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-accent-purple">{cardLabel}</h2>
 
         {showPrimaryReason && (
           <>

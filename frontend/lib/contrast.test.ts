@@ -27,21 +27,26 @@ describe("congestion legend outline", () => {
   });
 });
 
-describe("congestion ramp fills (known, documented shortfall)", () => {
-  // The legend FILLS are not all >=3:1 against white; the outline above is
+describe("congestion severity fills (known, documented shortfall)", () => {
+  // The legend FILLS are not all >=3:1 against white; the 1px outline is
   // what makes the legend object perceivable. These values pin the measured
   // state so changing the palette is a deliberate, visible edit rather than
   // a silent regression. They are NOT claims of conformance.
-  it("pins the measured ratio of each named stop against white", () => {
+  it("pins the measured ratio of each severity colour against white", () => {
     expect(contrastRatio(CONGESTION_COLORS.free_flow, WHITE)).toBeCloseTo(2.28, 2);
     expect(contrastRatio(CONGESTION_COLORS.moderate, WHITE)).toBeCloseTo(2.15, 2);
     expect(contrastRatio(CONGESTION_COLORS.heavy, WHITE)).toBeCloseTo(3.76, 2);
     expect(contrastRatio(CONGESTION_COLORS.unknown, WHITE)).toBeCloseTo(4.83, 2);
   });
 
-  it("pins the light end of the interpolated map ramp", () => {
-    expect(contrastRatio(getCongestionColor(1), WHITE)).toBeCloseTo(2.28, 2);
-    expect(contrastRatio(getCongestionColor(4.2), WHITE)).toBeCloseTo(10.02, 2);
+  it("draws the map with the same severity colours the legends show", () => {
+    // The map is no longer a continuous ratio ramp: a ratio classifies to a
+    // severity and then resolves to that severity's colour, so the map and
+    // both legends cannot disagree (see lib/congestionColor.ts).
+    expect(getCongestionColor(1)).toBe(CONGESTION_COLORS.free_flow);
+    expect(getCongestionColor(1.15)).toBe(CONGESTION_COLORS.moderate);
+    expect(getCongestionColor(1.5)).toBe(CONGESTION_COLORS.heavy);
+    expect(getCongestionColor(4.2)).toBe(CONGESTION_COLORS.heavy);
   });
 });
 

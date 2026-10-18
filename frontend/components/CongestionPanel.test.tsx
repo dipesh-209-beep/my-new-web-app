@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps } from "react";
 import CongestionPanel from "@/components/CongestionPanel";
 import { CongestionProvenance } from "@/types/route";
-import { CONGESTION_LEGEND_OUTLINE } from "@/lib/constants";
+import { CONGESTION_COLORS, CONGESTION_LEGEND, CONGESTION_LEGEND_OUTLINE } from "@/lib/constants";
 
 /** jsdom normalizes an inline hex colour to `rgb(...)`; mirror that here. */
 function rgbString(hex: string): string {
@@ -63,13 +63,24 @@ describe("CongestionPanel", () => {
     expect(screen.getByText(/doesn.t re-rank the routes below/i)).toBeInTheDocument();
   });
 
-  it("outlines the gradient key so its boundary clears non-text contrast", () => {
+  it("renders one outlined swatch per severity, matching the shared palette", () => {
     const { container } = renderPanel();
-    const bar = container.querySelector<HTMLElement>('div[style*="linear-gradient"]');
-    expect(bar).not.toBeNull();
-    expect(bar!.style.borderStyle).toBe("solid");
-    expect(bar!.style.borderWidth).toBe("1px");
-    expect(bar!.style.borderColor).toBe(rgbString(CONGESTION_LEGEND_OUTLINE));
+    const swatches = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-congestion-swatch]")
+    );
+    expect(swatches).toHaveLength(CONGESTION_LEGEND.length);
+    CONGESTION_LEGEND.forEach(({ level }) => {
+      const swatch = container.querySelector<HTMLElement>(
+        `[data-congestion-swatch="${level}"]`
+      );
+      expect(swatch).not.toBeNull();
+      // The swatch colour is the exact colour the map draws for that
+      // severity, so the key can't mislabel a line.
+      expect(swatch!.style.background).toBe(rgbString(CONGESTION_COLORS[level]));
+      expect(swatch!.style.borderStyle).toBe("solid");
+      expect(swatch!.style.borderWidth).toBe("1px");
+      expect(swatch!.style.borderColor).toBe(rgbString(CONGESTION_LEGEND_OUTLINE));
+    });
   });
 
   it("distinguishes a failed load from a genuinely empty result", () => {

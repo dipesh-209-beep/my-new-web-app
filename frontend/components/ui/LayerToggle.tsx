@@ -54,9 +54,9 @@ export default function LayerToggle({
           {icon}
         </span>
         <div className="min-w-0">
-          <p id={titleId} className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">
+          <h2 id={titleId} className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">
             {title}
-          </p>
+          </h2>
           <p className="text-sm text-ink">{subtitle}</p>
         </div>
       </div>

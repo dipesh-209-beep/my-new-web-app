@@ -43,6 +43,13 @@ Verified by reading the source, not by audit:
   share it). Two named `role="region"` landmarks exist as focus targets: the
   route results (`components/route/RouteResultPanel.tsx`, "Route results") and
   the routes list (`app/routes/page.tsx`, "Routes").
+- **A heading outline.** The home page has one `h1` ("Plan your journey"); the
+  results card's label and each map-control section title (Stops, Traffic) are
+  `h2`s (`components/route/RouteResultPanel.tsx`,
+  `components/ui/LayerToggle.tsx`, `app/page.tsx`), so a screen-reader user can
+  move between the results and the layer panels with heading navigation rather
+  than only landmark navigation. `heading-has-content` is an eslint error, so a
+  heading cannot be left empty.
 - **A skip link** to `#main-content`, first in the tab order, visually hidden
   until focused. Without it a keyboard user traverses the whole nav bar on
   every page load.
@@ -53,7 +60,7 @@ Verified by reading the source, not by audit:
 - **Congestion is not encoded by colour alone at the point of reading.**
   Segment popups pair the colour with a text label ("Free-flow", "Moderate
   congestion", "Heavy congestion"), a numeric ratio (`2.4x free-flow`), and a
-  recorded-estimate count — so a user who cannot distinguish the gradient
+  recorded-estimate count — so a user who cannot distinguish the severity
   colours still gets the information.
 - **Automated checks in CI.** `jsx-a11y` rules are errors in
   `eslint.config.mjs`, not warnings: `label-has-associated-control`,
@@ -194,14 +201,15 @@ information is reachable — the exploration experience is what remains weak.
 
 ### 2. The on-map congestion key is terse
 
-The map carries a compact gradient key — a bar labelled Low / Moderate / Heavy
+The map carries a compact key — three labelled severity swatches
+(Low / Moderate / Heavy) from the shared `CONGESTION_COLORS` palette
 (`components/map/useCongestionLayer.ts`, top-right) — so the colour meaning
 survives the mobile bottom sheet being minimized. It is deliberately minimal:
 the provenance note, the day/hour pickers and the numeric segment summary stay
 in the Traffic panel (`components/CongestionPanel.tsx`), which still scrolls
 with the sheet body, and the per-segment popups pair colour with a text label
 and a ratio. The key is hidden when the overlay is off or has no segments,
-and its bar (like the panel's) carries an outline so the legend reads as a
+and its swatches (like the panel's) carry an outline so the legend reads as a
 bounded object — see gap 5.
 
 ### 3. Automated runtime testing covers structure, not appearance
@@ -267,22 +275,24 @@ the plugin fixes the behaviour.
   text-only variants in `accent.{green,yellow,red}-text` that clear 4.5:1
   on both the `/5` and `/10` tints.
 
-  **The congestion ramp is now measured, and the legend is bounded — but the
-  fills are not all conformant.** The five-stop ramp (`lib/congestionColor.ts`)
-  was measured against white: the light end fails WCAG 1.4.11 (3:1 for
-  non-text) — `#22C55E` 2.28:1, `#F59E0B` 2.15:1, `#F97316` 2.80:1 — while
-  `#EF4444` (3.76:1) and `#7F1D1D` (10.02:1) clear it. These colours are
-  **never used as text or as a text background** anywhere in the app, so
-  WCAG 1.4.3 does not apply to them (the green/yellow/red *text* issues above
-  are the separate `accent.*-text` tokens). To keep each legend readable as a
-  graphical object, both the Traffic panel bar and the on-map key bar now
-  carry a 1 px `ink.tertiary` (`#767194`, 4.61:1) outline, and the key's
-  container border was raised from `route.line` (1.35:1) to the same neutral.
-  `lib/contrast.test.ts` guards the outline's 3:1 and pins the measured
-  gradient-fill ratios, so CI detects any drift — but it does not enforce a
-  3:1 minimum for every fill. **What remains:** the outline bounds the legend
-  but does **not** make every fill independently compliant — at the light end
-  severity is still conveyed to sighted users mainly by hue. The green *link*
+  **The congestion legend is bounded, but its fills are not all conformant.**
+  Congestion is a three-severity scale (`CONGESTION_COLORS` in
+  `lib/constants.ts`: green / amber / red), and the map, the Traffic panel and
+  the on-map key all resolve a segment's severity through that one map — so a
+  colour cannot mean one thing on the map and another in a legend. Measured
+  against white, two of the three fills fail WCAG 1.4.11 (3:1 for non-text) —
+  `#22C55E` 2.28:1 and `#F59E0B` 2.15:1 — while `#EF4444` (3.76:1) clears it.
+  These colours are **never used as text or as a text background** anywhere in
+  the app, so WCAG 1.4.3 does not apply to them (the green/yellow/red *text*
+  issues above are the separate `accent.*-text` tokens). Every legend swatch
+  carries a 1 px `ink.tertiary` (`#767194`, 4.61:1) outline and a visible text
+  label (Low / Moderate / Heavy), and the on-map key's container border was
+  raised from `route.line` (1.35:1) to the same neutral, so severity is never
+  conveyed by hue alone. `lib/contrast.test.ts` guards the outline's 3:1 and
+  pins the measured fill ratios, so CI detects any drift — but it does not
+  enforce a 3:1 minimum for every fill. **What remains:** the outline bounds
+  the legend but does **not** make the green/amber fills independently
+  compliant. The green *link*
   text was the last measured text failure: the `#16A34A` back-links on
   `/routes/[routeId]` ("← Back to all routes", on white) sat at 3.30:1, as did
   the `hover:text-accent-green` on that page's breadcrumb and on `/routes`'
@@ -351,7 +361,7 @@ the plugin fixes the behaviour.
    autocomplete announces its expanded state and highlighted option, and that
    the results panel updates are announced.
 5. **Contrast:** any colour-contrast checker against the rendered page, at
-   both themes, plus the congestion ramp specifically.
+   both themes, plus the congestion severity colours specifically.
 6. **Zoom/reflow:** 200% browser text scaling and 320px viewport width. Check
    that the sidebar does not scroll horizontally at 320 px + 200%, and that the
    open sign-in popup is fully visible at 320 px (its form is capped to the
