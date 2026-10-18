@@ -3,5 +3,8 @@
 #   pip install -r requirements.txt -r requirements-dev.txt
 -r requirements.txt
 
-pytest==8.2.2
+# 8.2.2 -> 9.0.3: PYSEC-2026-1845. Dev/test-only -- pytest is never installed
+# in the runtime image (that build uses requirements.txt alone). A floor, not
+# a pin, so a clean install resolves to the current 9.x.
+pytest>=9.0.3
 httpx==0.27.0

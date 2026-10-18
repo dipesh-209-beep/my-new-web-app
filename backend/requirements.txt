@@ -21,7 +21,10 @@ alembic==1.13.2
 # 2.32.4 -> 2.33.0: PYSEC-2026-2275 (extract_zipped_paths reuses a predictable
 # temp filename without validation).
 requests==2.33.0
-pyjwt>=2.13.0
+# 2.13.0 -> 2.15.0: PyJWT <2.15.0 carries the PYSEC-2026-414x / 4183
+# advisories (JWT header/algorithm handling). The floor keeps a clean
+# install off the affected releases even when the index lags.
+pyjwt>=2.15.0
 passlib[bcrypt]>=1.7.4
 bcrypt==4.0.1
 slowapi>=0.1.9

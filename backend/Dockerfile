@@ -7,7 +7,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Upgrade the build/install tooling too: the pip and setuptools bundled with
+# the base image are old enough to carry their own advisories
+# (PYSEC-2026-1795/1796/196/2875/2876/3721 for pip; PYSEC-2026-3447 for
+# setuptools, fixed in 83.0.0). Neither is an application dependency: the app
+# imports only passlib.context and never imports pkg_resources, so no runtime
+# code path needs setuptools. It is upgraded rather than removed so pip and
+# any build step keep a working setuptools; note that the 8x series drops the
+# legacy pkg_resources shim, which the unused passlib.pwd module imports.
+RUN pip install --no-cache-dir --upgrade "pip>=26.2" "setuptools>=83.0.0" \
+    && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 

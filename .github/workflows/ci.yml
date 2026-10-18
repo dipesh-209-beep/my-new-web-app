@@ -60,19 +60,23 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Dependency audit (Python)
-        # Scan installed dependencies in the actual CI environment.
-        # Dev-only advisories may be ignored with justification in future,
-        # but start by running the audit and letting the team decide policy;
-        # failing hard here would block PRs for non-runtime findings.
+        # Scan installed dependencies in the actual CI environment. Upgrade
+        # pip first: the version bundled with setup-python is old enough to
+        # carry its own advisories (PYSEC-2026-1795/1796/196/2875/2876/3721),
+        # and pip is the installer, not an application dependency. Upgrade
+        # setuptools too: it is not a project requirement (it is pulled in by
+        # the interpreter's own bootstrap), pip does NOT upgrade it as a side
+        # effect, and setup-python's bundled copy can be old enough to carry
+        # PYSEC-2026-3447 (fixed in 83.0.0). Both are build/install tooling,
+        # so pinning their floors here keeps the audit clean without adding
+        # them to the application requirements. The project's own floors
+        # (pyjwt>=2.15.0, pytest>=9.0.3 in requirements*.txt) sit above their
+        # advisory ranges, so a clean install needs no --ignore-vuln
+        # suppressions here.
         run: |
+          python -m pip install --upgrade "pip>=26.2" "setuptools>=83.0.0"
           pip install pip-audit
-          pip-audit --ignore-vuln PYSEC-2026-1845 \
-                    --ignore-vuln PYSEC-2026-1795 \
-                    --ignore-vuln PYSEC-2026-1796 \
-                    --ignore-vuln PYSEC-2026-196 \
-                    --ignore-vuln PYSEC-2026-2875 \
-                    --ignore-vuln PYSEC-2026-2876 \
-                    --ignore-vuln PYSEC-2026-3721
+          pip-audit
       - run: alembic upgrade head
       - name: Load sample dataset (data/processed/*_clean.csv)
         # Several tests assert against real stop/route IDs from the
@@ -120,7 +124,15 @@ jobs:
           # predates that jsdom bump.
           node-version: "22"
       - name: Install dependencies
-        run: npm install
+        # `npm ci` installs exactly the committed lockfile; `npm install`
+        # could silently resolve newer, unvetted transitive versions.
+        run: npm ci
+      - name: Dependency audit (npm, production deps)
+        # Only runtime dependencies gate the build. The dev toolchain
+        # (eslint-config-next, the tailwind/postcss chain) carries advisories
+        # that never ship, and clearing those needs a breaking Tailwind 4
+        # bump; runtime deps must be clean at high severity. (AUD-013)
+        run: npm audit --omit=dev --audit-level=high
       - name: Lint
         run: npm run lint
       - name: Test
